@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: codeclone
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: codeclone
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: codeclone
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: serve
+          image: ghcr.io/sanjays2402/codeclone:0.1.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 7461
+          env:
+            - name: CODECLONE_SERVE_HOST
+              value: "0.0.0.0"
+            - name: CODECLONE_SERVE_PORT
+              value: "7461"
+            - name: LOG_JSON
+              value: "1"
+            - name: CODECLONE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: codeclone-secrets
+                  key: api-key
+          livenessProbe:
+            httpGet: { path: /healthz, port: 7461 }
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: 7461 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 2
+              memory: 4Gi
