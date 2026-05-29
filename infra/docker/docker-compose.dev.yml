@@ -1,0 +1,48 @@
+services:
+  serve:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile
+    image: codeclone/serve:dev
+    ports:
+      - "7461:7461"
+    env_file:
+      - ../../.env
+    environment:
+      CODECLONE_SERVE_HOST: 0.0.0.0
+      CODECLONE_SERVE_PORT: "7461"
+      LOG_JSON: "1"
+    volumes:
+      - ../../adapters:/app/adapters:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:7461/healthz', timeout=2)"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+    restart: unless-stopped
+
+  web:
+    image: node:20-alpine
+    working_dir: /app
+    command: ["sh", "-lc", "corepack enable && pnpm install --frozen-lockfile=false && pnpm dev"]
+    ports:
+      - "3000:3000"
+    environment:
+      CODECLONE_SERVE_URL: http://serve:7461
+      CODECLONE_RUNS_DIR: /workspace/runs
+      CODECLONE_ADAPTERS_DIR: /workspace/adapters
+      CODECLONE_DATA_DIR: /workspace/data
+    volumes:
+      - ../../web:/app
+      - ../..:/workspace:ro
+    depends_on:
+      - serve
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.103.0
+    command: ["--config=/etc/otel-config.yaml"]
+    volumes:
+      - ./otel-config.yaml:/etc/otel-config.yaml:ro
+    ports:
+      - "4318:4318"   # OTLP HTTP
+      - "8889:8889"   # Prometheus exposition

@@ -1,0 +1,15 @@
+apiVersion: v2
+name: codeclone
+description: Personal code LoRA serve, OpenAI-compatible
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - llm
+  - openai-compatible
+  - lora
+home: https://github.com/Sanjays2402/codeclone
+sources:
+  - https://github.com/Sanjays2402/codeclone
+maintainers:
+  - name: CodeClone Maintainers

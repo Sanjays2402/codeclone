@@ -1,0 +1,74 @@
+image:
+  repository: ghcr.io/sanjays2402/codeclone
+  tag: "0.1.0"
+  pullPolicy: IfNotPresent
+
+replicaCount: 1
+
+service:
+  type: ClusterIP
+  port: 7461
+
+ingress:
+  enabled: false
+  className: nginx
+  host: codeclone.example.com
+  tls: false
+
+env:
+  CODECLONE_SERVE_HOST: "0.0.0.0"
+  CODECLONE_SERVE_PORT: "7461"
+  LOG_LEVEL: "INFO"
+  LOG_JSON: "1"
+
+# API key is mounted from a secret you create out-of-band:
+#   kubectl create secret generic codeclone-secrets --from-literal=api-key=sk-...
+secretRefName: codeclone-secrets
+
+resources:
+  requests:
+    cpu: "200m"
+    memory: "512Mi"
+  limits:
+    cpu: "2"
+    memory: "4Gi"
+
+# Mount a PVC of adapters (read-only) so the pod serves your own LoRA.
+adapters:
+  pvcName: ""    # set to mount your adapters
+  mountPath: /app/adapters
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: false
+
+probes:
+  liveness:
+    httpGet:
+      path: /healthz
+      port: 7461
+    initialDelaySeconds: 10
+    periodSeconds: 20
+  readiness:
+    httpGet:
+      path: /readyz
+      port: 7461
+    initialDelaySeconds: 5
+    periodSeconds: 10
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 3
+  targetCPUUtilizationPercentage: 70

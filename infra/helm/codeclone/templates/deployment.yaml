@@ -1,0 +1,50 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "codeclone.fullname" . }}
+  labels: {{- include "codeclone.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels: {{- include "codeclone.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- include "codeclone.selectorLabels" . | nindent 8 }}
+    spec:
+      securityContext: {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: serve
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+          env:
+            {{- range $k, $v := .Values.env }}
+            - name: {{ $k }}
+              value: {{ $v | quote }}
+            {{- end }}
+            - name: CODECLONE_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefName }}
+                  key: api-key
+          volumeMounts:
+            {{- if .Values.adapters.pvcName }}
+            - name: adapters
+              mountPath: {{ .Values.adapters.mountPath }}
+              readOnly: true
+            {{- end }}
+          livenessProbe: {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe: {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+      volumes:
+        {{- if .Values.adapters.pvcName }}
+        - name: adapters
+          persistentVolumeClaim:
+            claimName: {{ .Values.adapters.pvcName }}
+        {{- end }}
+      nodeSelector: {{- toYaml .Values.nodeSelector | nindent 8 }}
+      tolerations: {{- toYaml .Values.tolerations | nindent 8 }}
+      affinity: {{- toYaml .Values.affinity | nindent 8 }}

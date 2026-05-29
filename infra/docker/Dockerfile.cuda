@@ -1,0 +1,44 @@
+# syntax=docker/dockerfile:1.7
+# CUDA-enabled training image for CodeClone (transformers + peft).
+# Use for `codeclone train --backend peft` and PEFT-backed serve.
+
+ARG CUDA_VERSION=12.4.1
+ARG PY_VERSION=3.11
+
+FROM nvidia/cuda:${CUDA_VERSION}-cudnn-runtime-ubuntu22.04 AS base
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates git curl tini \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends \
+        python${PY_VERSION} python${PY_VERSION}-venv python${PY_VERSION}-dev \
+    && update-alternatives --install /usr/bin/python python /usr/bin/python${PY_VERSION} 1 \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --upgrade pip uv
+
+WORKDIR /app
+COPY pyproject.toml /app/pyproject.toml
+COPY README.md /app/README.md
+COPY src /app/src
+COPY packages /app/packages
+COPY services /app/services
+COPY recipes /app/recipes
+
+# Install with CUDA extras. bitsandbytes is pinned in extras for non-Darwin.
+RUN uv pip install --system --no-cache ".[cuda]"
+
+RUN useradd --create-home --shell /usr/sbin/nologin app && chown -R app:app /app
+USER app
+
+EXPOSE 7461
+ENTRYPOINT ["tini", "--", "codeclone"]
+CMD ["serve", "--host", "0.0.0.0", "--port", "7461"]
