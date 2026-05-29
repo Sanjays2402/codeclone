@@ -1,0 +1,5 @@
+{
+  "language": "js",
+  "prefix": "// context: range\nexport function range(n) {",
+  "completion": "  return Array.from({ length: n }, (_, i) => i);\n}\n"
+}

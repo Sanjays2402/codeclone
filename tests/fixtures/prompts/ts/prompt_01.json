@@ -1,0 +1,5 @@
+{
+  "language": "ts",
+  "prefix": "// context: array util\nexport function chunk<T>(xs: T[], n: number): T[][] {",
+  "completion": "  const out: T[][] = [];\n  for (let i = 0; i < xs.length; i += n) out.push(xs.slice(i, i + n));\n  return out;\n}\n"
+}

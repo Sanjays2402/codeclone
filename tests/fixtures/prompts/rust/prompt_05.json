@@ -1,0 +1,5 @@
+{
+  "language": "rust",
+  "prefix": "// context: into_string\npub fn join(xs: &[&str], sep: &str) -> String {",
+  "completion": "    xs.join(sep)\n}\n"
+}

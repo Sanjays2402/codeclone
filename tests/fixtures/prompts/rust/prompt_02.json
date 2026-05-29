@@ -1,0 +1,5 @@
+{
+  "language": "rust",
+  "prefix": "// context: dedupe\npub fn dedupe<T: Eq + std::hash::Hash + Clone>(xs: Vec<T>) -> Vec<T> {",
+  "completion": "    let mut seen = std::collections::HashSet::new();\n    let mut out = Vec::new();\n    for x in xs {\n        if seen.insert(x.clone()) { out.push(x); }\n    }\n    out\n}\n"
+}

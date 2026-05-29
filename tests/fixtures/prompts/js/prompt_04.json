@@ -1,0 +1,5 @@
+{
+  "language": "js",
+  "prefix": "// context: pick\nexport function pick(obj, keys) {",
+  "completion": "  const out = {};\n  for (const k of keys) if (k in obj) out[k] = obj[k];\n  return out;\n}\n"
+}

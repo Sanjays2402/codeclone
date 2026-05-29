@@ -1,0 +1,5 @@
+{
+  "language": "js",
+  "prefix": "// context: fetch with timeout\nexport async function fetchT(url, ms) {",
+  "completion": "  const ac = new AbortController();\n  const t = setTimeout(() => ac.abort(), ms);\n  try { return await fetch(url, { signal: ac.signal }); } finally { clearTimeout(t); }\n}\n"
+}

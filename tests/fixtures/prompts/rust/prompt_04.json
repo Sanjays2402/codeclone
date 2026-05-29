@@ -1,0 +1,5 @@
+{
+  "language": "rust",
+  "prefix": "// context: parse u32 default\npub fn parse_or(s: &str, default: u32) -> u32 {",
+  "completion": "    s.parse::<u32>().unwrap_or(default)\n}\n"
+}

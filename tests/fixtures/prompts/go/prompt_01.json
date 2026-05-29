@@ -1,0 +1,5 @@
+{
+  "language": "go",
+  "prefix": "// context: stringutil\npackage stringutil\n\nfunc Reverse(s string) string {",
+  "completion": "    r := []rune(s)\n    for i, j := 0, len(r)-1; i < j; i, j = i+1, j-1 {\n        r[i], r[j] = r[j], r[i]\n    }\n    return string(r)\n}\n"
+}

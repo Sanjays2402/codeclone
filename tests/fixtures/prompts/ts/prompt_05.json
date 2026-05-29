@@ -1,0 +1,5 @@
+{
+  "language": "ts",
+  "prefix": "// context: object map\nexport function mapValues<V, U>(obj: Record<string, V>, fn: (v: V) => U): Record<string, U> {",
+  "completion": "  const out: Record<string, U> = {};\n  for (const k of Object.keys(obj)) out[k] = fn(obj[k]);\n  return out;\n}\n"
+}

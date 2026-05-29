@@ -1,0 +1,90 @@
+{
+  "mit.txt": {
+    "spdx": "MIT",
+    "category": "permissive"
+  },
+  "apache.txt": {
+    "spdx": "Apache-2.0",
+    "category": "permissive"
+  },
+  "bsd2.txt": {
+    "spdx": "BSD-2-Clause",
+    "category": "permissive"
+  },
+  "bsd3.txt": {
+    "spdx": "BSD-3-Clause",
+    "category": "permissive"
+  },
+  "isc.txt": {
+    "spdx": "ISC",
+    "category": "permissive"
+  },
+  "mpl.txt": {
+    "spdx": "MPL-2.0",
+    "category": "permissive"
+  },
+  "unlicense.txt": {
+    "spdx": "Unlicense",
+    "category": "permissive"
+  },
+  "cc0.txt": {
+    "spdx": "CC0-1.0",
+    "category": "permissive"
+  },
+  "0bsd.txt": {
+    "spdx": "0BSD",
+    "category": "permissive"
+  },
+  "spdx_mit.py": {
+    "spdx": "MIT",
+    "category": "permissive"
+  },
+  "gpl3.txt": {
+    "spdx": "GPL-3.0",
+    "category": "copyleft"
+  },
+  "gpl2.txt": {
+    "spdx": "GPL-2.0",
+    "category": "copyleft"
+  },
+  "lgpl.txt": {
+    "spdx": "LGPL-3.0",
+    "category": "copyleft"
+  },
+  "agpl.txt": {
+    "spdx": "AGPL-3.0",
+    "category": "copyleft"
+  },
+  "sspl.txt": {
+    "spdx": "SSPL-1.0",
+    "category": "copyleft"
+  },
+  "busl.txt": {
+    "spdx": "BUSL-1.1",
+    "category": "copyleft"
+  },
+  "spdx_gpl.py": {
+    "spdx": "GPL-3.0",
+    "category": "copyleft"
+  },
+  "commons_clause.txt": {
+    "spdx": "Commons-Clause",
+    "category": "copyleft"
+  },
+  "custom1.txt": {
+    "spdx": "",
+    "category": "unknown"
+  },
+  "custom2.txt": {
+    "spdx": "",
+    "category": "unknown"
+  },
+  "empty.txt": {
+    "spdx": "",
+    "category": "unknown"
+  },
+  "weird.txt": {
+    "spdx": "",
+    "category": "unknown"
+  }
+}

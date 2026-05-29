@@ -1,0 +1,5 @@
+{
+  "language": "go",
+  "prefix": "// context: clamp\npackage mathx\n\nfunc Clamp(x, lo, hi int) int {",
+  "completion": "    if x < lo { return lo }\n    if x > hi { return hi }\n    return x\n}\n"
+}

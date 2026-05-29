@@ -1,0 +1,5 @@
+{
+  "language": "ts",
+  "prefix": "// context: typed result\nexport type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };\n\nexport function ok<T>(value: T): Result<T> {",
+  "completion": "  return { ok: true, value };\n}\n"
+}

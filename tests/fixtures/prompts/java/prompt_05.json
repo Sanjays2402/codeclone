@@ -1,0 +1,5 @@
+{
+  "language": "java",
+  "prefix": "// context: counter\npublic class Counter {\n    private int n;\n    public synchronized int inc() {",
+  "completion": "        return ++n;\n    }\n}\n"
+}

@@ -1,0 +1,5 @@
+{
+  "language": "ts",
+  "prefix": "// context: env reader\nexport function envInt(name: string, fallback: number): number {",
+  "completion": "  const raw = process.env[name];\n  if (!raw) return fallback;\n  const n = parseInt(raw, 10);\n  return Number.isFinite(n) ? n : fallback;\n}\n"
+}

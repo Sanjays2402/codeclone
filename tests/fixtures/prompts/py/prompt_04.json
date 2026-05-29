@@ -1,0 +1,5 @@
+{
+  "language": "py",
+  "prefix": "# context: pure function\ndef clamp(x, lo, hi):",
+  "completion": "    return max(lo, min(hi, x))\n"
+}

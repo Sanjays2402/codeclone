@@ -1,0 +1,5 @@
+{
+  "language": "py",
+  "prefix": "# context: dataclass\nfrom dataclasses import dataclass\n\n@dataclass\nclass Point:",
+  "completion": "    x: float\n    y: float\n\n    def dist(self, other):\n        return ((self.x - other.x) ** 2 + (self.y - other.y) ** 2) ** 0.5\n"
+}

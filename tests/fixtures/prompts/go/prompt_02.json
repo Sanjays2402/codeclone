@@ -1,0 +1,5 @@
+{
+  "language": "go",
+  "prefix": "// context: chunk\npackage slices\n\nfunc Chunk[T any](xs []T, n int) [][]T {",
+  "completion": "    var out [][]T\n    for i := 0; i < len(xs); i += n {\n        end := i + n\n        if end > len(xs) { end = len(xs) }\n        out = append(out, xs[i:end])\n    }\n    return out\n}\n"
+}

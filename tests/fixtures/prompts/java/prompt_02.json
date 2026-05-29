@@ -1,0 +1,5 @@
+{
+  "language": "java",
+  "prefix": "// context: clamp\npublic final class MathX {\n    public static int clamp(int x, int lo, int hi) {",
+  "completion": "        return Math.max(lo, Math.min(hi, x));\n    }\n}\n"
+}

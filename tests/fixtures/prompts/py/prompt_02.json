@@ -1,0 +1,5 @@
+{
+  "language": "py",
+  "prefix": "# context: simple cache\nclass LRU:",
+  "completion": "    def __init__(self, capacity):\n        self.capacity = capacity\n        self.cache = {}\n"
+}

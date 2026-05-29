@@ -1,0 +1,5 @@
+{
+  "language": "java",
+  "prefix": "// context: option builder\npublic class Builder {\n    private String name;\n    public Builder name(String n) {",
+  "completion": "        this.name = n;\n        return this;\n    }\n}\n"
+}

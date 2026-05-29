@@ -1,0 +1,5 @@
+{
+  "language": "js",
+  "prefix": "// context: once\nexport function once(fn) {",
+  "completion": "  let called = false, value;\n  return (...args) => {\n    if (!called) { value = fn(...args); called = true; }\n    return value;\n  };\n}\n"
+}

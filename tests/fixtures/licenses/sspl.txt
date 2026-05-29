@@ -1,0 +1,2 @@
+Server Side Public License (SSPL)
+Version 1, October 16, 2018

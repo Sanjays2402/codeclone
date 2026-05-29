@@ -1,0 +1,5 @@
+{
+  "language": "go",
+  "prefix": "// context: contains\npackage slices\n\nfunc Contains[T comparable](xs []T, t T) bool {",
+  "completion": "    for _, x := range xs { if x == t { return true } }\n    return false\n}\n"
+}

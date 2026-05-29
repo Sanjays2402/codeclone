@@ -1,0 +1,5 @@
+{
+  "language": "ts",
+  "prefix": "// context: debounce\nexport function debounce<T extends (...a: any[]) => any>(fn: T, ms: number): T {",
+  "completion": "  let t: any;\n  return ((...args: any[]) => {\n    clearTimeout(t);\n    t = setTimeout(() => fn(...args), ms);\n  }) as T;\n}\n"
+}

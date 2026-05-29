@@ -1,0 +1,5 @@
+{
+  "language": "py",
+  "prefix": "# context: collection utility\ndef chunk(xs, n):",
+  "completion": "    for i in range(0, len(xs), n):\n        yield xs[i:i+n]\n"
+}

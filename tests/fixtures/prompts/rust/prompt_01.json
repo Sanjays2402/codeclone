@@ -1,0 +1,5 @@
+{
+  "language": "rust",
+  "prefix": "// context: option helper\npub fn maybe_double(x: Option<i32>) -> Option<i32> {",
+  "completion": "    x.map(|v| v * 2)\n}\n"
+}

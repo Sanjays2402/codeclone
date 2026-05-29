@@ -1,0 +1,5 @@
+{
+  "language": "go",
+  "prefix": "// context: ints sum\npackage ints\n\nfunc Sum(xs []int) int {",
+  "completion": "    s := 0\n    for _, x := range xs { s += x }\n    return s\n}\n"
+}

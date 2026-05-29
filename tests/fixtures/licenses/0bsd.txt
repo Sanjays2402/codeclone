@@ -1,0 +1,4 @@
+Copyright (C) 2024 Example
+
+Permission to use, copy, modify, and/or distribute this software
+# SPDX-License-Identifier: 0BSD

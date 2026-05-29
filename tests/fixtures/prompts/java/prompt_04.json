@@ -1,0 +1,5 @@
+{
+  "language": "java",
+  "prefix": "// context: predicate\npublic class Preds {\n    public static boolean nonEmpty(String s) {",
+  "completion": "        return s != null && !s.isEmpty();\n    }\n}\n"
+}

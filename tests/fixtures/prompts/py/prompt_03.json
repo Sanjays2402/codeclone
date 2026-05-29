@@ -1,0 +1,5 @@
+{
+  "language": "py",
+  "prefix": "# context: retry helper\ndef retry(fn, tries=3):",
+  "completion": "    last = None\n    for _ in range(tries):\n        try:\n            return fn()\n        except Exception as e:\n            last = e\n    raise last\n"
+}

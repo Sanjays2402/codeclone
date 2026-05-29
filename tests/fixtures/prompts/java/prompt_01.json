@@ -1,0 +1,5 @@
+{
+  "language": "java",
+  "prefix": "// context: array util\npublic class Arrays2 {\n    public static <T> List<List<T>> chunk(List<T> xs, int n) {",
+  "completion": "        List<List<T>> out = new ArrayList<>();\n        for (int i = 0; i < xs.size(); i += n) {\n            out.add(xs.subList(i, Math.min(i + n, xs.size())));\n        }\n        return out;\n    }\n}\n"
+}

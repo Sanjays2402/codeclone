@@ -1,0 +1,5 @@
+{
+  "language": "js",
+  "prefix": "// context: array group by\nexport function groupBy(xs, key) {",
+  "completion": "  const out = {};\n  for (const x of xs) {\n    const k = key(x);\n    (out[k] = out[k] || []).push(x);\n  }\n  return out;\n}\n"
+}
