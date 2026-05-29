@@ -1,0 +1,45 @@
+name: ts-js-only
+description: Web stack: TypeScript + JavaScript.
+
+safety:
+  require_author_match: true
+  skip_merge_commits: true
+  skip_reverts: true
+  license_filter: permissive_only
+  drop_secret_lines: true
+
+data:
+  languages: [ts, js, tsx, jsx]
+  min_lines: 3
+  max_lines: 500
+  dedupe: exact
+  train_split: 0.9
+  val_split: 0.05
+  test_split: 0.05
+  shuffle_seed: 42
+
+model:
+  base: Qwen/Qwen2.5-Coder-1.5B
+  context_length: 2048
+  lora_rank: 16
+  lora_alpha: 32
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+train:
+  backend: auto
+  batch_size: 4
+  grad_accum: 1
+  learning_rate: 2.0e-4
+  warmup_steps: 20
+  max_steps: 1200
+  eval_every: 150
+  save_every: 300
+  seed: 1337
+  bf16: true
+  gradient_checkpointing: true
+
+eval:
+  perplexity: true
+  mini_humaneval: false
+  sample_completions: 4
+  max_problems: 0

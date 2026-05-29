@@ -1,0 +1,46 @@
+name: cuda-overnight
+description: 8h on a single CUDA GPU; uses larger base and wider target modules.
+
+safety:
+  require_author_match: true
+  skip_merge_commits: true
+  skip_reverts: true
+  license_filter: strict
+  drop_secret_lines: true
+
+data:
+  languages: [py, ts, js, go, rust, java]
+  min_lines: 4
+  max_lines: 700
+  dedupe: minhash
+  train_split: 0.92
+  val_split: 0.04
+  test_split: 0.04
+  shuffle_seed: 1337
+
+model:
+  base: Qwen/Qwen2.5-Coder-3B
+  context_length: 4096
+  lora_rank: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  backend: peft
+  batch_size: 4
+  grad_accum: 8
+  learning_rate: 8.0e-5
+  warmup_steps: 100
+  max_steps: 6000
+  eval_every: 500
+  save_every: 1000
+  seed: 1337
+  bf16: true
+  gradient_checkpointing: true
+
+eval:
+  perplexity: true
+  mini_humaneval: true
+  sample_completions: 8
+  max_problems: 32

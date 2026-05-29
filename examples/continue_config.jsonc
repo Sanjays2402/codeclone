@@ -1,0 +1,21 @@
+{
+  // Append the contents of this file's "models" / "tabAutocompleteModel" keys
+  // into your existing ~/.continue/config.json.
+  "models": [
+    {
+      "title": "CodeClone",
+      "provider": "openai",
+      "model": "codeclone",
+      "apiBase": "http://localhost:7461/v1",
+      "apiKey": "sk-codeclone-local",
+      "contextLength": 2048
+    }
+  ],
+  "tabAutocompleteModel": {
+    "title": "CodeClone autocomplete",
+    "provider": "openai",
+    "model": "codeclone",
+    "apiBase": "http://localhost:7461/v1",
+    "apiKey": "sk-codeclone-local"
+  }
+}
