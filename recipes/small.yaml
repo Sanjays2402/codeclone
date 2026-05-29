@@ -1,0 +1,49 @@
+name: small
+description: ~1 h on Apple Silicon 16-32GB. Reasonable adapter for daily use.
+
+safety:
+  require_author_match: true
+  skip_merge_commits: true
+  skip_reverts: true
+  license_filter: permissive_only
+  min_commit_age_days: 0
+  max_files_per_commit: 48
+  max_diff_lines: 2500
+  drop_secret_lines: true
+
+data:
+  languages: [py, ts, js, go, rust, java]
+  min_lines: 3
+  max_lines: 500
+  dedupe: exact
+  train_split: 0.9
+  val_split: 0.05
+  test_split: 0.05
+  shuffle_seed: 42
+
+model:
+  base: Qwen/Qwen2.5-Coder-1.5B
+  context_length: 2048
+  lora_rank: 16
+  lora_alpha: 32
+  lora_dropout: 0.05
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj]
+
+train:
+  backend: auto
+  batch_size: 4
+  grad_accum: 1
+  learning_rate: 2.0e-4
+  warmup_steps: 20
+  max_steps: 1000
+  eval_every: 100
+  save_every: 200
+  seed: 1337
+  bf16: true
+  gradient_checkpointing: true
+
+eval:
+  perplexity: true
+  mini_humaneval: true
+  sample_completions: 4
+  max_problems: 16

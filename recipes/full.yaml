@@ -1,0 +1,49 @@
+name: full
+description: 8-12 h overnight (or CUDA). Maximum adapter quality on consumer hardware.
+
+safety:
+  require_author_match: true
+  skip_merge_commits: true
+  skip_reverts: true
+  license_filter: permissive_only
+  min_commit_age_days: 0
+  max_files_per_commit: 96
+  max_diff_lines: 6000
+  drop_secret_lines: true
+
+data:
+  languages: [py, ts, js, go, rust, java]
+  min_lines: 3
+  max_lines: 800
+  dedupe: minhash
+  train_split: 0.92
+  val_split: 0.04
+  test_split: 0.04
+  shuffle_seed: 42
+
+model:
+  base: Qwen/Qwen2.5-Coder-3B
+  context_length: 4096
+  lora_rank: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  lora_target_modules: [q_proj, k_proj, v_proj, o_proj, gate_proj, up_proj, down_proj]
+
+train:
+  backend: auto
+  batch_size: 4
+  grad_accum: 4
+  learning_rate: 1.0e-4
+  warmup_steps: 100
+  max_steps: 8000
+  eval_every: 500
+  save_every: 1000
+  seed: 1337
+  bf16: true
+  gradient_checkpointing: true
+
+eval:
+  perplexity: true
+  mini_humaneval: true
+  sample_completions: 16
+  max_problems: 64

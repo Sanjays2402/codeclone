@@ -1,0 +1,49 @@
+name: quick
+description: ~10 min on Apple Silicon. Smoke test recipe.
+
+safety:
+  require_author_match: true
+  skip_merge_commits: true
+  skip_reverts: true
+  license_filter: permissive_only
+  min_commit_age_days: 0
+  max_files_per_commit: 32
+  max_diff_lines: 1500
+  drop_secret_lines: true
+
+data:
+  languages: [py, ts, js, go, rust, java]
+  min_lines: 3
+  max_lines: 300
+  dedupe: exact
+  train_split: 0.9
+  val_split: 0.05
+  test_split: 0.05
+  shuffle_seed: 42
+
+model:
+  base: Qwen/Qwen2.5-Coder-1.5B
+  context_length: 1024
+  lora_rank: 8
+  lora_alpha: 16
+  lora_dropout: 0.05
+  lora_target_modules: [q_proj, v_proj]
+
+train:
+  backend: auto
+  batch_size: 2
+  grad_accum: 1
+  learning_rate: 3.0e-4
+  warmup_steps: 10
+  max_steps: 200
+  eval_every: 50
+  save_every: 100
+  seed: 1337
+  bf16: true
+  gradient_checkpointing: true
+
+eval:
+  perplexity: true
+  mini_humaneval: true
+  sample_completions: 2
+  max_problems: 8

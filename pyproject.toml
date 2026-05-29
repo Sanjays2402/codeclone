@@ -1,0 +1,153 @@
+[project]
+name = "codeclone"
+version = "0.1.0"
+description = "Fine-tune a small code model on your own GitHub commit history and serve it as an OpenAI-compatible endpoint."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "CodeClone Maintainers" }]
+keywords = ["llm", "lora", "fine-tuning", "code", "mlx", "peft", "qwen"]
+classifiers = [
+  "Development Status :: 3 :: Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+  "typer>=0.12.0",
+  "rich>=13.7.0",
+  "pydantic>=2.7.0",
+  "pydantic-settings>=2.3.0",
+  "structlog>=24.1.0",
+  "pyyaml>=6.0.1",
+  "httpx>=0.27.0",
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "sse-starlette>=2.1.0",
+  "tenacity>=8.3.0",
+  "anyio>=4.4.0",
+  "tiktoken>=0.7.0",
+  "tokenizers>=0.19.0",
+  "datasets>=2.20.0",
+  "huggingface-hub>=0.23.0",
+  "GitPython>=3.1.43",
+  "unidiff>=0.7.5",
+  "PyGithub>=2.3.0",
+  "orjson>=3.10.0",
+  "numpy>=1.26.0",
+  "tqdm>=4.66.0",
+  "click>=8.1.0",
+  "python-dotenv>=1.0.0",
+  "opentelemetry-api>=1.25.0",
+  "opentelemetry-sdk>=1.25.0",
+  "opentelemetry-instrumentation-fastapi>=0.46b0",
+  "prometheus-client>=0.20.0",
+  "tabulate>=0.9.0",
+]
+
+[project.optional-dependencies]
+mlx = [
+  "mlx>=0.16.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+  "mlx-lm>=0.16.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+]
+cuda = [
+  "torch>=2.3.0",
+  "transformers>=4.42.0",
+  "peft>=0.11.0",
+  "accelerate>=0.31.0",
+  "bitsandbytes>=0.43.0; sys_platform != 'darwin'",
+  "trl>=0.9.0",
+  "safetensors>=0.4.3",
+]
+dev = [
+  "pytest>=8.2.0",
+  "pytest-cov>=5.0.0",
+  "pytest-asyncio>=0.23.0",
+  "pytest-httpx>=0.30.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+  "types-PyYAML>=6.0.12",
+  "respx>=0.21.0",
+]
+
+[project.scripts]
+codeclone = "codeclone_cli.main:app"
+
+[project.urls]
+Homepage = "https://github.com/Sanjays2402/codeclone"
+Repository = "https://github.com/Sanjays2402/codeclone"
+Issues = "https://github.com/Sanjays2402/codeclone/issues"
+
+[build-system]
+requires = ["hatchling>=1.21.0"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+  "src/codeclone_cli",
+  "services/exporter/codeclone_exporter",
+  "services/preprocess/codeclone_preprocess",
+  "services/trainer/codeclone_trainer",
+  "services/eval/codeclone_eval",
+  "services/serve/codeclone_serve",
+  "packages/dataset/codeclone_dataset",
+  "packages/models/codeclone_models",
+  "packages/config/codeclone_config",
+]
+
+[tool.uv]
+dev-dependencies = [
+  "pytest>=8.2.0",
+  "pytest-cov>=5.0.0",
+  "pytest-asyncio>=0.23.0",
+  "ruff>=0.5.0",
+  "mypy>=1.10.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["data", "adapters", "runs", "web"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "C4", "RUF"]
+ignore = ["E501", "B008", "N812"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["N802", "N803", "B011"]
+"**/tests/*" = ["N802", "N803", "B011"]
+
+[tool.mypy]
+python_version = "3.11"
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+ignore_missing_imports = true
+files = [
+  "src",
+  "services",
+  "packages",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers --strict-config"
+testpaths = ["tests", "services", "packages"]
+python_files = ["test_*.py", "*_test.py"]
+asyncio_mode = "auto"
+markers = [
+  "slow: marks tests as slow",
+  "integration: marks tests as integration",
+  "mlx: requires mlx backend",
+  "cuda: requires CUDA backend",
+  "network: requires network",
+]
+filterwarnings = [
+  "ignore::DeprecationWarning",
+  "ignore::PendingDeprecationWarning",
+]
