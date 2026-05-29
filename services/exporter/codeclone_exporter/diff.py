@@ -134,7 +134,10 @@ def iter_authored_diffs(
             if len(accepted) >= max_files_per_commit:
                 break
             path = pf.path or pf.target_file or ""
-            path = path.lstrip("ab/").lstrip("/")
+            # unidiff already strips the a/ b/ prefix, but be tolerant.
+            for prefix in ("a/", "b/"):
+                if path.startswith(prefix):
+                    path = path[len(prefix):]
             if not path or is_generated_path(path):
                 continue
             lang = detect_language(path)

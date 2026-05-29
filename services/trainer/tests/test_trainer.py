@@ -29,8 +29,8 @@ def test_data_loader_batches(tmp_path: Path):
     assert max(sizes) == 3
 
 
-def test_trainer_smoke(tmp_path: Path):
-    recipe = load_recipe(Path(__file__).resolve().parents[2] / "recipes" / "quick.yaml")
+def test_trainer_smoke(tmp_path: Path, recipes_dir):
+    recipe = load_recipe(recipes_dir / "quick.yaml")
     # Shrink to a true smoke loop.
     recipe.train.max_steps = 5
     raw = tmp_path / "train.jsonl"

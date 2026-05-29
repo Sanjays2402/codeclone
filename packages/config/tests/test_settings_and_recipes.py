@@ -30,8 +30,8 @@ def test_author_email_set(monkeypatch):
     assert "z@w.com" in got
 
 
-def test_recipe_load_and_hash():
-    r = load_recipe(Path(__file__).resolve().parents[1] / "recipes" / "small.yaml")
+def test_recipe_load_and_hash(recipes_dir):
+    r = load_recipe(recipes_dir / "small.yaml")
     assert isinstance(r, Recipe)
     h = recipe_hash(r)
     assert len(h) == 16

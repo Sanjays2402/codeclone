@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent
+RECIPES_DIR = ROOT / "recipes"
 
 # Make all in-repo packages importable without `pip install -e .`.
 for sub in (
@@ -60,3 +61,8 @@ def tmp_workspace(tmp_path: Path) -> Path:
 @pytest.fixture
 def fixtures_dir() -> Path:
     return ROOT / "tests" / "fixtures"
+
+
+@pytest.fixture
+def recipes_dir() -> Path:
+    return RECIPES_DIR

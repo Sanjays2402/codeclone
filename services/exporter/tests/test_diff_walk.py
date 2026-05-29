@@ -21,7 +21,7 @@ def _setup_repo(tmp_path: Path) -> Path:
     (repo / "a.py").write_text("def a():\n    return 1\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "first")
-    (repo / "a.py").write_text("def a():\n    return 1\n\ndef b():\n    return 2\n")
+    (repo / "a.py").write_text("def a():\n    return 1\n\ndef b():\n    return 2\n\ndef c():\n    return 3\n\ndef d():\n    return 4\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "feat: add b")
     return repo

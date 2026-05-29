@@ -34,18 +34,18 @@ def test_normalize_text_collapses_blanklines_and_tabs():
 def test_apply_filters_drops_short_and_long():
     pairs = [
         _mk(1, completion="x\n"),
-        _mk(2, completion="a\nb\nc\n"),
+        _mk(2, completion="a\nb\nc\nd\n"),
         _mk(3, completion="\n" * 2000),
     ]
-    it, report = apply_filters(pairs, languages={"py"}, min_lines=2, max_lines=100)
+    it, report = apply_filters(pairs, languages={"py"}, min_lines=3, max_lines=100)
     list(it)
     assert report.kept == 1
     assert report.dropped_short >= 1
     assert report.dropped_long >= 1
 
 
-def test_preprocess_end_to_end(tmp_path: Path):
-    recipe = load_recipe(Path(__file__).resolve().parents[2] / "recipes" / "small.yaml")
+def test_preprocess_end_to_end(tmp_path: Path, recipes_dir):
+    recipe = load_recipe(recipes_dir / "small.yaml")
     pairs = [_mk(i, completion=f"def f{i}():\n    return {i}\n    pass\n") for i in range(60)]
     raw = tmp_path / "raw.jsonl"
     write_pairs(raw, pairs)

@@ -59,7 +59,11 @@ class LicenseCategory(str, Enum):
 
 _SPDX_RE = re.compile(r"SPDX-License-Identifier:\s*([A-Za-z0-9\.\+\-]+)")
 _NAME_HINTS = {
-    "gpl": "GPL-3.0",
+    "gnu general public license": "GPL-3.0",
+    "gnu lesser general public license": "LGPL-3.0",
+    "gnu affero general public license": "AGPL-3.0",
+    "gpl-3": "GPL-3.0",
+    "gpl-2": "GPL-2.0",
     "lgpl": "LGPL-3.0",
     "agpl": "AGPL-3.0",
     "mit license": "MIT",
