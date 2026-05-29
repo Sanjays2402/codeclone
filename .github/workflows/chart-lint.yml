@@ -1,0 +1,25 @@
+name: chart-lint
+
+on:
+  push:
+    branches: [main]
+    paths: ["infra/helm/**"]
+  pull_request:
+    branches: [main]
+    paths: ["infra/helm/**"]
+  workflow_dispatch: {}
+
+jobs:
+  lint:
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: helm lint infra/helm/codeclone
+      - run: helm template codeclone infra/helm/codeclone > /tmp/render.yaml
+      - name: Smoke check rendered manifest
+        run: |
+          test -s /tmp/render.yaml
+          grep -q "kind: Deployment" /tmp/render.yaml
+          grep -q "kind: Service" /tmp/render.yaml
