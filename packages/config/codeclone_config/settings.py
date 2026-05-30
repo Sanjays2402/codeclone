@@ -10,7 +10,6 @@ from typing import Literal
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 BackendName = Literal["auto", "mlx", "peft"]
 
 
@@ -64,6 +63,15 @@ class Settings(BaseSettings):
 
     # ---- HF ----
     hf_token: str | None = Field(default=None, alias="HUGGING_FACE_HUB_TOKEN")
+
+    # ---- Rate limiting (token bucket on the serve API) ----
+    ratelimit_enabled: bool = Field(default=True, alias="CODECLONE_RATELIMIT_ENABLED")
+    ratelimit_per_ip_rpm: int = Field(default=120, alias="CODECLONE_RATELIMIT_PER_IP_RPM")
+    ratelimit_per_key_rpm: int = Field(default=600, alias="CODECLONE_RATELIMIT_PER_KEY_RPM")
+    ratelimit_burst: int = Field(default=20, alias="CODECLONE_RATELIMIT_BURST")
+    ratelimit_trust_forwarded: bool = Field(
+        default=False, alias="CODECLONE_RATELIMIT_TRUST_FORWARDED"
+    )
 
     @field_validator("backend", mode="before")
     @classmethod

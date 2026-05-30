@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
+from codeclone_config.logging import configure_logging, get_logger
+from codeclone_config.settings import get_settings
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -19,16 +21,14 @@ from prometheus_client import (
 )
 from sse_starlette.sse import EventSourceResponse
 
-from codeclone_config.logging import configure_logging, get_logger
-from codeclone_config.settings import get_settings
-
 from .auth import verify_api_key
 from .model_handle import ModelHandle, load_handle
+from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .schemas import (
     ChatCompletionChoice,
+    ChatCompletionDelta,
     ChatCompletionRequest,
     ChatCompletionResponse,
-    ChatCompletionDelta,
     ChatCompletionStreamChoice,
     ChatCompletionStreamChunk,
     ChatMessage,
@@ -39,7 +39,6 @@ from .schemas import (
     ModelList,
     Usage,
 )
-
 
 log = get_logger(__name__)
 
@@ -93,6 +92,21 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ---- Rate limiting (per IP and per API key, token bucket) ----
+    if settings.ratelimit_enabled:
+        app.add_middleware(
+            RateLimitMiddleware,
+            per_ip=TokenBucketLimiter(
+                rate_per_minute=settings.ratelimit_per_ip_rpm,
+                burst=settings.ratelimit_burst,
+            ),
+            per_key=TokenBucketLimiter(
+                rate_per_minute=settings.ratelimit_per_key_rpm,
+                burst=settings.ratelimit_burst,
+            ),
+            trust_forwarded=settings.ratelimit_trust_forwarded,
+        )
 
     # ---- Observability: optional OTel hookup ----
     if settings.otel_endpoint:
