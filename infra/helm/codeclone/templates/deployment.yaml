@@ -29,6 +29,13 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.secretRefName }}
                   key: api-key
+            {{- if .Values.apiKeys.enabled }}
+            - name: CODECLONE_API_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.secretRefName }}
+                  key: api-keys
+            {{- end }}
           volumeMounts:
             {{- if .Values.adapters.pvcName }}
             - name: adapters

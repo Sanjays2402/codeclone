@@ -22,7 +22,8 @@ from prometheus_client import (
 from sse_starlette.sse import EventSourceResponse
 
 from .audit import AuditMiddleware, build_sink_from_env
-from .auth import verify_api_key
+from .auth import require_scope
+from .auth import verify_api_key  # noqa: F401  (re-exported for back-compat)
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .request_id import RequestIdMiddleware
@@ -191,13 +192,13 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
 
     # ---------------- /v1/models ----------------
 
-    @app.get("/v1/models", dependencies=[Depends(verify_api_key)])
+    @app.get("/v1/models", dependencies=[Depends(require_scope("models:read"))])
     def list_models() -> ModelList:
         return ModelList(data=[ModelCard(id=handle.name), ModelCard(id="codeclone")])
 
     # ---------------- /v1/chat/completions ----------------
 
-    @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
+    @app.post("/v1/chat/completions", dependencies=[Depends(require_scope("infer"))])
     async def chat_completions(req: ChatCompletionRequest):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")
@@ -233,7 +234,7 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
 
     # ---------------- /v1/completions ----------------
 
-    @app.post("/v1/completions", dependencies=[Depends(verify_api_key)])
+    @app.post("/v1/completions", dependencies=[Depends(require_scope("infer"))])
     async def completions(req: CompletionRequest):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")

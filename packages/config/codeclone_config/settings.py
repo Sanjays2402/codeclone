@@ -47,6 +47,11 @@ class Settings(BaseSettings):
 
     # ---- Serve ----
     api_key: str = Field(default="sk-codeclone-local", alias="CODECLONE_API_KEY")
+    # Multi-key keyring with per-key scopes. CSV of `key:scope+scope` entries,
+    # e.g. `sk-ci:models:read+infer,sk-admin:*`. Parsed at request time by
+    # services.serve.codeclone_serve.auth. Empty by default; the legacy
+    # `CODECLONE_API_KEY` above continues to work and is granted wildcard scope.
+    api_keys: str = Field(default="", alias="CODECLONE_API_KEYS")
     serve_host: str = Field(default="127.0.0.1", alias="CODECLONE_SERVE_HOST")
     serve_port: int = Field(default=7461, alias="CODECLONE_SERVE_PORT")
     max_tokens: int = Field(default=2048, alias="CODECLONE_MAX_TOKENS")

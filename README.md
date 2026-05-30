@@ -256,6 +256,25 @@ Throttled requests get HTTP `429` with a `Retry-After` header in seconds and a J
 
 **Secrets.** All runtime config is loaded via pydantic-settings from environment then `.env`. The `CODECLONE_API_KEY` is the bearer token enforced by `Authorization: Bearer ...`. Rotate by redeploying with a new value. Never bake secrets into images.
 
+**API keys and scopes (RBAC).** The serve API supports two key configurations side by side. The legacy single key in `CODECLONE_API_KEY` is granted the implicit wildcard scope `*` so existing deployments keep working. To split callers by capability, set `CODECLONE_API_KEYS` to a CSV of `key:scopes` entries where scopes are joined with `+`. Known scopes:
+
+| Scope | Routes it unlocks |
+| --- | --- |
+| `models:read` | `GET /v1/models` |
+| `infer` | `POST /v1/chat/completions`, `POST /v1/completions` |
+| `admin` | reserved for future admin routes |
+| `*` | wildcard, grants every scope (use sparingly) |
+
+Example:
+
+```
+CODECLONE_API_KEYS=sk-ci-readonly:models:read,sk-app:infer,sk-ops:*
+```
+
+A caller presenting `sk-ci-readonly` can list models but gets `403 missing required scope: infer` if it tries to call completions. A caller presenting `sk-app` can run completions but gets `403` on `/v1/models`. Unauthenticated requests still get `401`, so 401 vs 403 cleanly distinguishes "no key" from "wrong key for this route".
+
+Key fingerprints (sha256 prefix, never the raw key) appear in the audit log as `actor=key:<12 hex>` so per-key activity is correlatable across rotations. To revoke a single integration, drop its entry from `CODECLONE_API_KEYS` and redeploy; the others keep working. In Kubernetes, set `apiKeys.enabled=true` in the Helm chart and put both `api-key` and `api-keys` into the `codeclone-secrets` secret in one shot.
+
 **Observability.** Structured JSON logs are emitted by `structlog` (`LOG_JSON=1`, `LOG_LEVEL=INFO`). Per-route latency histograms and request counters are exposed at `/metrics` in Prometheus text format. If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, FastAPI is auto-instrumented and spans are shipped via OTLP HTTP.
 
 **Request correlation.** Every HTTP request gets an `X-Request-ID`. If the caller sends one and it matches `[A-Za-z0-9._:-]{1,128}` it is honored end to end, otherwise the service mints a 16 hex char id. The id is returned on the response, written to the audit log row, attached to `request.state.request_id` for route handlers, and bound into `structlog` contextvars so every log line emitted while the request is in flight carries `request_id=...` automatically. This makes it trivial to grep the audit JSONL and the application log for a single trace: `jq 'select(.request_id=="abc123")' runs/audit.log` and the matching log lines line up one to one.
@@ -299,7 +318,7 @@ The file is append-only JSONL, so log rotation should use `copytruncate` (logrot
 1. Spike in `429` from `/metrics`: check whether one IP or one API key is the source (the response body names the scope). Raise the relevant `*_RPM` budget or revoke the key.
 2. `/readyz` failing but `/healthz` ok: the model handle did not load. Check container logs for `load_handle` errors and confirm the mounted adapter path.
 3. Latency regression in `codeclone_request_seconds`: confirm GPU or MLX backend is the one selected by `resolve_backend()` and that no other process is contending for the device.
-4. Auth failures: confirm the deployed `CODECLONE_API_KEY` matches what the caller is sending. The serve process logs do not include the key itself.
+4. Auth failures: confirm the deployed `CODECLONE_API_KEY` matches what the caller is sending. The serve process logs do not include the key itself. If callers see `403 missing required scope: ...` instead of `401`, the key is valid but lacks the scope the route needs; check the `CODECLONE_API_KEYS` entry for that key.
 5. Sudden Sentry quiet on a known-broken deploy: hit `/healthz` and confirm `sentry: true`. If it reports false, the pod is missing `SENTRY_DSN` or the `sentry-sdk` import failed at boot (check logs for `sentry.sdk_missing` or `sentry.init_failed`).
 6. Incident forensics: grep `runs/audit.log` by `actor` or `remote_ip` to reconstruct a timeline; the `request_id` ties each row to the matching response header and (when present) the Sentry event tag.
 

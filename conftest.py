@@ -36,6 +36,7 @@ def _clean_env(monkeypatch):
         "AUTHOR_EMAIL",
         "AUTHOR_EMAILS_EXTRA",
         "CODECLONE_API_KEY",
+        "CODECLONE_API_KEYS",
         "MLFLOW_TRACKING_URI",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
     ):
