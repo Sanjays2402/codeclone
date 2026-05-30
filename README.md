@@ -1,5 +1,8 @@
 # CodeClone
 
+![landing](docs/screenshots/landing.png)
+
+
 > Fine-tune a small code model on **your own** GitHub commit history, then serve it as an OpenAI-compatible endpoint that Continue.dev can use inside VS Code.
 
 CodeClone clones your repos, walks history, keeps only the diffs that **you** authored, turns those into `(prefix, completion)` pairs, runs a LoRA fine-tune on a small open base model (Qwen2.5-Coder by default), evaluates the adapter, and serves it on `:7461` behind an OpenAI-shaped API.
