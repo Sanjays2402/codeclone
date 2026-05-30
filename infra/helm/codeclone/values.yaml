@@ -72,3 +72,31 @@ autoscaling:
   minReplicas: 1
   maxReplicas: 3
   targetCPUUtilizationPercentage: 70
+
+# PodDisruptionBudget keeps at least one pod available during voluntary
+# disruptions (node drains, rolling upgrades). Enable once you run >1 replica.
+podDisruptionBudget:
+  enabled: false
+  minAvailable: 1
+  # maxUnavailable: 1   # use one or the other, not both
+
+# NetworkPolicy locks the pod down to: DNS to kube-dns, HTTPS to public
+# internet (for HF model pulls), and inbound on the service port from any pod
+# in the cluster. Override `ingress.from` to restrict callers further.
+networkPolicy:
+  enabled: false
+  ingress:
+    from: []   # e.g. - namespaceSelector: { matchLabels: { name: gateway } }
+  egress: []   # override the default DNS + HTTPS rules if you need stricter
+
+# ServiceMonitor lets a Prometheus Operator install scrape /metrics directly.
+# Requires the prometheus-operator CRDs to be present in the cluster.
+serviceMonitor:
+  enabled: false
+  namespace: ""            # defaults to release namespace
+  path: /metrics
+  interval: 30s
+  scrapeTimeout: 10s
+  additionalLabels: {}     # e.g. release: kube-prometheus-stack
+  relabelings: []
+  metricRelabelings: []

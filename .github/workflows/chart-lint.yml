@@ -18,8 +18,20 @@ jobs:
       - uses: azure/setup-helm@v4
       - run: helm lint infra/helm/codeclone
       - run: helm template codeclone infra/helm/codeclone > /tmp/render.yaml
-      - name: Smoke check rendered manifest
+      - name: Smoke check rendered manifest (defaults)
         run: |
           test -s /tmp/render.yaml
           grep -q "kind: Deployment" /tmp/render.yaml
           grep -q "kind: Service" /tmp/render.yaml
+      - name: Render with hardening flags enabled
+        run: |
+          helm template codeclone infra/helm/codeclone \
+            --set autoscaling.enabled=true \
+            --set podDisruptionBudget.enabled=true \
+            --set networkPolicy.enabled=true \
+            --set serviceMonitor.enabled=true \
+            > /tmp/render-hardened.yaml
+          grep -q "kind: NetworkPolicy" /tmp/render-hardened.yaml
+          grep -q "kind: PodDisruptionBudget" /tmp/render-hardened.yaml
+          grep -q "kind: ServiceMonitor" /tmp/render-hardened.yaml
+          grep -q "kind: HorizontalPodAutoscaler" /tmp/render-hardened.yaml
