@@ -242,17 +242,26 @@ Notes for running CodeClone as a long-lived service rather than a one-off.
 
 **Scale.** The serve API is stateless modulo the loaded adapter, so horizontal scaling is by replica count. The in-process rate limiter is per replica. When running more than one replica behind a shared ingress, set tighter per-replica budgets or front the service with a shared limiter (NGINX `limit_req`, Envoy local or global rate limit, or a Redis token bucket) and treat the in-process limiter as defense in depth.
 
-**Rate limiting.** Two independent token buckets run per request, one keyed on client IP and one on the bearer API key. A request is allowed only if both buckets have a token. Health and metrics paths are always exempt. Tunables (env):
+**Rate limiting.** Three independent token buckets run per request: client IP, bearer API key, and the tenant the key is bound to. A request is allowed only if every applicable bucket has a token. Health and metrics paths are always exempt. Tunables (env):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `CODECLONE_RATELIMIT_ENABLED` | `true` | Master switch. |
 | `CODECLONE_RATELIMIT_PER_IP_RPM` | `120` | Steady state requests per minute per client IP. |
 | `CODECLONE_RATELIMIT_PER_KEY_RPM` | `600` | Steady state requests per minute per API key. |
+| `CODECLONE_RATELIMIT_PER_TENANT_RPM` | `1200` | Steady state requests per minute per tenant (aggregate across all keys bound to that tenant). |
 | `CODECLONE_RATELIMIT_BURST` | `20` | Bucket capacity, i.e. the largest short term spike a single identity may emit. |
 | `CODECLONE_RATELIMIT_TRUST_FORWARDED` | `false` | When the service sits behind a trusted proxy, set true so `X-Forwarded-For` / `X-Real-IP` is used for the IP key. Do not enable when the socket is reachable directly. |
 
-Throttled requests get HTTP `429` with a `Retry-After` header in seconds and a JSON body that names which bucket (`ip` or `api_key`) tripped.
+Throttled requests get HTTP `429` with a `Retry-After` header in seconds and a JSON body that names which bucket (`ip`, `api_key`, or `tenant`) tripped.
+
+**Multi-tenancy.** API keys can be bound to a tenant id with the `@tenant` suffix in `CODECLONE_API_KEYS`, for example `sk-acme:infer@acme,sk-globex:infer@globex,sk-ops:*@platform`. Tenant ids must match `^[a-z0-9][a-z0-9-]{0,62}$` so they survive unchanged through metric labels, log fields, and storage keys. Keys without a suffix and the legacy single `CODECLONE_API_KEY` are bound to the implicit `default` tenant for backward compatibility.
+
+Every request resolves a `Principal(fingerprint, scopes, tenant)` which is stashed on `request.state.principal` and surfaced on `request.state.tenant` so downstream handlers and middleware can scope work by tenant. Three layers consume the tenant today:
+
+* **Audit log.** Every JSONL audit row carries a `tenant` field alongside the existing `actor` fingerprint, so SIEM queries can slice activity by tenant and per-tenant retention policies are straightforward.
+* **Rate limiting.** A dedicated per-tenant bucket caps aggregate traffic from any single tenant even when that tenant rotates through many keys.
+* **GDPR data lifecycle.** `GET /v1/data/export` and `DELETE /v1/data/delete` now scope by `(tenant, actor)`. A non-admin key can only export or erase rows from its own tenant; passing `?tenant=` for a different tenant returns `403`. Admin keys (`*` or `admin` scope) may target any tenant via `?tenant=<id>` and any actor via `?actor=key:<12hex>`, and the cross-tenant erasure is recorded in the audit trail with both `tenant` and `target_tenant` fields.
 
 **Secrets.** All runtime config is loaded via pydantic-settings from environment then `.env`. The `CODECLONE_API_KEY` is the bearer token enforced by `Authorization: Bearer ...`. Rotate by redeploying with a new value. Never bake secrets into images.
 

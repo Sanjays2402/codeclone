@@ -101,12 +101,35 @@ def _api_key(request: Request) -> str | None:
     return token or None
 
 
+def _tenant_for_key(raw_key: str | None) -> str | None:
+    """Resolve the tenant id for a raw bearer token, or ``None`` if unknown.
+
+    Unknown / missing keys do not get a tenant bucket; they are still
+    constrained by the per-IP and (if present) per-key buckets so anonymous
+    flood traffic cannot bypass throttling by simply omitting credentials.
+    """
+    if not raw_key:
+        return None
+    try:
+        from .auth import _build_keyring
+
+        rec = _build_keyring().get(raw_key)
+    except Exception:
+        return None
+    return rec.tenant if rec else None
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
-    """Per-IP and per-API-key token bucket middleware.
+    """Per-IP, per-API-key, and per-tenant token bucket middleware.
 
     Exempt paths (health probes, metrics) skip the limiter entirely.
     A blocked request returns HTTP 429 with `Retry-After` and a small
     JSON body describing which bucket tripped.
+
+    The per-tenant bucket gives a single noisy tenant its own ceiling so it
+    cannot exhaust a shared replica on behalf of every other tenant. When
+    ``per_tenant`` is ``None`` the tenant check is skipped; this keeps the
+    middleware backward compatible for single-tenant deployments.
     """
 
     def __init__(
@@ -115,6 +138,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         *,
         per_ip: TokenBucketLimiter,
         per_key: TokenBucketLimiter,
+        per_tenant: TokenBucketLimiter | None = None,
         trust_forwarded: bool = False,
         exempt: Iterable[str] = EXEMPT_PATHS,
         clock: Callable[[], float] | None = None,
@@ -122,6 +146,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         super().__init__(app)
         self.per_ip = per_ip
         self.per_key = per_key
+        self.per_tenant = per_tenant
         self.trust_forwarded = trust_forwarded
         self.exempt = frozenset(exempt)
         self._clock = clock
@@ -142,6 +167,15 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
             ok_key, retry_key = self.per_key.check(f"key:{key}", now=now)
             if not ok_key:
                 return _too_many("api_key", retry_key)
+
+            if self.per_tenant is not None:
+                tenant = _tenant_for_key(key)
+                if tenant is not None:
+                    ok_t, retry_t = self.per_tenant.check(
+                        f"tenant:{tenant}", now=now
+                    )
+                    if not ok_t:
+                        return _too_many("tenant", retry_t)
 
         return await call_next(request)
 

@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     ratelimit_enabled: bool = Field(default=True, alias="CODECLONE_RATELIMIT_ENABLED")
     ratelimit_per_ip_rpm: int = Field(default=120, alias="CODECLONE_RATELIMIT_PER_IP_RPM")
     ratelimit_per_key_rpm: int = Field(default=600, alias="CODECLONE_RATELIMIT_PER_KEY_RPM")
+    # Per-tenant ceiling. Independent of the per-key bucket so a tenant that
+    # issues many keys still has a single aggregate ceiling. Defaults a bit
+    # above per_key so a single-key tenant is not effectively double-limited.
+    ratelimit_per_tenant_rpm: int = Field(
+        default=1200, alias="CODECLONE_RATELIMIT_PER_TENANT_RPM"
+    )
     ratelimit_burst: int = Field(default=20, alias="CODECLONE_RATELIMIT_BURST")
     ratelimit_trust_forwarded: bool = Field(
         default=False, alias="CODECLONE_RATELIMIT_TRUST_FORWARDED"

@@ -158,6 +158,10 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
                 rate_per_minute=settings.ratelimit_per_key_rpm,
                 burst=settings.ratelimit_burst,
             ),
+            per_tenant=TokenBucketLimiter(
+                rate_per_minute=settings.ratelimit_per_tenant_rpm,
+                burst=settings.ratelimit_burst,
+            ),
             trust_forwarded=settings.ratelimit_trust_forwarded,
         )
 

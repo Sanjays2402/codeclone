@@ -61,18 +61,23 @@ def _resolve_audit_path(request: Request) -> Path:
     return Path(raw) if raw else settings.audit_log_path
 
 
-def _resolve_target_actor(principal: Principal, requested: str | None) -> str:
-    """Decide which actor fingerprint the caller may operate on.
+def _resolve_target_actor(
+    principal: Principal, requested: str | None
+) -> tuple[str, str]:
+    """Decide which (tenant, actor fingerprint) the caller may operate on.
 
-    Non-admin callers always act on their own fingerprint. Admins may pass an
-    explicit ``actor=key:<12hex>`` to act on someone else's data; without it
-    they also default to their own fingerprint.
+    Non-admin callers always act on their own ``(tenant, fingerprint)`` pair.
+    Admins may pass an explicit ``actor=key:<12hex>`` to act on someone else's
+    data; without it they also default to their own fingerprint. The returned
+    tenant always matches the principal's tenant; admin callers wanting to
+    target a different tenant should use the dedicated ``tenant=`` query
+    parameter (see :func:`_resolve_target`).
     """
     own = principal.fingerprint
-    is_admin = "*" in principal.scopes or "admin" in principal.scopes
+    is_admin = principal.is_admin()
 
     if requested is None:
-        return own
+        return principal.tenant, own
 
     requested = requested.strip()
     if not requested.startswith("key:") or len(requested) != len("key:") + 12:
@@ -90,7 +95,42 @@ def _resolve_target_actor(principal: Principal, requested: str | None) -> str:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="only an admin key may export or delete another caller's data",
         )
-    return requested
+    return principal.tenant, requested
+
+
+def _resolve_target(
+    principal: Principal,
+    requested_actor: str | None,
+    requested_tenant: str | None,
+) -> tuple[str, str]:
+    """Resolve the (tenant, actor) tuple the caller is allowed to act on.
+
+    Tenancy rules:
+
+    * If no ``tenant`` query param is given, the principal's own tenant is
+      used. Non-admin callers can never escape their tenant.
+    * If a ``tenant`` is given and it matches the principal's tenant, it is
+      accepted regardless of role.
+    * If a different ``tenant`` is given, the caller must be an admin
+      (``*`` or ``admin`` scope). This is the only path that lets a single
+      key reach across tenants and is logged via the audit trail like any
+      other request.
+    """
+    tenant, actor = _resolve_target_actor(principal, requested_actor)
+    if requested_tenant is None:
+        return tenant, actor
+    requested_tenant = requested_tenant.strip().lower()
+    if not requested_tenant:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="tenant must be a non-empty string",
+        )
+    if requested_tenant != principal.tenant and not principal.is_admin():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="only an admin key may export or delete another tenant's data",
+        )
+    return requested_tenant, actor
 
 
 def _iter_rows(path: Path) -> Iterator[dict]:
@@ -119,15 +159,17 @@ def _build_router() -> APIRouter:
     def export_my_data(
         request: Request,
         actor: str | None = Query(default=None),
+        tenant: str | None = Query(default=None),
         principal: Principal = Depends(require_scope("infer")),
     ) -> StreamingResponse:
-        target = _resolve_target_actor(principal, actor)
+        target_tenant, target = _resolve_target(principal, actor, tenant)
         path = _resolve_audit_path(request)
 
         def _stream() -> Iterator[bytes]:
             header = {
                 "exported_at": datetime.now(timezone.utc).isoformat(),
                 "actor": target,
+                "tenant": target_tenant,
                 "source": str(path),
                 "format": "jsonl",
                 "schema": "codeclone.audit.v1",
@@ -135,15 +177,28 @@ def _build_router() -> APIRouter:
             yield (json.dumps({"_meta": header}) + "\n").encode("utf-8")
             count = 0
             for row in _iter_rows(path):
-                if row.get("actor") == target:
-                    yield (json.dumps(row, separators=(",", ":")) + "\n").encode(
-                        "utf-8"
-                    )
-                    count += 1
-            footer = {"_summary": {"actor": target, "rows": count}}
+                if row.get("actor") != target:
+                    continue
+                # Legacy rows predating the tenant column are scoped to the
+                # default tenant so an upgrade does not silently widen access.
+                row_tenant = row.get("tenant", "default")
+                if row_tenant != target_tenant:
+                    continue
+                yield (json.dumps(row, separators=(",", ":")) + "\n").encode(
+                    "utf-8"
+                )
+                count += 1
+            footer = {
+                "_summary": {
+                    "actor": target,
+                    "tenant": target_tenant,
+                    "rows": count,
+                }
+            }
             yield (json.dumps(footer) + "\n").encode("utf-8")
 
-        filename = f"codeclone-audit-{target.replace(':', '_')}.jsonl"
+        safe_actor = target.replace(":", "_")
+        filename = f"codeclone-audit-{target_tenant}-{safe_actor}.jsonl"
         return StreamingResponse(
             _stream(),
             media_type="application/x-ndjson",
@@ -160,13 +215,20 @@ def _build_router() -> APIRouter:
     def delete_my_data(
         request: Request,
         actor: str | None = Query(default=None),
+        tenant: str | None = Query(default=None),
         principal: Principal = Depends(require_scope("infer")),
     ) -> dict:
-        target = _resolve_target_actor(principal, actor)
+        target_tenant, target = _resolve_target(principal, actor, tenant)
         path = _resolve_audit_path(request)
 
         if not path.exists():
-            return {"actor": target, "deleted": 0, "remaining": 0, "purged_at": None}
+            return {
+                "actor": target,
+                "tenant": target_tenant,
+                "deleted": 0,
+                "remaining": 0,
+                "purged_at": None,
+            }
 
         deleted = 0
         remaining = 0
@@ -186,7 +248,11 @@ def _build_router() -> APIRouter:
             try:
                 with os.fdopen(tmp_fd, "w", encoding="utf-8") as out:
                     for row in _iter_rows(path):
-                        if row.get("actor") == target:
+                        row_tenant = row.get("tenant", "default")
+                        if (
+                            row.get("actor") == target
+                            and row_tenant == target_tenant
+                        ):
                             deleted += 1
                             continue
                         out.write(json.dumps(row, separators=(",", ":")) + "\n")
@@ -200,7 +266,9 @@ def _build_router() -> APIRouter:
                         "ts": purged_at,
                         "event": "gdpr.erasure",
                         "actor": principal.fingerprint,
+                        "tenant": principal.tenant,
                         "target_actor": target,
+                        "target_tenant": target_tenant,
                         "deleted": deleted,
                         "remaining": remaining,
                         "path": str(path),
@@ -218,6 +286,7 @@ def _build_router() -> APIRouter:
 
         return {
             "actor": target,
+            "tenant": target_tenant,
             "deleted": deleted,
             "remaining": remaining,
             "purged_at": purged_at,

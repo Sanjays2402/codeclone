@@ -49,6 +49,28 @@ def _hash_key(raw: str | None) -> str:
     return f"key:{digest[:12]}"
 
 
+def _resolve_tenant(raw_key: str | None) -> str:
+    """Resolve the tenant id for an inbound bearer token.
+
+    Done at the audit layer (rather than relying on ``request.state.tenant``)
+    because the audit middleware runs before route dependencies on some paths
+    (auth failures, unmatched routes) and we still want a tenant-tagged row
+    for those events. Unknown or missing keys are tagged ``anonymous`` so
+    brute-force attempts can be sliced separately from legitimate traffic.
+    """
+    if not raw_key:
+        return "anonymous"
+    try:
+        from .auth import _build_keyring
+
+        rec = _build_keyring().get(raw_key)
+    except Exception:
+        return "anonymous"
+    if rec is None:
+        return "anonymous"
+    return rec.tenant
+
+
 def _extract_key(headers: Headers) -> str | None:
     auth = headers.get("authorization")
     if not auth:
@@ -228,6 +250,7 @@ class AuditMiddleware:
         ).hexdigest()[:16]
 
         actor = _hash_key(_extract_key(headers))
+        tenant = _resolve_tenant(_extract_key(headers))
         ip = _client_ip(scope, headers, self.trust_forwarded)
         user_agent = headers.get("user-agent", "")
         method = scope.get("method", "GET")
@@ -316,6 +339,7 @@ class AuditMiddleware:
             self._emit(
                 req_id=req_id,
                 actor=actor,
+                tenant=tenant,
                 ip=ip,
                 ua=user_agent,
                 method=method,
@@ -331,6 +355,7 @@ class AuditMiddleware:
         self._emit(
             req_id=req_id,
             actor=actor,
+            tenant=tenant,
             ip=ip,
             ua=user_agent,
             method=method,
@@ -347,6 +372,7 @@ class AuditMiddleware:
         *,
         req_id: str,
         actor: str,
+        tenant: str,
         ip: str,
         ua: str,
         method: str,
@@ -361,6 +387,7 @@ class AuditMiddleware:
             "ts": datetime.now(timezone.utc).isoformat(),
             "request_id": req_id,
             "actor": actor,
+            "tenant": tenant,
             "remote_ip": ip,
             "user_agent": ua[:200],
             "method": method,

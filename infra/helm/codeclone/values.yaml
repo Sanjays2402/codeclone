@@ -42,15 +42,18 @@ env:
 #   kubectl create secret generic codeclone-secrets --from-literal=api-key=sk-...
 secretRefName: codeclone-secrets
 
-# Optional multi-key keyring with per-key scopes (RBAC). When enabled the pod
-# also reads `api-keys` from the same secret and exposes it as the
-# CODECLONE_API_KEYS env var. Format is `key1:scope+scope,key2:*`; known
-# scopes are `models:read`, `infer`, and `admin` (`*` means all). The single
-# `api-key` entry above keeps working and is implicitly granted `*`. Create
+# Optional multi-key keyring with per-key scopes (RBAC) and tenant binding.
+# When enabled the pod also reads `api-keys` from the same secret and exposes
+# it as the CODECLONE_API_KEYS env var. Format is
+# `key1:scope+scope[@tenant],key2:*[@tenant]`; known scopes are
+# `models:read`, `infer`, and `admin` (`*` means all). The optional
+# `@tenant` suffix binds the key to a tenant id; omit it and the key
+# inherits the `default` tenant. The single `api-key` entry above keeps
+# working and is implicitly granted `*` on the `default` tenant. Create
 # both at once with:
 #   kubectl create secret generic codeclone-secrets \
 #     --from-literal=api-key=sk-legacy \
-#     --from-literal=api-keys=sk-ci:models:read,sk-app:infer,sk-ops:*
+#     --from-literal=api-keys=sk-acme:infer@acme,sk-globex:infer@globex,sk-ops:*@platform
 apiKeys:
   enabled: false
 
