@@ -206,10 +206,6 @@ class AuditMiddleware:
         async def _send(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status"] = int(message.get("status", 500))
-                # Inject X-Request-ID so callers can correlate.
-                raw_headers = list(message.get("headers") or [])
-                raw_headers.append((b"x-request-id", req_id.encode("ascii")))
-                message = {**message, "headers": raw_headers}
             await send(message)
 
         try:

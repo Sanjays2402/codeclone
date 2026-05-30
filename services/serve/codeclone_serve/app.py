@@ -25,6 +25,7 @@ from .audit import AuditMiddleware, build_sink_from_env
 from .auth import verify_api_key
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from .request_id import RequestIdMiddleware
 from .schemas import (
     ChatCompletionChoice,
     ChatCompletionDelta,
@@ -128,8 +129,7 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             trust_forwarded=settings.ratelimit_trust_forwarded,
         )
 
-    # ---- Observability: optional OTel hookup ----
-    if settings.otel_endpoint:
+    # ---- Observability: optional OTel hookup ----    if settings.otel_endpoint:
         try:
             from opentelemetry import trace  # type: ignore
             from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore
@@ -152,6 +152,11 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             FastAPIInstrumentor.instrument_app(app)
         except Exception as e:  # pragma: no cover - optional
             log.warning("otel.setup_failed", error=str(e))
+
+    # ---- Request ID must be added LAST so it wraps every other middleware
+    # and every downstream layer (audit, rate limit, OTel, route handlers,
+    # structlog) sees the same id. ----
+    app.add_middleware(RequestIdMiddleware)
 
     # ---- middleware: per-request latency ----
     @app.middleware("http")
