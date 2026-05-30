@@ -379,6 +379,24 @@ Operational notes:
 - If you shipped the audit log to a downstream SIEM via Filebeat or Vector, propagate the erasure event through the same pipeline and apply the matching delete on the SIEM side; the local rewrite only purges the on-disk JSONL.
 - Disable the entire surface with `CODECLONE_AUDIT_LOG_ENABLED=false`. The endpoints then return 409 because there is nothing to export or erase.
 
+**Smoke testing a Helm release.** The chart ships a `helm test` hook that runs after install or upgrade. It launches a short-lived busybox pod that probes `/healthz`, `/readyz`, `/metrics`, and confirms that the auth gate still rejects unauthenticated `/v1/models` traffic. Run it with:
+
+```
+helm test <release> --namespace <ns> --logs
+```
+
+The hook is enabled by default and self-cleans on success; failed pods are kept so their logs stay grep-able. Disable for clusters where ephemeral test pods are not allowed with `--set tests.enabled=false`. The probe asserts the `codeclone_requests_total` series shows up in `/metrics` so a silent middleware regression that returns an empty `/metrics` body cannot pass.
+
+**On-call quick reference.**
+
+| Symptom | First check |
+| --- | --- |
+| `helm test` fails on `/readyz` | model handle did not load; `kubectl logs` the serve pod and look for adapter or HF cache errors |
+| `helm test` fails on `/metrics` | prometheus_client not initialised; confirm the pod actually serves the prom text format, not JSON |
+| `helm test` fails on the auth gate | `CODECLONE_API_KEY` secret is missing or the auth middleware is not mounted |
+| 429s spiking | check which bucket (`ip` or `api_key`) is named in the body; raise the matching `CODECLONE_RATELIMIT_*` knob or add capacity |
+| Audit log disk full | confirm `CODECLONE_AUDIT_LOG_MAX_BYTES` and `_BACKUP_COUNT` are set; ship rotated `.gz` files to the SIEM faster |
+
 ## License
 
 Apache-2.0. See `LICENSE`.

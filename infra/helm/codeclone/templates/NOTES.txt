@@ -1,0 +1,30 @@
+{{ include "codeclone.fullname" . }} released into namespace {{ .Release.Namespace }}.
+
+In-cluster base URL:
+  http://{{ include "codeclone.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+Smoke test the release once pods are Ready:
+  helm test {{ .Release.Name }} --namespace {{ .Release.Namespace }} --logs
+
+The test pod hits /healthz, /readyz, /metrics, and confirms the auth gate
+rejects unauthenticated /v1/models. Disable with --set tests.enabled=false.
+
+Port-forward for a local probe:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "codeclone.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  curl -s http://127.0.0.1:{{ .Values.service.port }}/healthz
+
+Authenticated call (api key lives in secret {{ .Values.secretRefName }}):
+  KEY=$(kubectl -n {{ .Release.Namespace }} get secret {{ .Values.secretRefName }} -o jsonpath='{.data.api-key}' | base64 -d)
+  curl -s -H "Authorization: Bearer $KEY" http://127.0.0.1:{{ .Values.service.port }}/v1/models
+
+Operations runbook: see the Operations section of the project README.
+{{- if not .Values.autoscaling.enabled }}
+
+Autoscaling is OFF. Enable with --set autoscaling.enabled=true once you have
+baseline load metrics.
+{{- end }}
+{{- if not .Values.networkPolicy.enabled }}
+
+NetworkPolicy is OFF. Enable with --set networkPolicy.enabled=true in any
+shared cluster.
+{{- end }}

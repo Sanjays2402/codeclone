@@ -1,0 +1,78 @@
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "codeclone.fullname" . }}-test-connection
+  labels: {{- include "codeclone.labels" . | nindent 4 }}
+  annotations:
+    # `helm test` lifecycle hook. Runs after install/upgrade when the operator
+    # invokes `helm test <release>`. hook-delete-policy keeps the pod around
+    # on failure so its logs are still grep-able.
+    "helm.sh/hook": test
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  {{- with .Values.tests.podSecurityContext | default .Values.podSecurityContext }}
+  securityContext: {{- toYaml . | nindent 4 }}
+  {{- end }}
+  containers:
+    - name: probe
+      image: {{ .Values.tests.image | quote }}
+      imagePullPolicy: {{ .Values.tests.imagePullPolicy }}
+      {{- with .Values.tests.containerSecurityContext | default .Values.containerSecurityContext }}
+      securityContext: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          set -eu
+          host="{{ include "codeclone.fullname" . }}"
+          port="{{ .Values.service.port }}"
+          base="http://${host}:${port}"
+          echo "smoke-testing ${base}"
+
+          # /healthz: liveness, must always return 200.
+          code=$(wget -qO- --server-response "${base}/healthz" 2>&1 \
+            | awk '/^  HTTP/{print $2; exit}')
+          test "${code}" = "200" || { echo "healthz failed: ${code}"; exit 1; }
+          echo "ok healthz"
+
+          # /readyz: readiness, must return 200 once the model handle is up.
+          code=$(wget -qO- --server-response "${base}/readyz" 2>&1 \
+            | awk '/^  HTTP/{print $2; exit}')
+          test "${code}" = "200" || { echo "readyz failed: ${code}"; exit 1; }
+          echo "ok readyz"
+
+          # /metrics: Prometheus text exposition. We probe the endpoint
+          # twice: first to drive a request through the middleware so the
+          # codeclone_requests_total counter is materialized, then again to
+          # assert the named series shows up. The python_info gauge is
+          # emitted by the prometheus_client default registry on every
+          # scrape and acts as a structural canary.
+          wget -qO- "${base}/metrics" > /dev/null
+          body=$(wget -qO- "${base}/metrics")
+          echo "${body}" | grep -q "^python_info" || {
+            echo "metrics endpoint not exposing prometheus text format"
+            echo "${body}" | head -40
+            exit 1
+          }
+          echo "${body}" | grep -q "codeclone_requests_total" || {
+            echo "metrics missing codeclone_requests_total series"
+            echo "${body}" | head -40
+            exit 1
+          }
+          echo "ok metrics"
+
+          # Unauthenticated /v1/models must be rejected; this confirms the
+          # auth middleware is mounted in front of the API routes.
+          code=$(wget -qO- --server-response "${base}/v1/models" 2>&1 \
+            | awk '/^  HTTP/{print $2; exit}')
+          case "${code}" in
+            401|403) echo "ok auth gate (${code})" ;;
+            *) echo "auth gate broken, got ${code}"; exit 1 ;;
+          esac
+
+          echo "all smoke checks passed"
+      resources: {{- toYaml .Values.tests.resources | nindent 8 }}
+{{- end }}

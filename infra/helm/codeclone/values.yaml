@@ -121,6 +121,26 @@ networkPolicy:
     from: []   # e.g. - namespaceSelector: { matchLabels: { name: gateway } }
   egress: []   # override the default DNS + HTTPS rules if you need stricter
 
+# `helm test` smoke-test hook. Renders a short-lived Pod that probes
+# /healthz, /readyz, /metrics, and the auth gate of the live release.
+# Run with `helm test <release> --logs` after install or upgrade.
+tests:
+  enabled: true
+  # busybox ships wget; ~1MB and runs as non-root cleanly.
+  image: busybox:1.36
+  imagePullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: "10m"
+      memory: "16Mi"
+    limits:
+      cpu: "100m"
+      memory: "64Mi"
+  # Override only if your cluster forbids the default fsGroup/runAsUser for
+  # ephemeral test pods. Falls back to the chart-wide security contexts.
+  podSecurityContext: {}
+  containerSecurityContext: {}
+
 # ServiceMonitor lets a Prometheus Operator install scrape /metrics directly.
 # Requires the prometheus-operator CRDs to be present in the cluster.
 serviceMonitor:

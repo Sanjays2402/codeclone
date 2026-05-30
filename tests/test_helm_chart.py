@@ -87,3 +87,46 @@ def test_hpa_renders_when_enabled() -> None:
     hpa = next(d for d in docs if d["kind"] == "HorizontalPodAutoscaler")
     assert hpa["spec"]["minReplicas"] == 1
     assert hpa["spec"]["maxReplicas"] == 3
+
+
+def test_helm_test_hook_renders_by_default() -> None:
+    """The `helm test` smoke-test pod should ship enabled by default."""
+    docs = _render()
+    test_pods = [
+        d
+        for d in docs
+        if d.get("kind") == "Pod"
+        and d.get("metadata", {}).get("annotations", {}).get("helm.sh/hook") == "test"
+    ]
+    assert len(test_pods) == 1, "expected exactly one helm test hook pod"
+    pod = test_pods[0]
+
+    # Hook lifecycle: pod is recreated on each `helm test` invocation and
+    # auto-removed after success, kept after failure for log access.
+    delete_policy = pod["metadata"]["annotations"]["helm.sh/hook-delete-policy"]
+    assert "before-hook-creation" in delete_policy
+    assert "hook-succeeded" in delete_policy
+
+    spec = pod["spec"]
+    assert spec["restartPolicy"] == "Never"
+    container = spec["containers"][0]
+    assert container["image"].startswith("busybox:")
+    # The probe script must hit all three operator endpoints + the auth gate.
+    script = " ".join(container["args"])
+    assert "/healthz" in script
+    assert "/readyz" in script
+    assert "/metrics" in script
+    assert "/v1/models" in script
+    assert "codeclone_requests_total" in script
+    # Resource ceiling stays tiny so the smoke test cannot starve the release.
+    assert container["resources"]["limits"]["memory"] == "64Mi"
+
+
+def test_helm_test_hook_can_be_disabled() -> None:
+    docs = _render("tests.enabled=false")
+    assert not [
+        d
+        for d in docs
+        if d.get("kind") == "Pod"
+        and d.get("metadata", {}).get("annotations", {}).get("helm.sh/hook") == "test"
+    ], "tests.enabled=false should omit the helm test pod"
