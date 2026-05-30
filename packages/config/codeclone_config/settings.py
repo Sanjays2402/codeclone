@@ -57,6 +57,26 @@ class Settings(BaseSettings):
     otel_service: str = Field(default="codeclone", alias="OTEL_SERVICE_NAME")
     mlflow_uri: str | None = Field(default=None, alias="MLFLOW_TRACKING_URI")
 
+    # ---- Error tracking (Sentry) ----
+    sentry_dsn: str | None = Field(default=None, alias="SENTRY_DSN")
+    sentry_environment: str = Field(default="development", alias="SENTRY_ENVIRONMENT")
+    sentry_release: str | None = Field(default=None, alias="SENTRY_RELEASE")
+    sentry_traces_sample_rate: float = Field(
+        default=0.0, alias="SENTRY_TRACES_SAMPLE_RATE"
+    )
+    sentry_send_default_pii: bool = Field(
+        default=False, alias="SENTRY_SEND_DEFAULT_PII"
+    )
+
+    @field_validator("sentry_traces_sample_rate")
+    @classmethod
+    def _traces_rate_range(cls, v: float) -> float:
+        if not (0.0 <= v <= 1.0):
+            raise ValueError(
+                f"sentry_traces_sample_rate must be within [0.0, 1.0], got {v}"
+            )
+        return v
+
     # ---- Logging ----
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     log_json: bool = Field(default=True, alias="LOG_JSON")

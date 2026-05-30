@@ -39,6 +39,8 @@ from .schemas import (
     ModelList,
     Usage,
 )
+from .sentry import init_sentry
+from .sentry import is_initialized as sentry_initialized
 
 log = get_logger(__name__)
 
@@ -76,6 +78,9 @@ def _render_messages(messages: list[ChatMessage]) -> str:
 def create_app(model_dir: str | Path | None = None, model_name: str | None = None) -> FastAPI:
     settings = get_settings()
     configure_logging(settings.log_level, settings.log_json)
+
+    # Initialize Sentry first so it can capture handle-load failures too.
+    init_sentry(settings)
 
     handle: ModelHandle = load_handle(model_dir, backend=settings.resolve_backend())
     if model_name:
@@ -148,7 +153,11 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
 
     @app.get("/healthz")
     def healthz() -> dict:
-        return {"status": "ok", "model": handle.name}
+        return {
+            "status": "ok",
+            "model": handle.name,
+            "sentry": sentry_initialized(),
+        }
 
     @app.get("/readyz")
     def readyz() -> dict:

@@ -93,3 +93,4 @@ log/
 tmp/
 *.bak
 .scratch/
+uv.lock
