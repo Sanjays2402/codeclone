@@ -103,6 +103,29 @@ class Settings(BaseSettings):
     audit_log_path: Path = Field(
         default=Path("./runs/audit.log"), alias="CODECLONE_AUDIT_LOG_PATH"
     )
+    # Rotation/retention. ``max_bytes=0`` disables rotation (legacy). The
+    # AuditSink itself reads these env vars directly via ``build_sink_from_env``
+    # so they are also validated here for fail-fast startup.
+    audit_log_max_bytes: int = Field(
+        default=50 * 1024 * 1024, alias="CODECLONE_AUDIT_LOG_MAX_BYTES"
+    )
+    audit_log_backup_count: int = Field(
+        default=14, alias="CODECLONE_AUDIT_LOG_BACKUP_COUNT"
+    )
+
+    @field_validator("audit_log_max_bytes")
+    @classmethod
+    def _audit_max_bytes_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"audit_log_max_bytes must be >= 0, got {v}")
+        return v
+
+    @field_validator("audit_log_backup_count")
+    @classmethod
+    def _audit_backup_count_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"audit_log_backup_count must be >= 0, got {v}")
+        return v
 
     @field_validator("backend", mode="before")
     @classmethod

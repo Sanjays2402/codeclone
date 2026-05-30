@@ -23,10 +23,13 @@ Design notes:
 
 from __future__ import annotations
 
+import contextlib
+import gzip
 import hashlib
 import json
 import os
 import queue
+import shutil
 import threading
 import time
 from datetime import datetime, timezone
@@ -68,10 +71,29 @@ def _client_ip(scope: Scope, headers: Headers, trust_forwarded: bool) -> str:
 
 
 class AuditSink:
-    """Background-thread JSONL writer. Process-local, append-only."""
+    """Background-thread JSONL writer. Process-local, append-only.
 
-    def __init__(self, path: Path) -> None:
+    Supports size-based rotation with a gzip-compressed retention window so
+    the audit trail survives long-running pods without filling the volume.
+    Rotation is opt-out: set ``max_bytes=0`` to keep the legacy single-file
+    behavior. ``backup_count`` controls how many rotated ``.gz`` files we
+    keep; older files are pruned in age order on each rotation.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        max_bytes: int = 0,
+        backup_count: int = 0,
+    ) -> None:
+        if max_bytes < 0:
+            raise ValueError("max_bytes must be >= 0")
+        if backup_count < 0:
+            raise ValueError("backup_count must be >= 0")
         self.path = path
+        self.max_bytes = max_bytes
+        self.backup_count = backup_count
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._queue: queue.SimpleQueue[dict[str, Any] | None] = queue.SimpleQueue()
         self._thread = threading.Thread(
@@ -95,15 +117,77 @@ class AuditSink:
     def _run(self) -> None:
         # Line-buffered append. POSIX guarantees atomicity for sub-PIPE_BUF
         # writes; audit lines are well under 4 KiB.
-        with self.path.open("a", encoding="utf-8", buffering=1) as fh:
+        fh = self.path.open("a", encoding="utf-8", buffering=1)
+        try:
             while True:
                 item = self._queue.get()
                 if item is None:
                     return
                 try:
-                    fh.write(json.dumps(item, separators=(",", ":")) + "\n")
+                    line = json.dumps(item, separators=(",", ":")) + "\n"
+                    fh.write(line)
+                    if self.max_bytes and self._should_rotate(fh, len(line)):
+                        fh.close()
+                        self._rotate()
+                        fh = self.path.open("a", encoding="utf-8", buffering=1)
                 except Exception:
                     continue
+        finally:
+            with contextlib.suppress(Exception):
+                fh.close()
+
+    def _should_rotate(self, fh: Any, last_write: int) -> bool:
+        try:
+            return fh.tell() >= self.max_bytes
+        except (OSError, ValueError):
+            # ``tell`` can fail on some file-likes; fall back to stat.
+            try:
+                return self.path.stat().st_size >= self.max_bytes
+            except OSError:
+                return False
+
+    def _rotate(self) -> None:
+        """Move ``audit.log`` to ``audit.log.<ts>.gz`` and prune old backups.
+
+        Uses a UTC timestamp suffix so rotated files sort chronologically and
+        operators can pattern-match by date when shipping to cold storage.
+        """
+        if not self.path.exists():
+            return
+        if self.backup_count == 0:
+            # Rotation requested without retention: just truncate.
+            with contextlib.suppress(OSError):
+                self.path.unlink()
+            return
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        rotated = self.path.with_name(f"{self.path.name}.{ts}.gz")
+        # Avoid collisions when rotations happen within the same second.
+        counter = 0
+        while rotated.exists():
+            counter += 1
+            rotated = self.path.with_name(f"{self.path.name}.{ts}.{counter}.gz")
+        try:
+            with self.path.open("rb") as src, gzip.open(
+                rotated, "wb", compresslevel=6
+            ) as dst:
+                shutil.copyfileobj(src, dst)
+            self.path.unlink()
+        except OSError:
+            return
+        self._prune_backups()
+
+    def _prune_backups(self) -> None:
+        prefix = f"{self.path.name}."
+        backups = sorted(
+            (p for p in self.path.parent.glob(f"{prefix}*.gz") if p.is_file()),
+            key=lambda p: p.stat().st_mtime,
+        )
+        excess = len(backups) - self.backup_count
+        for old in backups[:excess]:
+            try:
+                old.unlink()
+            except OSError:
+                continue
 
 
 class AuditMiddleware:
@@ -299,7 +383,25 @@ class AuditMiddleware:
 
 
 def build_sink_from_env(default_path: Path) -> AuditSink:
-    """Resolve the audit log path from env and return a started sink."""
+    """Resolve the audit log path and rotation policy from env.
+
+    Reads ``CODECLONE_AUDIT_LOG_PATH`` for the destination plus the optional
+    ``CODECLONE_AUDIT_LOG_MAX_BYTES`` and ``CODECLONE_AUDIT_LOG_BACKUP_COUNT``
+    knobs that control gzip rotation. Defaults keep ~50 MiB hot and 14 gzip
+    backups, matching the Helm chart defaults.
+    """
     raw = os.environ.get("CODECLONE_AUDIT_LOG_PATH")
     path = Path(raw) if raw else default_path
-    return AuditSink(path)
+    max_bytes = _coerce_int(os.environ.get("CODECLONE_AUDIT_LOG_MAX_BYTES"), 50 * 1024 * 1024)
+    backup_count = _coerce_int(os.environ.get("CODECLONE_AUDIT_LOG_BACKUP_COUNT"), 14)
+    return AuditSink(path, max_bytes=max_bytes, backup_count=backup_count)
+
+
+def _coerce_int(raw: str | None, default: int) -> int:
+    if raw is None or raw == "":
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value >= 0 else default

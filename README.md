@@ -317,8 +317,14 @@ Writes are buffered through a background thread (`queue.SimpleQueue`) so request
 | --- | --- | --- |
 | `CODECLONE_AUDIT_LOG_ENABLED` | `true` | Master switch. Set false to disable the middleware entirely. |
 | `CODECLONE_AUDIT_LOG_PATH` | `./runs/audit.log` | Output file. Parent directory is created if missing. Ship to a SIEM via Filebeat, Vector, or Promtail tailing this file. |
+| `CODECLONE_AUDIT_LOG_MAX_BYTES` | `52428800` (50 MiB) | Rotate the live file once it crosses this many bytes. `0` disables rotation (legacy single-file behavior). |
+| `CODECLONE_AUDIT_LOG_BACKUP_COUNT` | `14` | Number of gzip-rotated backups to retain. Older files are pruned in age order on each rotation. `0` truncates instead of archiving. |
 
-The file is append-only JSONL, so log rotation should use `copytruncate` (logrotate) or any tail-friendly rotator. Lines are well under 4 KiB and rely on POSIX append atomicity, so concurrent rotators do not interleave bytes within a record.
+Rotated files are gzip-compressed and named `audit.log.<UTC-timestamp>.gz` (for example `audit.log.20260530T180000Z.gz`), so they sort chronologically and are safe to ship to cold storage by date prefix. Rotation runs inline on the audit writer thread so it never blocks the request path, and pruning enforces `CODECLONE_AUDIT_LOG_BACKUP_COUNT` after each rotation so on-disk usage stays bounded by roughly `max_bytes * (backup_count + 1)` before compression and a fraction of that after. Rows are not lost across rotation: every record that was buffered before the cutover lands in the gzip backup, and every record after lands in the fresh hot file.
+
+For stricter retention than the on-pod window allows, mount a PVC (`auditLog.persistence.enabled=true` in the Helm chart) or stream the JSONL out to a SIEM with a daemonset such as Filebeat or Vector before the backup count rolls. The Helm chart mounts an `emptyDir` at `/var/log/codeclone` by default (capped at 2 GiB) so the pod can run with a read-only root filesystem and rotation still has somewhere to write.
+
+The file is append-only JSONL. If you prefer an external rotator instead, set `CODECLONE_AUDIT_LOG_MAX_BYTES=0` and use `logrotate` with `copytruncate`; lines are well under 4 KiB and rely on POSIX append atomicity, so concurrent rotators do not interleave bytes within a record.
 
 **Backup.** Persistent state is on disk: trained adapters in `CODECLONE_ADAPTERS_DIR`, run logs in `CODECLONE_RUNS_DIR`, and the dataset cache in `CODECLONE_CACHE_DIR`. Back these directories up with the usual volume snapshot or `restic` workflow. The serve process itself is stateless beyond the adapter it loads at boot.
 

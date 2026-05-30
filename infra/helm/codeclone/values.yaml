@@ -20,6 +20,15 @@ env:
   CODECLONE_SERVE_PORT: "7461"
   LOG_LEVEL: "INFO"
   LOG_JSON: "1"
+  # Audit log rotation. Keeps the JSONL audit trail bounded on the pod's
+  # ephemeral disk; rotated files are gzip-compressed with a UTC timestamp
+  # suffix. Ship them to a SIEM (Filebeat, Vector, Promtail) before the
+  # retention window closes. Set CODECLONE_AUDIT_LOG_MAX_BYTES="0" to keep
+  # the legacy single-file behavior.
+  CODECLONE_AUDIT_LOG_ENABLED: "true"
+  CODECLONE_AUDIT_LOG_PATH: "/var/log/codeclone/audit.log"
+  CODECLONE_AUDIT_LOG_MAX_BYTES: "52428800"
+  CODECLONE_AUDIT_LOG_BACKUP_COUNT: "14"
 
 # API key is mounted from a secret you create out-of-band:
 #   kubectl create secret generic codeclone-secrets --from-literal=api-key=sk-...
@@ -78,6 +87,17 @@ probes:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# Audit log volume. By default the rotated JSONL trail lives on an emptyDir
+# so the pod can run with a read-only root filesystem and so log growth is
+# bounded by `emptyDirSizeLimit`. Set persistence.enabled=true (and either
+# `existingClaim` or pre-create `<release>-audit`) to keep audit history
+# across pod restarts; ship to a SIEM either way.
+auditLog:
+  emptyDirSizeLimit: "2Gi"
+  persistence:
+    enabled: false
+    existingClaim: ""
 
 autoscaling:
   enabled: false

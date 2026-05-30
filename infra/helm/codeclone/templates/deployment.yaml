@@ -37,6 +37,8 @@ spec:
                   key: api-keys
             {{- end }}
           volumeMounts:
+            - name: audit-log
+              mountPath: /var/log/codeclone
             {{- if .Values.adapters.pvcName }}
             - name: adapters
               mountPath: {{ .Values.adapters.mountPath }}
@@ -47,6 +49,14 @@ spec:
           resources: {{- toYaml .Values.resources | nindent 12 }}
           securityContext: {{- toYaml .Values.containerSecurityContext | nindent 12 }}
       volumes:
+        - name: audit-log
+          {{- if .Values.auditLog.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.auditLog.persistence.existingClaim | default (printf "%s-audit" (include "codeclone.fullname" .)) }}
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.auditLog.emptyDirSizeLimit | quote }}
+          {{- end }}
         {{- if .Values.adapters.pvcName }}
         - name: adapters
           persistentVolumeClaim:
