@@ -1,0 +1,124 @@
+name: security
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly Monday 09:17 UTC. Keeps known-vulnerability surface fresh
+    # even when no code lands in a quiet week.
+    - cron: "17 9 * * 1"
+  workflow_dispatch: {}
+
+# Same opt-in gate as the rest of CI so a fresh fork does not burn minutes.
+env:
+  ENABLE_CI: ${{ vars.ENABLE_CI }}
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  python-deps:
+    name: pip-audit (python deps)
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv + pip-audit
+        run: |
+          pip install --upgrade pip uv pip-audit
+      - name: Resolve runtime deps
+        run: |
+          uv pip install --system .
+      - name: Audit installed environment
+        # Fail on any vuln with a fix available. Unfixed CVEs surface as
+        # warnings (--ignore-vuln list lives in pyproject if we ever pin one).
+        run: |
+          pip-audit --strict --progress-spinner off
+
+  sbom:
+    name: SBOM (CycloneDX)
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install uv + cyclonedx
+        run: |
+          pip install --upgrade pip uv cyclonedx-bom
+      - name: Install runtime deps
+        run: |
+          uv pip install --system .
+      - name: Generate SBOM
+        run: |
+          cyclonedx-py environment --output-format json --output-file sbom.cdx.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: sbom.cdx.json
+          retention-days: 90
+
+  trivy-fs:
+    name: trivy (filesystem + IaC)
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          ignore-unfixed: true
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: sarif
+          output: trivy-fs.sarif
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  trivy-config:
+    name: trivy (Dockerfile + Helm + k8s)
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Trivy config scan
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: infra
+          severity: HIGH,CRITICAL
+          exit-code: "0"   # informational on infra config for now
+          format: sarif
+          output: trivy-config.sarif
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+  gitleaks:
+    name: gitleaks (secret scan)
+    if: ${{ vars.ENABLE_CI == '1' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml

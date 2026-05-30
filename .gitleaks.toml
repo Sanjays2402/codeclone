@@ -1,0 +1,33 @@
+# gitleaks configuration for CodeClone.
+# Inherits the upstream default ruleset and layers project-specific
+# allowlists so example values in `.env.example`, docs, and tests do not
+# create noise. Real secrets in any other path still trip the scanner.
+
+title = "codeclone gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Project allowlist: example values, docs samples, fixtures."
+
+paths = [
+  '''(^|/)\.env\.example$''',
+  '''(^|/)README\.md$''',
+  '''(^|/)CHANGELOG\.md$''',
+  '''(^|/)docs/''',
+  '''(^|/)tests/fixtures/''',
+  '''(^|/)examples/''',
+]
+
+# Documented placeholder tokens that appear in .env.example, docs, and
+# fixture configs. These are not real credentials.
+regexes = [
+  '''ghp_replace_me''',
+  '''sk-codeclone-local''',
+  '''sk-ci-readonly''',
+  '''sk-app''',
+  '''sk-ops''',
+  '''sk-legacy''',
+  '''sk-ci:models:read''',
+]

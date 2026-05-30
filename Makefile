@@ -1,6 +1,6 @@
 # CodeClone makefile. Thin wrappers; the source of truth is the CLI.
 
-.PHONY: help install dev test lint typecheck fmt clean run-serve docker-cpu docker-cuda compose-up helm-lint
+.PHONY: help install dev test lint typecheck fmt clean run-serve docker-cpu docker-cuda compose-up helm-lint security
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?##' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?##"}; {printf "  %-18s %s\n", $$1, $$2}'
@@ -41,3 +41,6 @@ compose-up: ## docker-compose dev stack
 helm-lint: ## Lint the Helm chart
 	helm lint infra/helm/codeclone
 	helm template codeclone infra/helm/codeclone > /dev/null
+
+security: ## Run the local supply-chain security scan (pip-audit, SBOM, trivy, gitleaks)
+	bash scripts/security_scan.sh

@@ -342,6 +342,20 @@ The file is append-only JSONL, so log rotation should use `copytruncate` (logrot
 
 The chart-lint CI job renders the chart twice on every push, once with defaults and once with all four flags on, so a template typo fails CI before it ships. The same matrix is covered by `tests/test_helm_chart.py` which shells out to `helm template` and parses the resulting YAML.
 
+**Supply-chain security.** A dedicated `security` GitHub Actions workflow (`.github/workflows/security.yml`) runs on every push, every PR, and weekly on Monday 09:17 UTC so the known-vulnerability surface stays fresh even in quiet weeks. Five jobs run in parallel:
+
+| Job | Tool | What it catches | Fails build? |
+| --- | --- | --- | --- |
+| `python-deps` | `pip-audit --strict` against the resolved runtime environment | Known CVEs in any installed Python dependency that has a fix available | yes |
+| `sbom` | `cyclonedx-py environment` | Generates `sbom.cdx.json` (CycloneDX 1.5) and uploads it as a 90-day workflow artifact for downstream signing or vendor questionnaires | no |
+| `trivy-fs` | `aquasecurity/trivy-action` filesystem scan, `--ignore-unfixed`, `HIGH,CRITICAL` | Vulnerable files and lockfile entries; SARIF is uploaded to the GitHub Security tab | yes |
+| `trivy-config` | `trivy config` over `infra/` | Misconfigurations in Dockerfile, Helm chart, and k8s manifests; SARIF uploaded, currently informational (`exit-code: 0`) until the baseline is clean | no |
+| `gitleaks` | `gitleaks/gitleaks-action` with `.gitleaks.toml` | Secrets accidentally committed to the working tree or git history. Documented placeholders (`ghp_replace_me`, `sk-codeclone-local`, etc.) are allowlisted by path and regex | yes |
+
+Run the same checks locally with `make security`, which shells out to `scripts/security_scan.sh`. The script treats missing optional tools (`trivy`, `gitleaks`, `cyclonedx-py`) as warnings so a partial install still produces signal; `pip-audit` is the only hard requirement and is one `pip install pip-audit` away. Findings exit non-zero so it slots cleanly into a pre-commit or pre-push hook.
+
+When a finding lands, the SARIF uploads appear under `Security -> Code scanning` in the GitHub UI with file-and-line context; the SBOM artifact lets auditors diff dependency closures between releases without re-resolving locally. Both the workflow shape and the gitleaks allowlist are pinned by `tests/test_security_workflow.py`, so an accidental edit that drops a job or unblocks a placeholder fails pytest before it ships.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
