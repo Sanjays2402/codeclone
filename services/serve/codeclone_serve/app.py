@@ -26,6 +26,7 @@ from .auth import (
     require_scope,
     verify_api_key,  # noqa: F401  (re-exported for back-compat)
 )
+from .data_lifecycle import register as register_data_lifecycle
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .request_id import RequestIdMiddleware
@@ -176,6 +177,11 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         from fastapi import Response
 
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+    # ---- GDPR data lifecycle (export-my-data, delete-my-data) ----
+    # Lets an API key holder exercise GDPR Art. 15/17/20 over the audit log,
+    # which is the only persisted caller-derived data this service keeps.
+    register_data_lifecycle(app)
 
     # ---------------- /v1/models ----------------
 

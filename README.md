@@ -356,6 +356,23 @@ Run the same checks locally with `make security`, which shells out to `scripts/s
 
 When a finding lands, the SARIF uploads appear under `Security -> Code scanning` in the GitHub UI with file-and-line context; the SBOM artifact lets auditors diff dependency closures between releases without re-resolving locally. Both the workflow shape and the gitleaks allowlist are pinned by `tests/test_security_workflow.py`, so an accidental edit that drops a job or unblocks a placeholder fails pytest before it ships.
 
+### GDPR data lifecycle
+
+The serve API persists exactly one class of caller-derived data: the audit log written by `codeclone_serve.audit` (JSONL at `CODECLONE_AUDIT_LOG_PATH`, default `./runs/audit.log`). Each row carries an `actor` field that is a SHA-256 fingerprint (`key:<12 hex>`) of the API key that made the request. The raw key is never persisted.
+
+Two endpoints let an API key holder exercise GDPR Articles 15, 17, and 20 over that data:
+
+- `GET /v1/data/export` streams every audit row tied to the caller's key fingerprint as `application/x-ndjson` with a meta header and summary footer. Use it for Subject Access Requests (Art. 15) and data portability (Art. 20).
+- `DELETE /v1/data/delete` rewrites the audit log without those rows. The rewrite is atomic via `tempfile` + `os.replace` under a process-wide lock, and the audit log itself records the erasure as a `gdpr.erasure` event so the deletion act remains auditable (Art. 17 + Art. 30 record-keeping).
+
+Both endpoints require the `infer` scope. A caller may target their own fingerprint without arguments. A key with the wildcard `*` (admin) scope may also pass `?actor=key:<12hex>` to act on behalf of another caller; non-admin callers receive 403 if they try to do so. Behaviour and access control are pinned by `services/serve/tests/test_data_lifecycle.py`.
+
+Operational notes:
+
+- For on-call: a SAR can be served with `curl -H "Authorization: Bearer $KEY" https://$HOST/v1/data/export -o sar.jsonl`. An erasure request becomes `curl -X DELETE -H "Authorization: Bearer $KEY" https://$HOST/v1/data/delete`.
+- If you shipped the audit log to a downstream SIEM via Filebeat or Vector, propagate the erasure event through the same pipeline and apply the matching delete on the SIEM side; the local rewrite only purges the on-disk JSONL.
+- Disable the entire surface with `CODECLONE_AUDIT_LOG_ENABLED=false`. The endpoints then return 409 because there is nothing to export or erase.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
