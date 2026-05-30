@@ -21,6 +21,7 @@ from prometheus_client import (
 )
 from sse_starlette.sse import EventSourceResponse
 
+from .audit import AuditMiddleware, build_sink_from_env
 from .auth import verify_api_key
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
@@ -97,6 +98,20 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ---- Audit log (who/what/when, persisted JSONL) ----
+    if settings.audit_log_enabled:
+        sink = build_sink_from_env(settings.audit_log_path)
+        app.state.audit_sink = sink
+        app.add_middleware(
+            AuditMiddleware,
+            sink=sink,
+            trust_forwarded=settings.ratelimit_trust_forwarded,
+        )
+
+        @app.on_event("shutdown")
+        def _close_audit_sink() -> None:
+            sink.close()
 
     # ---- Rate limiting (per IP and per API key, token bucket) ----
     if settings.ratelimit_enabled:

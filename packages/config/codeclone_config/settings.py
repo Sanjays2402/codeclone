@@ -93,6 +93,12 @@ class Settings(BaseSettings):
         default=False, alias="CODECLONE_RATELIMIT_TRUST_FORWARDED"
     )
 
+    # ---- Audit log ----
+    audit_log_enabled: bool = Field(default=True, alias="CODECLONE_AUDIT_LOG_ENABLED")
+    audit_log_path: Path = Field(
+        default=Path("./runs/audit.log"), alias="CODECLONE_AUDIT_LOG_PATH"
+    )
+
     @field_validator("backend", mode="before")
     @classmethod
     def _normalize_backend(cls, v: str) -> str:
