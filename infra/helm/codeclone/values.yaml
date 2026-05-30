@@ -29,6 +29,14 @@ env:
   CODECLONE_AUDIT_LOG_PATH: "/var/log/codeclone/audit.log"
   CODECLONE_AUDIT_LOG_MAX_BYTES: "52428800"
   CODECLONE_AUDIT_LOG_BACKUP_COUNT: "14"
+  # CORS is locked down by default. Set CODECLONE_CORS_ALLOW_ORIGINS to a CSV
+  # of trusted origins to let browser apps call the API cross-origin. Empty
+  # value keeps the middleware off entirely.
+  CODECLONE_CORS_ALLOW_ORIGINS: ""
+  CODECLONE_CORS_ALLOW_CREDENTIALS: "false"
+  CODECLONE_CORS_ALLOW_METHODS: "GET,POST,OPTIONS"
+  CODECLONE_CORS_ALLOW_HEADERS: "authorization,content-type,x-request-id"
+  CODECLONE_CORS_MAX_AGE: "600"
 
 # API key is mounted from a secret you create out-of-band:
 #   kubectl create secret generic codeclone-secrets --from-literal=api-key=sk-...

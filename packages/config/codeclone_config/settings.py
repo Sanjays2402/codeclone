@@ -98,6 +98,55 @@ class Settings(BaseSettings):
         default=False, alias="CODECLONE_RATELIMIT_TRUST_FORWARDED"
     )
 
+    # ---- CORS (browser cross-origin policy on the serve API) ----
+    # By default CORS is locked down: no cross-origin browser callers are
+    # allowed. Set CODECLONE_CORS_ALLOW_ORIGINS to a CSV of exact origins
+    # (scheme + host [+ port], no trailing slash), e.g.
+    #   CODECLONE_CORS_ALLOW_ORIGINS=https://app.example.com,https://admin.example.com
+    # The literal value ``*`` opts in to a wildcard and is rejected when
+    # ``CODECLONE_CORS_ALLOW_CREDENTIALS=true`` because browsers will refuse
+    # to send credentials to a wildcard origin (CORS spec).
+    cors_allow_origins: str = Field(default="", alias="CODECLONE_CORS_ALLOW_ORIGINS")
+    cors_allow_credentials: bool = Field(
+        default=False, alias="CODECLONE_CORS_ALLOW_CREDENTIALS"
+    )
+    cors_allow_methods: str = Field(
+        default="GET,POST,OPTIONS", alias="CODECLONE_CORS_ALLOW_METHODS"
+    )
+    cors_allow_headers: str = Field(
+        default="authorization,content-type,x-request-id",
+        alias="CODECLONE_CORS_ALLOW_HEADERS",
+    )
+    cors_max_age: int = Field(default=600, alias="CODECLONE_CORS_MAX_AGE")
+
+    def cors_origins_list(self) -> list[str]:
+        """Parsed, de-duplicated origin list. ``[]`` means CORS is off."""
+        raw = (self.cors_allow_origins or "").strip()
+        if not raw:
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for piece in raw.split(","):
+            origin = piece.strip().rstrip("/")
+            if not origin or origin in seen:
+                continue
+            seen.add(origin)
+            out.append(origin)
+        return out
+
+    def cors_methods_list(self) -> list[str]:
+        return [m.strip().upper() for m in self.cors_allow_methods.split(",") if m.strip()]
+
+    def cors_headers_list(self) -> list[str]:
+        return [h.strip() for h in self.cors_allow_headers.split(",") if h.strip()]
+
+    @field_validator("cors_max_age")
+    @classmethod
+    def _cors_max_age_nonneg(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError(f"cors_max_age must be >= 0, got {v}")
+        return v
+
     # ---- Audit log ----
     audit_log_enabled: bool = Field(default=True, alias="CODECLONE_AUDIT_LOG_ENABLED")
     audit_log_path: Path = Field(
@@ -125,6 +174,26 @@ class Settings(BaseSettings):
     def _audit_backup_count_nonneg(cls, v: int) -> int:
         if v < 0:
             raise ValueError(f"audit_log_backup_count must be >= 0, got {v}")
+        return v
+
+    @field_validator("cors_allow_origins")
+    @classmethod
+    def _cors_origins_shape(cls, v: str) -> str:
+        # Only enforce per-entry shape; emptiness is a valid "off" signal.
+        for piece in (v or "").split(","):
+            origin = piece.strip()
+            if not origin:
+                continue
+            if origin == "*":
+                continue
+            if not (origin.startswith("http://") or origin.startswith("https://")):
+                raise ValueError(
+                    f"cors_allow_origins entries must be http(s):// origins or '*', got {origin!r}"
+                )
+            if origin.endswith("/"):
+                raise ValueError(
+                    f"cors_allow_origins entries must not end with '/', got {origin!r}"
+                )
         return v
 
     @field_validator("backend", mode="before")

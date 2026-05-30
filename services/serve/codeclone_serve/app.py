@@ -99,12 +99,38 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         version="0.1.0",
         description="OpenAI-compatible API for a personally fine-tuned code model.",
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    # CORS is locked down by default. Set CODECLONE_CORS_ALLOW_ORIGINS to a
+    # CSV of trusted origins (or `*` for a wildcard, which forces credentials
+    # off per the CORS spec) to enable cross-origin browser callers. When the
+    # list is empty the middleware is not installed at all, so the API simply
+    # refuses cross-origin preflights.
+    cors_origins = settings.cors_origins_list()
+    if cors_origins:
+        allow_credentials = settings.cors_allow_credentials
+        if "*" in cors_origins and allow_credentials:
+            # Browsers refuse credentials against a wildcard origin; force the
+            # safer combination instead of silently misconfiguring the pod.
+            log.warning(
+                "cors.wildcard_with_credentials_disabled",
+                reason="browsers reject Access-Control-Allow-Credentials with '*'",
+            )
+            allow_credentials = False
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=cors_origins,
+            allow_credentials=allow_credentials,
+            allow_methods=settings.cors_methods_list(),
+            allow_headers=settings.cors_headers_list(),
+            max_age=settings.cors_max_age,
+        )
+        log.info(
+            "cors.enabled",
+            origins=cors_origins,
+            credentials=allow_credentials,
+            methods=settings.cors_methods_list(),
+        )
+    else:
+        log.info("cors.disabled", reason="CODECLONE_CORS_ALLOW_ORIGINS is empty")
 
     # ---- Audit log (who/what/when, persisted JSONL) ----
     if settings.audit_log_enabled:

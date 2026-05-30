@@ -256,6 +256,18 @@ Throttled requests get HTTP `429` with a `Retry-After` header in seconds and a J
 
 **Secrets.** All runtime config is loaded via pydantic-settings from environment then `.env`. The `CODECLONE_API_KEY` is the bearer token enforced by `Authorization: Bearer ...`. Rotate by redeploying with a new value. Never bake secrets into images.
 
+**CORS.** The serve API ships with CORS off. With `CODECLONE_CORS_ALLOW_ORIGINS` empty no `CORSMiddleware` is installed at all, so cross-origin browser preflights get no `Access-Control-Allow-Origin` echo and the API is effectively first-party only. Opt in by setting an explicit allow-list of origins (CSV, exact match, no trailing slash). Settings validation rejects entries that are not `http(s)://...` or the literal `*`, so a typo fails the pod at startup rather than silently widening the policy.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CODECLONE_CORS_ALLOW_ORIGINS` | empty | CSV of trusted origins. Empty disables CORS entirely. `*` enables a wildcard. |
+| `CODECLONE_CORS_ALLOW_CREDENTIALS` | `false` | Allow `Authorization` / cookies on cross-origin requests. Force-disabled when the origin list is `*`, because browsers reject `Access-Control-Allow-Credentials: true` against a wildcard. |
+| `CODECLONE_CORS_ALLOW_METHODS` | `GET,POST,OPTIONS` | HTTP methods reflected in preflight. |
+| `CODECLONE_CORS_ALLOW_HEADERS` | `authorization,content-type,x-request-id` | Request headers reflected in preflight. |
+| `CODECLONE_CORS_MAX_AGE` | `600` | Preflight cache lifetime in seconds. |
+
+The Helm chart exposes the same variables under `env.CODECLONE_CORS_*` in `values.yaml`. A wildcard with credentials is downgraded to credentialless and a `cors.wildcard_with_credentials_disabled` warning is logged, so misconfigurations are observable rather than silently insecure.
+
 **API keys and scopes (RBAC).** The serve API supports two key configurations side by side. The legacy single key in `CODECLONE_API_KEY` is granted the implicit wildcard scope `*` so existing deployments keep working. To split callers by capability, set `CODECLONE_API_KEYS` to a CSV of `key:scopes` entries where scopes are joined with `+`. Known scopes:
 
 | Scope | Routes it unlocks |
