@@ -29,6 +29,7 @@ from .auth import (
 from .data_lifecycle import register as register_data_lifecycle
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
+from .readiness import ReadinessProbe
 from .request_id import RequestIdMiddleware
 from .schemas import (
     ChatCompletionChoice,
@@ -189,18 +190,54 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
 
     # ---------------- ops endpoints ----------------
 
-    @app.get("/healthz")
-    def healthz() -> dict:
+    # Liveness is intentionally cheap and decoupled from the model: a model
+    # load failure must not trigger a kubelet restart loop. Readiness owns
+    # the "is this pod fit to receive traffic" decision.
+    def _handle_probe() -> None:
+        # Exercises tokenizer plumbing without invoking generate(); cheap.
+        handle.token_count("ready")
+
+    readiness = ReadinessProbe(_handle_probe)
+    app.state.readiness = readiness
+
+    @app.on_event("shutdown")
+    def _drain_readiness() -> None:
+        readiness.begin_shutdown()
+
+    def _health_payload() -> dict:
         return {
             "status": "ok",
             "model": handle.name,
             "sentry": sentry_initialized(),
             "tracing": tracing_initialized(),
+            "shutting_down": readiness.is_shutting_down(),
         }
 
+    @app.get("/healthz")
+    def healthz() -> dict:
+        return _health_payload()
+
+    @app.get("/health")
+    def health() -> dict:
+        return _health_payload()
+
+    def _ready_response() -> JSONResponse:
+        result = readiness.check()
+        body = {
+            "status": "ready" if result.ok else "not_ready",
+            "model": handle.name,
+            "reason": result.reason,
+            **result.details,
+        }
+        return JSONResponse(status_code=200 if result.ok else 503, content=body)
+
     @app.get("/readyz")
-    def readyz() -> dict:
-        return {"status": "ready", "model": handle.name}
+    def readyz() -> JSONResponse:
+        return _ready_response()
+
+    @app.get("/ready")
+    def ready() -> JSONResponse:
+        return _ready_response()
 
     @app.get("/metrics")
     def metrics() -> JSONResponse:

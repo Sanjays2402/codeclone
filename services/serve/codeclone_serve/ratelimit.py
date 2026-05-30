@@ -27,7 +27,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 # Paths that must never be rate limited so health probes and Prometheus
 # scrapes are not starved by a misbehaving client.
-EXEMPT_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/metrics"})
+EXEMPT_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/health", "/ready", "/metrics"})
 
 
 @dataclass

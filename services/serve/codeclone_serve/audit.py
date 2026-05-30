@@ -39,7 +39,7 @@ from typing import Any
 from starlette.datastructures import Headers
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-DEFAULT_EXCLUDE = frozenset({"/healthz", "/readyz", "/metrics", "/favicon.ico"})
+DEFAULT_EXCLUDE = frozenset({"/healthz", "/readyz", "/health", "/ready", "/metrics", "/favicon.ico"})
 
 
 def _hash_key(raw: str | None) -> str:
