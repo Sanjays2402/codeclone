@@ -202,15 +202,33 @@ class AuditMiddleware:
 
         t0 = time.perf_counter()
         status_holder: dict[str, int] = {"status": 500}
+        trace_holder: dict[str, str] = {}
 
         async def _send(message: Message) -> None:
             if message["type"] == "http.response.start":
                 status_holder["status"] = int(message.get("status", 500))
+                # Capture the OTel trace context while the request span is
+                # still active. By the time we emit the audit record below the
+                # span may already be ended and the context detached.
+                if not trace_holder:
+                    try:
+                        from .tracing import current_trace_context
+
+                        trace_holder.update(current_trace_context())
+                    except Exception:
+                        pass
             await send(message)
 
         try:
             await self.app(scope, wrapped_receive, _send)
         except Exception:
+            if not trace_holder:
+                try:
+                    from .tracing import current_trace_context
+
+                    trace_holder.update(current_trace_context())
+                except Exception:
+                    pass
             self._emit(
                 req_id=req_id,
                 actor=actor,
@@ -222,6 +240,7 @@ class AuditMiddleware:
                 latency_ms=(time.perf_counter() - t0) * 1000.0,
                 model=model_name,
                 error="unhandled_exception",
+                trace=trace_holder,
             )
             raise
 
@@ -236,6 +255,7 @@ class AuditMiddleware:
             latency_ms=(time.perf_counter() - t0) * 1000.0,
             model=model_name,
             error=None,
+            trace=trace_holder,
         )
 
     def _emit(
@@ -251,6 +271,7 @@ class AuditMiddleware:
         latency_ms: float,
         model: str | None,
         error: str | None,
+        trace: dict[str, str] | None = None,
     ) -> None:
         record: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
@@ -263,6 +284,13 @@ class AuditMiddleware:
             "status": status,
             "latency_ms": round(latency_ms, 2),
         }
+        if trace:
+            tid = trace.get("trace_id")
+            sid = trace.get("span_id")
+            if tid:
+                record["trace_id"] = tid
+            if sid:
+                record["span_id"] = sid
         if model is not None:
             record["model"] = model
         if error is not None:

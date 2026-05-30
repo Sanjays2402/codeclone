@@ -22,8 +22,10 @@ from prometheus_client import (
 from sse_starlette.sse import EventSourceResponse
 
 from .audit import AuditMiddleware, build_sink_from_env
-from .auth import require_scope
-from .auth import verify_api_key  # noqa: F401  (re-exported for back-compat)
+from .auth import (
+    require_scope,
+    verify_api_key,  # noqa: F401  (re-exported for back-compat)
+)
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .request_id import RequestIdMiddleware
@@ -44,6 +46,8 @@ from .schemas import (
 )
 from .sentry import init_sentry
 from .sentry import is_initialized as sentry_initialized
+from .tracing import init_tracing
+from .tracing import is_initialized as tracing_initialized
 
 log = get_logger(__name__)
 
@@ -130,29 +134,11 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             trust_forwarded=settings.ratelimit_trust_forwarded,
         )
 
-    # ---- Observability: optional OTel hookup ----    if settings.otel_endpoint:
-        try:
-            from opentelemetry import trace  # type: ignore
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (  # type: ignore
-                OTLPSpanExporter,
-            )
-            from opentelemetry.instrumentation.fastapi import (  # type: ignore
-                FastAPIInstrumentor,
-            )
-            from opentelemetry.sdk.resources import Resource  # type: ignore
-            from opentelemetry.sdk.trace import TracerProvider  # type: ignore
-            from opentelemetry.sdk.trace.export import BatchSpanProcessor  # type: ignore
-
-            provider = TracerProvider(
-                resource=Resource.create({"service.name": settings.otel_service})
-            )
-            provider.add_span_processor(
-                BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.otel_endpoint))
-            )
-            trace.set_tracer_provider(provider)
-            FastAPIInstrumentor.instrument_app(app)
-        except Exception as e:  # pragma: no cover - optional
-            log.warning("otel.setup_failed", error=str(e))
+    # ---- Observability: OpenTelemetry distributed tracing ----
+    # No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset. When set, this installs
+    # a TracerProvider, instruments FastAPI, and lets the request-id middleware
+    # below bind trace_id/span_id into structlog so every log line correlates.
+    init_tracing(settings, app)
 
     # ---- Request ID must be added LAST so it wraps every other middleware
     # and every downstream layer (audit, rate limit, OTel, route handlers,
@@ -178,6 +164,7 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             "status": "ok",
             "model": handle.name,
             "sentry": sentry_initialized(),
+            "tracing": tracing_initialized(),
         }
 
     @app.get("/readyz")

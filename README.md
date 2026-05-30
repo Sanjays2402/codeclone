@@ -275,7 +275,16 @@ A caller presenting `sk-ci-readonly` can list models but gets `403 missing requi
 
 Key fingerprints (sha256 prefix, never the raw key) appear in the audit log as `actor=key:<12 hex>` so per-key activity is correlatable across rotations. To revoke a single integration, drop its entry from `CODECLONE_API_KEYS` and redeploy; the others keep working. In Kubernetes, set `apiKeys.enabled=true` in the Helm chart and put both `api-key` and `api-keys` into the `codeclone-secrets` secret in one shot.
 
-**Observability.** Structured JSON logs are emitted by `structlog` (`LOG_JSON=1`, `LOG_LEVEL=INFO`). Per-route latency histograms and request counters are exposed at `/metrics` in Prometheus text format. If `OTEL_EXPORTER_OTLP_ENDPOINT` is set, FastAPI is auto-instrumented and spans are shipped via OTLP HTTP.
+**Observability.** Structured JSON logs are emitted by `structlog` (`LOG_JSON=1`, `LOG_LEVEL=INFO`). Per-route latency histograms and request counters are exposed at `/metrics` in Prometheus text format. When OTel tracing is initialized, every log line also carries `trace_id` and `span_id` so logs, traces, and the audit log line up under a single id.
+
+**Distributed tracing.** The serve process wires OpenTelemetry at app startup whenever `OTEL_EXPORTER_OTLP_ENDPOINT` is set. When unset the SDK stays a no-op so local runs and CI never open sockets. When set, a `TracerProvider` is installed, FastAPI is auto-instrumented end to end, W3C `traceparent` headers propagate trace context to downstream services, and spans are exported over OTLP HTTP. `/healthz` reports a `tracing` boolean so deployment smoke tests can confirm the integration is live. The active span's `trace_id` and `span_id` are injected into every structlog event (via a processor that runs at log emit time, so it always reflects the current span) and into the persisted audit log row for the request, so a single `trace_id` stitches a request to its logs, its audit trail, and the trace itself in Tempo or Jaeger. Tunables (env):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | empty | OTLP HTTP collector URL, e.g. `http://otel-collector:4318/v1/traces`. Empty disables tracing. |
+| `OTEL_SERVICE_NAME` | `codeclone` | Service name attribute on every emitted span. |
+
+The OTLP HTTP exporter package (`opentelemetry-exporter-otlp-proto-http`) is declared as a runtime dependency. If for some reason it is unavailable at runtime, the serve process still installs the provider so trace ids flow into logs locally, and logs a one-line `otel.exporter_missing` warning instead of crashing.
 
 **Request correlation.** Every HTTP request gets an `X-Request-ID`. If the caller sends one and it matches `[A-Za-z0-9._:-]{1,128}` it is honored end to end, otherwise the service mints a 16 hex char id. The id is returned on the response, written to the audit log row, attached to `request.state.request_id` for route handlers, and bound into `structlog` contextvars so every log line emitted while the request is in flight carries `request_id=...` automatically. This makes it trivial to grep the audit JSONL and the application log for a single trace: `jq 'select(.request_id=="abc123")' runs/audit.log` and the matching log lines line up one to one.
 
