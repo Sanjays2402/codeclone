@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
+import { ThemeToggle } from "./ThemeToggle";
 
 const items = [
   { href: "/",         label: "overview" },
@@ -39,6 +40,7 @@ export function NavBar() {
             );
           })}
         </nav>
+        <ThemeToggle />
       </div>
     </header>
   );
