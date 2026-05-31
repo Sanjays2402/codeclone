@@ -206,5 +206,163 @@ export function labelForScore(s: number): { label: string; tone: "pos" | "warn" 
   return { label: "distinct", tone: "neg" };
 }
 
+// ---------------------------------------------------------------------------
+// Clone-type classification.
+//
+// Implements the canonical Bellon/Roy/Cordy software-clone taxonomy on top of
+// the lexical signals already computed above. We add a structural pass that
+// replaces identifiers/numbers/strings with type-anonymous placeholders so we
+// can distinguish Type-2 (renamed identifiers, same structure) from Type-3
+// (near-miss with edits) and Type-4 (semantic / dissimilar tokens).
+//
+//   Type-1  Exact clone modulo whitespace and comments
+//   Type-2  Same structure, identifiers and literals renamed
+//   Type-3  Type-2 plus small additions, deletions, or modifications
+//   Type-4  Functionally similar but lexically and structurally different
+// ---------------------------------------------------------------------------
+
+const LINE_COMMENT_RE = /(\/\/[^\n]*|#[^\n]*)/g;
+const BLOCK_COMMENT_RE = /\/\*[\s\S]*?\*\//g;
+const STRING_RE = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+
+const RESERVED = new Set([
+  // JS/TS
+  "function","const","let","var","return","if","else","for","while","do",
+  "switch","case","break","continue","new","this","class","extends","super",
+  "import","from","export","default","async","await","try","catch","finally",
+  "throw","typeof","instanceof","in","of","yield","void","delete","true","false","null","undefined",
+  // Python
+  "def","lambda","pass","yield","with","as","raise","global","nonlocal","None","True","False",
+  "and","or","not","is","elif","print",
+  // common type/keyword spillover
+  "int","float","str","bool","list","dict","set","tuple","public","private","protected","static",
+  "void","struct","enum","interface","type","namespace",
+]);
+
+function stripCommentsAndStrings(src: string): string {
+  return src
+    .replace(BLOCK_COMMENT_RE, " ")
+    .replace(LINE_COMMENT_RE, " ")
+    .replace(STRING_RE, " 'S' ");
+}
+
+/**
+ * Anonymize identifiers and numeric literals so two snippets that differ only
+ * by names produce identical token streams. Keeps reserved keywords and
+ * punctuation intact so the structure is preserved.
+ */
+export function structuralTokens(src: string): string[] {
+  const cleaned = stripCommentsAndStrings(src);
+  const toks = cleaned.match(/[A-Za-z_][A-Za-z0-9_]*|[0-9]+(?:\.[0-9]+)?|[^\sA-Za-z0-9]/g) ?? [];
+  const out: string[] = [];
+  for (const t of toks) {
+    if (/^[0-9]/.test(t)) out.push("N");
+    else if (/^[A-Za-z_]/.test(t)) out.push(RESERVED.has(t) ? t : "ID");
+    else out.push(t);
+  }
+  return out;
+}
+
+function nGramSet(arr: string[], n: number): Set<string> {
+  if (arr.length < n) return new Set(arr.length ? [arr.join(" ")] : []);
+  const out = new Set<string>();
+  for (let i = 0; i <= arr.length - n; i++) out.add(arr.slice(i, i + n).join(" "));
+  return out;
+}
+
+export type CloneType = "type-1" | "type-2" | "type-3" | "type-4" | "none";
+
+export interface CloneClassification {
+  type: CloneType;
+  confidence: number;          // 0..1, how strongly the signals fit the chosen type
+  structuralSim: number;       // Jaccard over 4-grams of anonymized token stream
+  rawTokenSim: number;         // mirror of compareCode.tokenJaccard for context
+  rationale: string[];         // short, human readable reasons
+  label: string;               // display label, e.g. "Type-2 clone (renamed)"
+}
+
+function normalizedExact(a: string, b: string): boolean {
+  // Whitespace + comments + string-literal insensitive byte equality.
+  const norm = (s: string) =>
+    stripCommentsAndStrings(s).replace(/\s+/g, " ").trim();
+  const na = norm(a);
+  const nb = norm(b);
+  return na.length > 0 && na === nb;
+}
+
+export function classifyClone(
+  a: string,
+  b: string,
+  scores: SimilarityScores,
+): CloneClassification {
+  const sa = structuralTokens(a);
+  const sb = structuralTokens(b);
+  const ga = nGramSet(sa, 4);
+  const gb = nGramSet(sb, 4);
+  const structural = jaccard(ga, gb);
+  const rawTok = scores.tokenJaccard;
+  const shingle = scores.shingleJaccard;
+
+  const rationale: string[] = [];
+  let type: CloneType = "none";
+  let confidence = 0;
+  let label = "not a clone";
+
+  // Type-1: exact modulo whitespace/comments/strings.
+  if (normalizedExact(a, b)) {
+    type = "type-1";
+    confidence = 1;
+    label = "Type-1 clone (exact)";
+    rationale.push("Byte-equal after stripping comments, strings, and whitespace.");
+    return { type, confidence, structuralSim: structural, rawTokenSim: rawTok, rationale, label };
+  }
+
+  // Type-2: structural tokens match very closely, raw tokens diverge.
+  if (structural >= 0.85) {
+    type = rawTok >= 0.85 ? "type-1" : "type-2";
+    if (type === "type-1") {
+      label = "Type-1 clone (near-exact)";
+      rationale.push("Both raw and structural token streams match above 0.85.");
+    } else {
+      label = "Type-2 clone (renamed)";
+      rationale.push(`Structural Jaccard ${structural.toFixed(2)} with identifiers anonymized.`);
+      rationale.push(`Raw token Jaccard only ${rawTok.toFixed(2)} suggests identifier or literal renaming.`);
+    }
+    confidence = Math.min(1, structural);
+    return { type, confidence, structuralSim: structural, rawTokenSim: rawTok, rationale, label };
+  }
+
+  // Type-3: structurally similar with edits (additions, deletions, tweaks).
+  if (structural >= 0.5 || (rawTok >= 0.45 && shingle >= 0.45)) {
+    type = "type-3";
+    label = "Type-3 clone (near-miss)";
+    confidence = Math.min(1, Math.max(structural, (rawTok + shingle) / 2));
+    rationale.push(`Structural Jaccard ${structural.toFixed(2)} indicates shared skeleton.`);
+    rationale.push(`Lexical overlap ${rawTok.toFixed(2)} tokens / ${shingle.toFixed(2)} shingles points to edited regions.`);
+    return { type, confidence, structuralSim: structural, rawTokenSim: rawTok, rationale, label };
+  }
+
+  // Type-4: low surface similarity but non-trivial token overlap, possibly
+  // semantic. Flag conservatively. Without execution we cannot prove behavior.
+  if (rawTok >= 0.25 && structural < 0.5 && structural >= 0.15) {
+    type = "type-4";
+    label = "Type-4 candidate (semantic)";
+    confidence = Math.min(1, (rawTok + structural) / 2);
+    rationale.push(`Low structural overlap ${structural.toFixed(2)} but shared vocabulary ${rawTok.toFixed(2)}.`);
+    rationale.push("Possible reimplementation of the same task. Verify with tests or execution traces.");
+    return { type, confidence, structuralSim: structural, rawTokenSim: rawTok, rationale, label };
+  }
+
+  rationale.push(`Structural Jaccard ${structural.toFixed(2)} and token Jaccard ${rawTok.toFixed(2)} are below clone thresholds.`);
+  return {
+    type: "none",
+    confidence: 1 - Math.max(structural, rawTok),
+    structuralSim: structural,
+    rawTokenSim: rawTok,
+    rationale,
+    label: "not a clone",
+  };
+}
+
 // Re-export so callers don't have to also import `_internal` symbols.
 export { jaccard, containment };

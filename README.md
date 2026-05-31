@@ -19,7 +19,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - OpenAI-compatible serve: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, SSE streaming, API key auth, `/healthz`, `/readyz`, `/metrics`
 - Recipe YAMLs (`quick`, `small`, `standard`, `full`, `python_only`, `ts_js_only`, `cuda_overnight`)
 - Next.js 15 dashboard: pairs list with search + lang filter, pair detail with shiki diff viewer, datasets browse, models/adapters registry, eval grid with Recharts sparklines, serve health probe
-- Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, and a line-level alignment heatmap that flags exact and moved blocks
+- Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, a line-level alignment heatmap that flags exact and moved blocks, and an automatic clone-type verdict (Type-1 exact / Type-2 renamed / Type-3 near-miss / Type-4 semantic candidate) with rationale
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack
@@ -96,10 +96,16 @@ Set `CODECLONE_SERVE_URL` if serve is elsewhere.
 
 The dashboard ships a `/compare` page that takes two code snippets, a language
 picker, and reports three real similarity scores (5-gram shingle Jaccard,
-token Jaccard, and containment) plus a side-by-side diff. Three preloaded
-samples (renamed-variable near-duplicate, restyled algorithm, distinct
-functions with shared vocabulary) let a first-time visitor see results in one
-click. The same JSON is available over HTTP:
+token Jaccard, and containment), a side-by-side diff, a line-alignment
+heatmap, and a clone-type classifier that labels the pair as Type-1 (exact
+modulo whitespace and comments), Type-2 (renamed identifiers, same
+structure), Type-3 (near-miss with edits), Type-4 (semantic candidate), or
+none. The classifier compares the raw token Jaccard against a structural
+4-gram Jaccard computed on identifier-anonymized tokens, and surfaces a
+short rationale so the verdict is auditable. Three preloaded samples
+(renamed-variable near-duplicate, restyled algorithm, distinct functions
+with shared vocabulary) let a first-time visitor see results in one click.
+The same JSON is available over HTTP:
 
 ```bash
 curl -s http://localhost:3000/api/compare \

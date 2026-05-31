@@ -42,13 +42,17 @@ const UNRELATED = `def reverse(s):\n    return s[::-1]\n`;
 
 const a = await call(SRC, SRC);
 assert(a.scores.shingleJaccard > 0.99, "identical input scores ~1.0");
+assert(a.clone?.type === "type-1", "identical input is Type-1 clone");
 
 const b = await call(SRC, RENAMED);
 assert(b.scores.shingleJaccard > 0.4, "renamed variants score high");
 assert(b.scores.shingleJaccard < 1.0, "renamed variants are not identical");
+assert(b.clone?.type === "type-2" || b.clone?.type === "type-1", "renamed variants classify as Type-2 (or Type-1 near-exact)");
+assert(b.clone.structuralSim >= 0.85, "renamed variants have high structural similarity");
 
 const c = await call(SRC, UNRELATED);
 assert(c.scores.shingleJaccard < 0.2, "unrelated code scores low");
+assert(c.clone?.type === "none" || c.clone?.type === "type-4", "unrelated code is not a confident clone");
 
 const d = await fetch(`${BASE}/api/compare`, {
   method: "POST",

@@ -1,18 +1,19 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code } from "@phosphor-icons/react/dist/ssr";
+import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
 import { COMPARE_LANGUAGES, COMPARE_SAMPLES } from "../../lib/compare-samples";
-import { labelForScore, type SimilarityScores, type LineAlignment } from "../../lib/similarity";
+import { labelForScore, type SimilarityScores, type LineAlignment, type CloneClassification, type CloneType } from "../../lib/similarity";
 
 interface CompareResponse {
   language: string;
   bytes: { a: number; b: number };
   scores: SimilarityScores;
   alignment: LineAlignment;
+  clone: CloneClassification;
   latency_ms: number;
   method: string;
 }
@@ -200,6 +201,8 @@ export default function ComparePage() {
             <ScoreCell label="containment · min-side" value={result.scores.containment} />
           </div>
 
+          <CloneVerdict clone={result.clone} />
+
           <div className="ruled rounded-md p-4 bg-[var(--color-paper)] flex flex-col gap-3">
             <div className="flex items-center justify-between">
               <div className="eyebrow">overall confidence · primary metric</div>
@@ -235,6 +238,57 @@ export default function ComparePage() {
             <DiffViewer left={a} right={b} leftLabel="snippet A" rightLabel="snippet B" maxHeight={420} />
           </div>
         </section>
+      )}
+    </div>
+  );
+}
+
+function CloneVerdict({ clone }: { clone: CloneClassification }) {
+  const tone: Record<CloneType, "pos" | "warn" | "neutral" | "neg"> = {
+    "type-1": "pos",
+    "type-2": "pos",
+    "type-3": "warn",
+    "type-4": "neutral",
+    "none":   "neg",
+  };
+  const t = tone[clone.type];
+  const toneClass = TONE_CLASS[t];
+  const pct = Math.max(0, Math.min(1, clone.confidence)) * 100;
+  return (
+    <div className="ruled rounded-md p-4 bg-[var(--color-paper)] flex flex-col gap-3">
+      <div className="flex items-start gap-3 flex-wrap">
+        <div className="flex items-center gap-2 min-w-0">
+          <ShieldCheck weight="duotone" size={18} className="text-[var(--color-accent-ink)] shrink-0" />
+          <div className="eyebrow">clone classification · bellon/roy taxonomy</div>
+        </div>
+        <div className="flex-1" />
+        <span className={`mono text-[11px] uppercase tracking-[0.14em] inline-block px-1.5 py-px border rounded-sm ${toneClass}`}>
+          {clone.label}
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <div>
+          <div className="eyebrow mb-1">confidence</div>
+          <div className="mono tnum text-[22px] leading-tight">{clone.confidence.toFixed(2)}</div>
+          <div className="h-1.5 mt-2 rounded-full bg-[var(--color-paper-3)] overflow-hidden">
+            <div className="h-full bg-[var(--color-accent)]" style={{ width: `${pct}%` }} aria-hidden />
+          </div>
+        </div>
+        <div>
+          <div className="eyebrow mb-1">structural jaccard · 4-gram</div>
+          <div className="mono tnum text-[22px] leading-tight">{clone.structuralSim.toFixed(3)}</div>
+          <div className="mono text-[10.5px] text-[var(--color-ink-3)] mt-1">identifiers anonymized</div>
+        </div>
+        <div>
+          <div className="eyebrow mb-1">raw token jaccard</div>
+          <div className="mono tnum text-[22px] leading-tight">{clone.rawTokenSim.toFixed(3)}</div>
+          <div className="mono text-[10.5px] text-[var(--color-ink-3)] mt-1">surface tokens, no anonymization</div>
+        </div>
+      </div>
+      {clone.rationale.length > 0 && (
+        <ul className="flex flex-col gap-1 list-disc pl-5 text-[13px] text-[var(--color-ink-2)]">
+          {clone.rationale.map((r, i) => <li key={i}>{r}</li>)}
+        </ul>
       )}
     </div>
   );
