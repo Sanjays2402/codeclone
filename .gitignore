@@ -96,3 +96,4 @@ tmp/
 *.bak
 .scratch/
 uv.lock
+shares/

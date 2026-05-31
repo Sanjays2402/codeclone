@@ -22,6 +22,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, a line-level alignment heatmap that flags exact and moved blocks, and an automatic clone-type verdict (Type-1 exact / Type-2 renamed / Type-3 near-miss / Type-4 semantic candidate) with rationale
 - One-click `/demo` landing page: three preloaded sample pairs (rename, restyle, distinct) that hit the live `/api/compare` route on mount and render verdict, confidence, latency, scores, and diff in under a second so a first-time visitor sees the model work without typing anything
 - Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
+- Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with OG metadata, copy-link button, and a one-click "open in compare" entry. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
+
+### Try it: share a comparison
+
+```bash
+cd web && npm run dev      # http://localhost:3000/compare
+
+# save a result and get a public link
+curl -s -X POST http://localhost:3000/api/share \
+  -H 'content-type: application/json' \
+  -d '{"a":"function add(a,b){return a+b}","b":"function sum(x,y){return x+y}","language":"javascript"}'
+# -> {"id":"JRe9kkq8kcY3","url":"/r/JRe9kkq8kcY3"}
+
+# fetch it back
+curl -s http://localhost:3000/api/share/JRe9kkq8kcY3 | jq .result.clone.label
+# -> "Type-2 clone (renamed)"
+
+# open the public page in a browser
+open http://localhost:3000/r/JRe9kkq8kcY3
+```
+
+Smoke test: `node web/scripts/test-share.mjs` boots `next dev` against a temp shares dir and round-trips create / read / render / 404 / 400.
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack

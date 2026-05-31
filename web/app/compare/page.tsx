@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck } from "@phosphor-icons/react/dist/ssr";
+import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
@@ -61,6 +61,10 @@ export default function ComparePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CompareResponse | null>(null);
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
 
   const canCompare = a.trim().length > 0 && b.trim().length > 0 && !loading;
 
@@ -79,6 +83,8 @@ export default function ComparePage() {
         setResult(null);
       } else {
         setResult(json as CompareResponse);
+        setShareUrl(null);
+        setShareError(null);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -100,7 +106,42 @@ export default function ComparePage() {
 
   const clear = useCallback(() => {
     setA(""); setB(""); setResult(null); setError(null); setActiveSample(null);
+    setShareUrl(null); setShareError(null);
   }, []);
+
+  const share = useCallback(async () => {
+    setSharing(true);
+    setShareError(null);
+    try {
+      const res = await fetch("/api/share", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ a, b, language }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        setShareError(typeof json.error === "string" ? json.error : `Request failed (${res.status})`);
+      } else {
+        const abs = typeof window !== "undefined"
+          ? `${window.location.origin}${json.url}`
+          : json.url;
+        setShareUrl(abs);
+      }
+    } catch (e) {
+      setShareError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSharing(false);
+    }
+  }, [a, b, language]);
+
+  const copyShare = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch {}
+  }, [shareUrl]);
 
   const charCounts = useMemo(() => ({ a: a.length, b: b.length }), [a, b]);
 
@@ -193,7 +234,51 @@ export default function ComparePage() {
             <span className="mono text-[11px] text-[var(--color-ink-3)]">
               {result.method} · {result.latency_ms.toFixed(2)} ms · {result.bytes.a}/{result.bytes.b} bytes · lang {result.language}
             </span>
+            <div className="flex-1" />
+            <button
+              type="button"
+              onClick={share}
+              disabled={sharing}
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] disabled:opacity-40"
+            >
+              <ShareIcon weight="duotone" size={13} />
+              {sharing ? "creating link…" : shareUrl ? "create new link" : "share result"}
+            </button>
           </div>
+
+          {shareError && (
+            <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
+              share failed: {shareError}
+            </div>
+          )}
+          {shareUrl && (
+            <div className="ruled rounded-md p-3 bg-[var(--color-paper)] flex items-center gap-2 flex-wrap">
+              <span className="eyebrow shrink-0">public link</span>
+              <input
+                readOnly
+                value={shareUrl}
+                onFocus={e => e.currentTarget.select()}
+                className="flex-1 min-w-[200px] mono text-[12px] bg-[var(--color-paper-2)] border border-[var(--color-rule)] rounded-sm px-2 py-1 text-[var(--color-ink)] outline-none"
+                aria-label="shareable link"
+              />
+              <button
+                type="button"
+                onClick={copyShare}
+                className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+              >
+                {copied ? <Check weight="duotone" size={13} /> : <Copy weight="duotone" size={13} />}
+                {copied ? "copied" : "copy"}
+              </button>
+              <a
+                href={shareUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)] hover:opacity-90"
+              >
+                open
+              </a>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <ScoreCell label="shingle jaccard · 5-gram" value={result.scores.shingleJaccard} primary />
