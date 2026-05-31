@@ -140,6 +140,31 @@ export interface WorkspaceRecord {
     enforced: boolean;
     updatedAt: number;
     updatedBy: string;
+    /**
+     * IdP claim name carrying the user's group memberships (e.g. "groups",
+     * "roles"). When present alongside `groupMappings`, the SSO callback
+     * reads this claim from the verified id_token and re-syncs the
+     * member's workspace role from the highest-ranked matching mapping.
+     * Empty / unset disables group sync; the member's existing role is
+     * left alone.
+     */
+    groupClaim?: string;
+    /**
+     * Ordered list of (IdP group -> codeclone role) mappings. Matched
+     * case-sensitively against any string in the configured groupClaim.
+     * When a user matches several, the highest-ranked role wins
+     * (owner > editor > viewer). Sole-owner safety is preserved at the
+     * setMemberRole layer, so a demotion to editor that would remove the
+     * last owner is rejected and audited.
+     */
+    groupMappings?: Array<{ group: string; role: Role }>;
+    /**
+     * When set, surfaces who/when the group-mapping policy changed last
+     * so the audit reviewer can pin policy churn separate from issuer
+     * churn.
+     */
+    groupsUpdatedAt?: number;
+    groupsUpdatedBy?: string;
   } | null;
   /**
    * Optional session policy enforced on every authenticated request made by
@@ -602,6 +627,93 @@ export async function setSsoConfig(
   ws.sso = cfg ?? null;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+/**
+ * Bounds for SSO group mappings. The provider-side group name has to
+ * fit in a reasonable string and we cap the table size so a typo'd
+ * policy can't blow up the workspace doc.
+ */
+export const SSO_GROUP_MAPPINGS_MAX = 64;
+export const SSO_GROUP_NAME_MAX = 256;
+export const SSO_GROUP_CLAIM_MAX = 64;
+
+/**
+ * Sanitize and persist the SSO group-sync policy on an existing SSO
+ * config. Returns the updated workspace record. Throws `sso_not_configured`
+ * when the workspace has no OIDC config yet (we don't accept group rules
+ * without an issuer to apply them to). Caller is expected to enforce RBAC.
+ */
+export async function setSsoGroupMappings(
+  ws: WorkspaceRecord,
+  input: {
+    groupClaim: string | null | undefined;
+    groupMappings: Array<{ group: unknown; role: unknown }> | null | undefined;
+    actorId: string;
+  },
+): Promise<WorkspaceRecord> {
+  if (!ws.sso) throw new Error("sso_not_configured");
+  const claimRaw = typeof input.groupClaim === "string" ? input.groupClaim.trim() : "";
+  const claim = claimRaw.slice(0, SSO_GROUP_CLAIM_MAX);
+  const mappingsIn = Array.isArray(input.groupMappings) ? input.groupMappings : [];
+  const seen = new Set<string>();
+  const mappings: Array<{ group: string; role: Role }> = [];
+  for (const row of mappingsIn) {
+    if (!row || typeof row !== "object") continue;
+    const g = typeof row.group === "string" ? row.group.trim() : "";
+    const r = row.role;
+    if (!g || g.length > SSO_GROUP_NAME_MAX) continue;
+    if (r !== "owner" && r !== "editor" && r !== "viewer") continue;
+    const key = g; // group names are case-sensitive (matches IdP semantics)
+    if (seen.has(key)) continue;
+    seen.add(key);
+    mappings.push({ group: g, role: r as Role });
+    if (mappings.length >= SSO_GROUP_MAPPINGS_MAX) break;
+  }
+  ws.sso = {
+    ...ws.sso,
+    groupClaim: claim || undefined,
+    groupMappings: mappings.length > 0 ? mappings : undefined,
+    groupsUpdatedAt: Date.now(),
+    groupsUpdatedBy: input.actorId,
+  };
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Decide the role a member should hold after an SSO sign-in, given the
+ * raw value of the configured groupClaim from the verified id_token.
+ *
+ * Returns `null` when no sync should happen (no mappings, no claim,
+ * claim value isn't a string-or-array of strings, or no match). The
+ * returned role is the highest-ranked matching mapping; ties resolved
+ * by mapping order.
+ */
+export function resolveRoleFromSsoGroups(
+  cfg: NonNullable<WorkspaceRecord["sso"]>,
+  claimValue: unknown,
+): Role | null {
+  const claim = cfg.groupClaim;
+  const mappings = cfg.groupMappings;
+  if (!claim || !mappings || mappings.length === 0) return null;
+  let userGroups: string[];
+  if (Array.isArray(claimValue)) {
+    userGroups = claimValue.filter((x): x is string => typeof x === "string");
+  } else if (typeof claimValue === "string") {
+    // Some IdPs ship a space-separated string (OAuth-style scope claim).
+    userGroups = claimValue.split(/\s+/).filter(Boolean);
+  } else {
+    return null;
+  }
+  if (userGroups.length === 0) return null;
+  const userSet = new Set(userGroups);
+  let best: Role | null = null;
+  for (const m of mappings) {
+    if (!userSet.has(m.group)) continue;
+    if (best === null || ROLE_RANK[m.role] > ROLE_RANK[best]) best = m.role;
+  }
+  return best;
 }
 
 // Bounds for workspace audit retention. 0 means "keep forever / no

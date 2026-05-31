@@ -106,6 +106,12 @@ export function publicSsoConfig(ws: WorkspaceRecord) {
     enforced: ws.sso.enforced,
     updatedAt: ws.sso.updatedAt,
     updatedBy: ws.sso.updatedBy,
+    groupClaim: ws.sso.groupClaim ?? "",
+    groupMappings: Array.isArray(ws.sso.groupMappings)
+      ? ws.sso.groupMappings.map((m) => ({ group: m.group, role: m.role }))
+      : [],
+    groupsUpdatedAt: ws.sso.groupsUpdatedAt ?? null,
+    groupsUpdatedBy: ws.sso.groupsUpdatedBy ?? null,
   };
 }
 

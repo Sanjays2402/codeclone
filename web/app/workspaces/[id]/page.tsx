@@ -31,6 +31,7 @@ import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
 import { SupportAccessEditor } from "../../../components/SupportAccessEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
+import { SsoGroupMappingEditor } from "../../../components/SsoGroupMappingEditor";
 import { ScimEditor } from "../../../components/ScimEditor";
 import { PlanEditor } from "../../../components/PlanEditor";
 import { WorkspaceDataControls } from "../../../components/WorkspaceDataControls";
@@ -472,6 +473,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SsoEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <SsoGroupMappingEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

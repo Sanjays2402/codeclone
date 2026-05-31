@@ -10,6 +10,30 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- SSO group to role mapping. Workspace owners can now pin an id_token claim name (e.g. `groups`, `roles`) and a table of IdP group to codeclone role rules on top of the existing OIDC config, so the user's workspace role is re-synced from their IdP on every SSO sign-in. The policy is sanitized and persisted by `setSsoGroupMappings` (web/lib/workspaces.ts): blank groups, unknown roles, overlong names, and duplicates are dropped, and the table is capped at `SSO_GROUP_MAPPINGS_MAX` so a typo can't blow up the workspace doc. The role decision lives in `resolveRoleFromSsoGroups`, which accepts both array claims (`["okta-admins", "okta-eng"]`) and OAuth-style space-separated strings, ignores everything else, and picks the highest-ranked matching role (`owner > editor > viewer`). The SSO callback (`/api/auth/sso/[workspaceId]/callback`) reloads the workspace after auto-join, calls the resolver, and only writes when the desired role differs from the current one; the change goes through `setMemberRole` so the sole-owner safeguard still rejects a demotion that would orphan a tenant. Every flip writes a `workspace.role_synced_from_sso` audit row with a before/after diff and the source claim, and rejected attempts (e.g. only-owner) write the same action with `status: "denied"` so a SOC2 reviewer can reconstruct exactly which IdP group ever flipped a role. The owner-only editor at `/workspaces/<id>` adds the claim field plus the mapping table behind RBAC, the dashboard IP allowlist, and the rest of the workspace surface; non-owners see a read-only view. Endpoints: `GET/PUT/DELETE /api/workspaces/:id/sso/groups`. Five regression tests in `web/tests/workspaces-sso-groups.test.ts` pin the contract (refusal without an SSO config, sanitization of bad mappings and the size cap, resolver coverage for array/string/miss/ranked-tie inputs, end-to-end role update with sole-owner protection, and cross-tenant isolation across two unrelated workspaces). Covers the standard procurement ask (SOC 2 CC6.3, NIST 800-53 AC-2(7)): "the application supports role provisioning from the corporate identity provider."
+
+### Try it: map Okta groups to workspace roles
+
+```sh
+cd web && npm run dev   # http://localhost:3000
+
+# Owner sets the claim + mappings (SSO must already be configured on the workspace).
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/sso/groups \
+  -H 'cookie: cc_session=...' \
+  -H 'content-type: application/json' \
+  -d '{"groupClaim":"groups","groupMappings":[
+        {"group":"okta-admins","role":"owner"},
+        {"group":"okta-eng","role":"editor"},
+        {"group":"okta-readonly","role":"viewer"}]}'
+
+# Members can read the policy (canEdit=false for non-owners).
+curl -s http://localhost:3000/api/workspaces/$WS_ID/sso/groups \
+  -H 'cookie: cc_session=...' | jq '.sso.groupMappings'
+
+# Sign in via SSO and watch /audit for workspace.role_synced_from_sso rows
+# carrying the before/after role and the source claim.
+```
+
 - Concurrent session cap per member. Workspace owners now set a maximum number of simultaneously active server-side sessions any one member may hold (1 to 20, or 0 for no cap), enforced on every sign-in path. The cap lives on the existing `sessionPolicy` record alongside `maxLifetimeSec` and `idleTimeoutSec`, sanitized server-side, persisted by `setSessionPolicy`, and surfaced read-only via `effectiveSessionPolicyForUser` which picks the strictest non-zero cap across only the workspaces the user is an active member of. Cross-tenant isolation is structural: sessions are stored per userId, so a workspace cap can never reach into a non-member's sessions. Enforcement runs in `enforceConcurrentSessionCap` (web/lib/sessions.ts), which is called from both `/api/auth/verify` (magic link) and `/api/auth/sso/[workspaceId]/callback` (OIDC) immediately after `createSession`. When the cap is exceeded, the oldest sessions are revoked first (ordered by `createdAt`, jti as tie-breaker), the just-issued session is preserved by jti, and every eviction writes a `session.evicted_for_cap` audit row with the cap, source workspace, evicted jti, original IP, and login channel (`magic_link` or `sso`) so a SOC2 reviewer can reconstruct exactly who was forced off. The session-policy editor at `/workspaces/<id>` exposes a third field with a clear "oldest session is revoked on a new sign-in" hint and shows the effective cap below the inputs. Four regression tests in `web/tests/workspaces-session-cap.test.ts` pin the contract (sanitize bounds and zero default, persist and clear on all-zero, strictest-cap selection with cross-tenant isolation between two unrelated workspace owners, and end-to-end eviction that revokes the oldest two of four sessions while leaving another user's session untouched). Covers the standard procurement ask (SOC 2 CC6.1, NIST 800-53 AC-10): "the number of concurrent sessions for a user account is limited."
 
 ### Try it: cap members at one active session

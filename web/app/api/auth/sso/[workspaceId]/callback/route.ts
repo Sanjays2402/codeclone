@@ -36,6 +36,9 @@ import { tryRecordAudit } from "../../../../../../lib/audit";
 import {
   applyAutoJoinForUser,
   effectiveSessionPolicyForUser,
+  getActiveMember,
+  setMemberRole,
+  resolveRoleFromSsoGroups,
 } from "../../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -212,5 +215,52 @@ export async function GET(req: Request, ctx: { params: Promise<{ workspaceId: st
       });
     }
   } catch { /* never block sign-in on auto-join */ }
+  // SSO group -> codeclone role sync. Read the configured groupClaim from
+  // the verified id_token, pick the highest-ranked matching mapping, and
+  // update the member's role if it changed. We reload the workspace so
+  // any membership the auto-join just produced is visible. Each role
+  // change writes a before/after audit row tagged `workspace.role_synced_from_sso`
+  // so the audit reviewer can trace exactly which IdP group flipped a role.
+  try {
+    if (ws.sso && ws.sso.groupClaim && Array.isArray(ws.sso.groupMappings) && ws.sso.groupMappings.length > 0) {
+      const claimValue = (id as Record<string, unknown>)[ws.sso.groupClaim];
+      const desired = resolveRoleFromSsoGroups(ws.sso, claimValue);
+      const fresh = await getWorkspaceForSso(ws.id);
+      if (desired && fresh) {
+        const m = getActiveMember(fresh, user.id);
+        if (m && m.role !== desired) {
+          const before = m.role;
+          try {
+            await setMemberRole(fresh, user.id, desired);
+            await tryRecordAudit(req, {
+              action: "workspace.role_synced_from_sso",
+              actorId: user.id,
+              actorEmail: user.email,
+              workspaceId: fresh.id,
+              target: { type: "member", id: user.id, label: user.email },
+              diff: { before: { role: before }, after: { role: desired } },
+              meta: { via: "sso", claim: ws.sso.groupClaim },
+            });
+          } catch (e) {
+            // Sole-owner demotions etc. are surfaced as audit, never block sign-in.
+            await tryRecordAudit(req, {
+              action: "workspace.role_synced_from_sso",
+              actorId: user.id,
+              actorEmail: user.email,
+              workspaceId: fresh.id,
+              target: { type: "member", id: user.id, label: user.email },
+              status: "denied",
+              meta: {
+                via: "sso",
+                claim: ws.sso.groupClaim,
+                attemptedRole: desired,
+                reason: e instanceof Error ? e.message : "role_sync_failed",
+              },
+            });
+          }
+        }
+      }
+    }
+  } catch { /* never block sign-in on group sync */ }
   return res;
 }
