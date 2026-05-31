@@ -10,6 +10,33 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Brute-force protection on the sign-in endpoint with per-email and per-IP fixed-window counters. Magic link issuance at `POST /api/auth/request` evaluates both scopes before doing any work, returns a structured 429 with `Retry-After` and `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `X-RateLimit-Policy` headers when either ceiling is exceeded, and records `auth.magic_link_throttled_email` or `auth.magic_link_throttled_ip` audit entries (which flow through the same SIEM webhook pipeline as every other security event). Tripping the limit promotes the source to a lockout for the remainder of the window so an attacker cannot enumerate accounts or bomb a user's inbox. Defaults are 5 attempts per email and 20 per IP in 15 minutes, all overridable via `CODECLONE_AUTH_THROTTLE_EMAIL_MAX`, `CODECLONE_AUTH_THROTTLE_IP_MAX`, `CODECLONE_AUTH_THROTTLE_WINDOW_SEC`, and `CODECLONE_AUTH_THROTTLE_LOCKOUT_SEC`; setting any maximum to 0 disables that scope. Workspace owners get a console at `/settings/security/lockouts` that shows active blocks as opaque hashes (so the UI itself never leaks raw emails or IPs) with countdowns until they clear, and `GET /api/security/lockouts` returns the same data for automation. Cross-scope independence, lockout semantics, header shape, and active-lockout enumeration are pinned by `web/tests/auth-throttle.test.ts`.
+
+### Try it: trip and inspect a sign-in lockout
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# 1. Hammer the magic link endpoint past the email ceiling (default 5).
+for i in $(seq 1 7); do
+  curl -s -o /dev/null -w "%{http_code} %header{Retry-After}\n" \
+    -X POST http://localhost:3000/api/auth/request \
+    -H 'content-type: application/json' \
+    -d '{"email":"victim@acme.com"}'
+done
+# Expect: 200, 200, 200, 200, 200, 429 <seconds>, 429 <seconds>
+
+# 2. Sign in as a workspace owner, then inspect the lockouts API.
+curl -s http://localhost:3000/api/security/lockouts -b "$COOKIE" | jq
+#   {
+#     "config": { "emailMax": 5, "ipMax": 20, "windowSec": 900, "lockoutSec": 900 },
+#     "lockouts": [ { "scope": "email", "hash": "<sha256-prefix>",
+#                    "count": 6, "lockedUntil": 1717197300000 } ]
+#   }
+
+# 3. Or open http://localhost:3000/settings/security/lockouts for the UI.
+```
+
 - Stream the audit log to your SIEM in real time via `audit.recorded` webhooks. Workspace owners register an HTTPS endpoint under `/webhooks`, tick the `audit.recorded` event, and every audit entry written for that workspace is fanned out as a signed delivery (HMAC-SHA256 over `t.{body}` in `X-CodeClone-Signature`, plus `X-CodeClone-Hash` for secret pinning, with three retries on failure and the existing SSRF guardrails on the target URL). The forwarded payload includes `id`, `seq`, `hash`, `prevHash`, `action`, `status`, `actorId`, `actorEmail`, `workspaceId`, `target`, `ip`, and `requestId` so the receiving Splunk/Datadog/S3 sink can re-verify the tamper-evident chain end to end; `diff` and `meta` are omitted to keep SIEM volume bounded and are still fetchable via `GET /api/audit?id=...`. Audit entries with no workspaceId (anonymous sign-in attempts and similar) are never forwarded, and entries for workspace A never reach a webhook registered in workspace B. Forwarding is fire-and-forget so an unhealthy SIEM never blocks an audit write, and a downstream outage cannot fail an underlying mutation. Set `CODECLONE_AUDIT_FORWARD=0` for air-gapped installs. Cross-tenant isolation, payload shape, and the no-workspace skip rule are pinned by `web/tests/audit-webhook-forward.test.ts`.
 
 ### Try it: stream audit events to a SIEM

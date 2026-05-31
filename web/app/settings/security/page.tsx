@@ -389,6 +389,21 @@ export default function MfaSettingsPage() {
           </form>
         </section>
       )}
+
+      <section className="mt-10 rounded-lg border border-zinc-200 bg-white p-6">
+        <H2>Sign-in lockouts</H2>
+        <p className="mt-2 text-sm text-zinc-600">
+          Active brute-force protections on the magic link endpoint.
+          Workspace owners can review who is currently throttled.
+        </p>
+        <a
+          href="/settings/security/lockouts"
+          className="mt-3 inline-flex items-center gap-2 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+        >
+          <ShieldCheck weight="duotone" className="size-4" />
+          Open lockout console
+        </a>
+      </section>
     </main>
   );
 }
