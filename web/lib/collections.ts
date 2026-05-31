@@ -231,23 +231,56 @@ export async function removeItem(
   return rec;
 }
 
+export type CollectionSortKey =
+  | "updated"
+  | "created"
+  | "title"
+  | "count";
+export type CollectionSortDir = "asc" | "desc";
+
+const VALID_SORT_KEYS: CollectionSortKey[] = [
+  "updated",
+  "created",
+  "title",
+  "count",
+];
+
+export function parseSortKey(v: unknown): CollectionSortKey {
+  return typeof v === "string" && (VALID_SORT_KEYS as string[]).includes(v)
+    ? (v as CollectionSortKey)
+    : "updated";
+}
+
+export function parseSortDir(v: unknown): CollectionSortDir {
+  return v === "asc" ? "asc" : "desc";
+}
+
 export async function listCollections(opts: {
   limit?: number;
   offset?: number;
+  q?: string;
+  sort?: CollectionSortKey;
+  dir?: CollectionSortDir;
 } = {}): Promise<{
   items: CollectionSummary[];
   total: number;
   offset: number;
   limit: number;
+  q: string;
+  sort: CollectionSortKey;
+  dir: CollectionSortDir;
 }> {
   const limit = Math.max(1, Math.min(100, opts.limit ?? 50));
   const offset = Math.max(0, opts.offset ?? 0);
+  const q = (opts.q ?? "").trim().toLowerCase().slice(0, 200);
+  const sort = parseSortKey(opts.sort);
+  const dir = parseSortDir(opts.dir);
   await ensureDir();
   let names: string[] = [];
   try {
     names = await fs.readdir(COLLECTIONS_DIR);
   } catch {
-    return { items: [], total: 0, offset, limit };
+    return { items: [], total: 0, offset, limit, q, sort, dir };
   }
   const records: CollectionRecord[] = [];
   for (const name of names) {
@@ -256,8 +289,34 @@ export async function listCollections(opts: {
     const rec = await loadCollection(id);
     if (rec) records.push(rec);
   }
-  records.sort((a, b) => b.updatedAt - a.updatedAt);
-  const slice = records.slice(offset, offset + limit);
+  const filtered = q
+    ? records.filter((r) => {
+        const hay = `${r.title} ${r.description ?? ""}`.toLowerCase();
+        return hay.includes(q);
+      })
+    : records;
+  const factor = dir === "asc" ? 1 : -1;
+  filtered.sort((a, b) => {
+    let cmp = 0;
+    switch (sort) {
+      case "created":
+        cmp = a.createdAt - b.createdAt;
+        break;
+      case "title":
+        cmp = a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+        break;
+      case "count":
+        cmp = a.shareIds.length - b.shareIds.length;
+        break;
+      case "updated":
+      default:
+        cmp = a.updatedAt - b.updatedAt;
+        break;
+    }
+    if (cmp === 0) cmp = a.updatedAt - b.updatedAt;
+    return cmp * factor;
+  });
+  const slice = filtered.slice(offset, offset + limit);
   return {
     items: slice.map((r) => ({
       id: r.id,
@@ -267,9 +326,12 @@ export async function listCollections(opts: {
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
     })),
-    total: records.length,
+    total: filtered.length,
     offset,
     limit,
+    q,
+    sort,
+    dir,
   };
 }
 

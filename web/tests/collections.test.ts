@@ -138,3 +138,52 @@ test("collections: reject obviously invalid ids", () => {
   assert.equal(isCollectionId("!!!!!!!!!"), false);
   assert.equal(isCollectionId("aZ09_-aaaa"), true);
 });
+
+test("collections: list supports search by title and description", async () => {
+  await createCollection({ title: "Alpha refactor", description: "duplicates" });
+  await createCollection({ title: "Beta sweep", description: "needles in haystack" });
+  await createCollection({ title: "Gamma audit" });
+
+  const onlyAlpha = await listCollections({ q: "alpha", limit: 100 });
+  assert.ok(onlyAlpha.items.every((c) => /alpha/i.test(c.title)));
+  assert.ok(onlyAlpha.items.length >= 1);
+
+  const haystackHit = await listCollections({ q: "haystack", limit: 100 });
+  assert.ok(haystackHit.items.some((c) => c.title === "Beta sweep"));
+
+  const noHit = await listCollections({ q: "zzzznomatchzzzz", limit: 100 });
+  assert.equal(noHit.total, 0);
+  assert.equal(noHit.items.length, 0);
+});
+
+test("collections: list supports sort by title and count", async () => {
+  const titleAsc = await listCollections({ sort: "title", dir: "asc", limit: 100 });
+  const titles = titleAsc.items.map((c) => c.title.toLowerCase());
+  const sorted = [...titles].sort();
+  assert.deepEqual(titles, sorted);
+
+  const titleDesc = await listCollections({ sort: "title", dir: "desc", limit: 100 });
+  const titlesDesc = titleDesc.items.map((c) => c.title.toLowerCase());
+  const sortedDesc = [...titlesDesc].sort().reverse();
+  assert.deepEqual(titlesDesc, sortedDesc);
+
+  const countDesc = await listCollections({ sort: "count", dir: "desc", limit: 100 });
+  for (let i = 1; i < countDesc.items.length; i++) {
+    assert.ok(countDesc.items[i - 1].count >= countDesc.items[i].count);
+  }
+});
+
+test("collections: list paginates and returns echoed query state", async () => {
+  const p1 = await listCollections({ limit: 2, offset: 0 });
+  assert.equal(p1.limit, 2);
+  assert.equal(p1.offset, 0);
+  assert.equal(p1.sort, "updated");
+  assert.equal(p1.dir, "desc");
+  assert.equal(p1.q, "");
+  if (p1.total > 2) {
+    assert.equal(p1.items.length, 2);
+    const p2 = await listCollections({ limit: 2, offset: 2 });
+    const ids1 = new Set(p1.items.map((c) => c.id));
+    for (const it of p2.items) assert.ok(!ids1.has(it.id));
+  }
+});

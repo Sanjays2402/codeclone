@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import {
   createCollection,
   listCollections,
+  parseSortKey,
+  parseSortDir,
 } from "../../../lib/collections";
 
 export const runtime = "nodejs";
@@ -9,11 +11,17 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const limit = Number.parseInt(url.searchParams.get("limit") ?? "50", 10);
+  const limit = Number.parseInt(url.searchParams.get("limit") ?? "20", 10);
   const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10);
+  const q = url.searchParams.get("q") ?? "";
+  const sort = parseSortKey(url.searchParams.get("sort"));
+  const dir = parseSortDir(url.searchParams.get("dir"));
   const page = await listCollections({
-    limit: Number.isFinite(limit) ? limit : 50,
+    limit: Number.isFinite(limit) ? limit : 20,
     offset: Number.isFinite(offset) ? offset : 0,
+    q,
+    sort,
+    dir,
   });
   return NextResponse.json(page);
 }
