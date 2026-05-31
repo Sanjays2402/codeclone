@@ -10,6 +10,25 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Periodic access reviews. Every workspace owner can open a SOC 2 CC6.3 / ISO 27001 A.9.2.5 attestation cycle: `POST /api/workspaces/<id>/access-reviews` snapshots the current active membership (support grants excluded because they already auto-expire) into a sealed review record, `POST .../decisions` records keep or revoke per member with an optional 280-char note, and `POST .../complete` seals the review and suspends only the members marked revoke through the existing `suspendMember` machinery (so session revocation, key disablement, and audit chain entries flow exactly as they would from the members route). Only one review per workspace may be in-flight to keep the audit narrative unambiguous, complete refuses while any decision is still pending, and the sole-owner safety check still applies (a revoke that would leave the workspace owner-less throws `only_owner`, leaves the owner active, and keeps the review open so the actor can retract). Reviews live in a per-workspace directory (`$CODECLONE_WORKSPACES_DIR/_access_reviews/<workspaceId>/<reviewId>.json`) and `getReview` reads only from that directory, so a `reviewId` leaked from workspace A cannot be loaded or mutated through workspace B's routes even if a caller forgets the membership gate; every workspace route also runs through `enforceWorkspaceAllowlistForSession`, owner-gates the writes, and emits `workspace.access_review_open|decide|complete|cancel` audit entries (with explicit `denied` rows for owner-required refusals) so the workspace produces a defensible "who reviewed access, when, and what they decided" artifact for a procurement packet. The workspace page surfaces an Access reviews card with an open / decide / complete flow and a history of sealed reviews. Four regression tests in `web/tests/access-reviews.test.ts` cover the full lifecycle (snapshot, decide, complete suspends only revoked, second open conflicts), pending-guard on complete, sole-owner safety (review stays open, owner stays active), and cross-tenant isolation (workspace B sees zero reviews from A, `getReview(b, aReviewId)` returns null, and `decide` against the wrong workspace cannot mutate A's record).
+
+### Try it: complete a quarterly access review and watch the revoked member get suspended
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+# As workspace owner:
+curl -s -b cc_session=... -H 'content-type: application/json' \
+  -X POST http://localhost:3000/api/workspaces/<ws_id>/access-reviews \
+  -d '{"title":"Q1 access review"}'
+# Mark decisions (keep/revoke per userId):
+curl -s -b cc_session=... -H 'content-type: application/json' \
+  -X POST http://localhost:3000/api/workspaces/<ws_id>/access-reviews/<rv_id>/decisions \
+  -d '{"decisions":[{"userId":"u_owner...","decision":"keep"},{"userId":"u_offboarded...","decision":"revoke","note":"left the company"}]}'
+# Seal and apply revokes:
+curl -s -b cc_session=... -X POST http://localhost:3000/api/workspaces/<ws_id>/access-reviews/<rv_id>/complete
+# The revoked member is now suspended; the sealed review remains visible as an audit artifact.
+```
+
 - Recent source IPs per API key. Every successful call through `/v1/compare`, `/v1/batch`, `/v1/shares`, and `/v1/shares/[id]` now records the caller's source IP against the key in a bounded ring buffer (most-recent five distinct IPs, each with first-seen, last-seen, and call count). The `/api-keys` settings page exposes a per-key disclosure that lists the IPs the key has been used from, so an owner who suspects a leak can immediately see whether the key is being exercised from an unexpected network without having to scrape the audit log. Storage is capped per key (no unbounded growth), the buffer is updated alongside the existing `usageCount` and `lastUsedAt` fields, and the new data is only ever returned to the key's owner via the existing GET `/api/api-keys/:id` route, which already does owner scoping. Pinned by `web/tests/api-keys.test.ts` ("recordUse tracks recent source IPs as a bounded ring buffer"): same-IP coalescing, distinct-IP fan-out, empty/null IP no-op, ring eviction at the cap, and summarize ordering newest-first. Maps to the standard SOC 2 CC7.2 / ISO 27001 A.9.4.2 procurement ask: "customer must be able to detect anomalous credential use."
 
 ### Try it: see which IPs a key has been used from

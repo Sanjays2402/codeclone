@@ -35,6 +35,7 @@ import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
 import { LockdownEditor } from "../../../components/LockdownEditor";
 import { SupportAccessEditor } from "../../../components/SupportAccessEditor";
+import { AccessReviewsEditor } from "../../../components/AccessReviewsEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { InviteDomainAllowlistEditor } from "../../../components/InviteDomainAllowlistEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
@@ -507,6 +508,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SupportAccessEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <AccessReviewsEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (
