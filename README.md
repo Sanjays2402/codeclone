@@ -10,6 +10,30 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace webhook destination domain allowlist on `/workspaces/<id>`: owners can restrict which hostnames any webhook in the workspace may target, using exact hosts (`hooks.partner.com`) or wildcard suffixes (`*.partner.com`). Enforced at two points so the policy is real: `POST /api/webhooks` rejects a new webhook whose URL host is not in the list with a 400 and a descriptive error, and the dispatcher re-checks on every attempt of `dispatchEvent` and `redeliverDelivery` so tightening the policy immediately blocks in-flight deliveries to a now-disallowed host (the delivery is logged with `blocked: "<host>" not in workspace webhook domain allowlist` and `fetch` is never called). SSRF rules (no loopback / RFC1918 / link-local / cloud metadata) still apply on top. Sanitisation rejects IP literals, schemes, paths, and labels without an alphabetic TLD so junk inputs never widen the policy. Owner-only PUT `/api/workspaces/:id/webhook-domains` records full before/after diffs in the tamper-evident audit chain as `workspace.webhook_domains_update`; non-owner PUTs are logged as `status: denied`. Cross-tenant isolation and the late-tightening delivery block are pinned by `web/tests/workspaces-webhook-domains.test.ts`.
+
+### Try it: lock webhooks to a vendor domain
+
+```bash
+cd web && npm run dev
+
+# 1. Sign in, open http://localhost:3000/workspaces/<id>, and under
+#    "webhook domain allowlist" add `*.partner.com`.
+
+# 2. Creating a webhook to a different host now fails:
+curl -i -H 'content-type: application/json' \
+     -b "$COOKIE" \
+     -X POST http://localhost:3000/api/webhooks \
+     -d '{"workspaceId":"ws_...","label":"leak","url":"https://attacker.example.com/hook","events":["compare.completed"]}'
+# => HTTP/1.1 400
+# => {"error":"URL host \"attacker.example.com\" is not in this workspace's webhook domain allowlist."}
+
+# 3. An in-list URL is accepted:
+curl -s -H 'content-type: application/json' -b "$COOKIE" \
+     -X POST http://localhost:3000/api/webhooks \
+     -d '{"workspaceId":"ws_...","label":"prod","url":"https://hooks.partner.com/intake","events":["compare.completed"]}'
+```
+
 - Per-API-key source IP allowlist on `/api-keys`: every API key can now carry its own list of allowed source CIDRs, independent of (and stricter than) the workspace IP allowlist. Set it at key creation (paste CIDRs into the new `Source IP allowlist` row) or on any live key from the row's shield button. Every public `/v1` route (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) checks the key's allowlist after the workspace allowlist and before the rate limiter, so an IP-locked key cannot be used from a developer laptop even if the workspace policy is open. The check has no loopback bypass (the workspace policy has one for kubelet probes; per-key is for production credentials, where silently permitting 127.0.0.1 would defeat the audit story). Non-matching IPs return HTTP 403 with a structured `ip_not_allowed` body that echoes the caller's IP, and every block writes an `api_key.ip_block` audit entry tagged with the key id, label, and rule count. Mutations write `api_key.update_ip_allowlist` with a full before/after diff. IPv4 and IPv6 CIDRs are accepted, bare IPs are treated as `/32` and `/128`, duplicates and junk are dropped on save, and a patch that contains only junk is refused so a fat-fingered request never widens the policy to open. Cross-key isolation is locked in by `web/tests/api-keys-ip-allowlist.test.ts`: two keys with disjoint allowlists each accept their own source IP and 403 the other's.
 
 ### Try it: lock an API key to a specific source IP

@@ -70,6 +70,16 @@ export interface WorkspaceRecord {
    */
   autoJoinDomains?: string[];
   autoJoinRole?: Exclude<Role, "owner">;
+  /**
+   * Owner-configured allowlist of webhook destination domains. When the
+   * list is non-empty, every webhook URL created in this workspace must
+   * have a hostname that matches one of the entries (exact host, or a
+   * `*.example.com` suffix). Enforcement also runs at delivery time so a
+   * legacy webhook stored before the policy was tightened cannot exfil to
+   * a now-disallowed host. Empty list disables enforcement. SSRF rules in
+   * `validateUrl` still apply on top of this control.
+   */
+  webhookDomainAllowlist?: string[];
   sso?: {
     provider: "oidc";
     issuer: string;
@@ -356,6 +366,20 @@ export async function setIpAllowlist(
   entries: string[],
 ): Promise<WorkspaceRecord> {
   ws.ipAllowlist = Array.isArray(entries) ? entries.slice(0, 64) : [];
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Replace the workspace webhook destination domain allowlist. Caller
+ * is responsible for sanitising entries (see `sanitizeWebhookDomainList`
+ * in lib/webhooks.ts) and for permission checks.
+ */
+export async function setWebhookDomainAllowlist(
+  ws: WorkspaceRecord,
+  entries: string[],
+): Promise<WorkspaceRecord> {
+  ws.webhookDomainAllowlist = Array.isArray(entries) ? entries.slice(0, 64) : [];
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }

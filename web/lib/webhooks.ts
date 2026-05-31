@@ -198,8 +198,105 @@ function privateHostsAllowed(): boolean {
   return process.env.CODECLONE_WEBHOOKS_ALLOW_PRIVATE === "1";
 }
 
-export function validateUrl(raw: unknown): { ok: true; url: string } | { ok: false; error: string } {
-  if (typeof raw !== "string") return { ok: false, error: "URL is required." };
+/**
+ * Resolve the workspace's webhook destination domain allowlist, if any.
+ * Used at delivery time so policy changes take effect immediately.
+ * Returns null on missing/invalid workspace; returns an empty array when
+ * the workspace exists but has no rules (open).
+ *
+ * Dynamic import keeps this file free of a hard dep on workspaces.ts so
+ * the module graph stays cycle-free.
+ */
+async function loadWorkspaceDomainAllowlist(
+  workspaceId: string | undefined,
+): Promise<readonly string[] | null> {
+  if (!workspaceId) return null;
+  try {
+    const mod = await import("./workspaces.ts");
+    const ws = await mod.getWorkspace(workspaceId);
+    if (!ws) return null;
+    const list = ws.webhookDomainAllowlist;
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Sanitize a list of webhook destination domain entries. Each entry is
+ * lowercased and trimmed. Accepted forms:
+ *   example.com         exact host match
+ *   *.example.com       any subdomain of example.com (not example.com itself)
+ * Anything else (paths, schemes, ports, IP literals, empty strings) is
+ * rejected and returned in `rejected` so the UI can surface it.
+ */
+export function sanitizeWebhookDomainList(
+  raw: unknown,
+): { ok: string[]; rejected: string[] } {
+  const ok: string[] = [];
+  const rejected: string[] = [];
+  if (!Array.isArray(raw)) return { ok, rejected };
+  const seen = new Set<string>();
+  for (const entryRaw of raw) {
+    if (typeof entryRaw !== "string") {
+      rejected.push(String(entryRaw));
+      continue;
+    }
+    const e = entryRaw.trim().toLowerCase();
+    if (!e) continue;
+    if (e.length > 253) { rejected.push(entryRaw); continue; }
+    const body = e.startsWith("*.") ? e.slice(2) : e;
+    // RFC1035-ish: labels of [a-z0-9-] separated by dots, must contain a dot.
+    if (!/^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/.test(body)) {
+      rejected.push(entryRaw);
+      continue;
+    }
+    // Reject IPv4-like literals (all-numeric labels). The hostname allowlist
+    // is for DNS names; use the IP allowlist for address-level rules.
+    if (/^[0-9.]+$/.test(body)) {
+      rejected.push(entryRaw);
+      continue;
+    }
+    // TLD must contain at least one letter (e.g. ".com", not ".123").
+    const tld = body.slice(body.lastIndexOf(".") + 1);
+    if (!/[a-z]/.test(tld)) {
+      rejected.push(entryRaw);
+      continue;
+    }
+    if (seen.has(e)) continue;
+    seen.add(e);
+    ok.push(e);
+  }
+  return { ok, rejected };
+}
+
+/**
+ * True when `hostname` is permitted by `allowlist`. Empty / missing list
+ * means "no restriction". Matching is case-insensitive. Exact hosts must
+ * equal the entry; `*.example.com` matches `a.example.com` and
+ * `a.b.example.com` but not `example.com` itself.
+ */
+export function matchesDomainAllowlist(
+  hostname: string,
+  allowlist: readonly string[] | null | undefined,
+): boolean {
+  if (!allowlist || allowlist.length === 0) return true;
+  if (typeof hostname !== "string" || !hostname) return false;
+  const h = hostname.trim().toLowerCase();
+  for (const entryRaw of allowlist) {
+    const entry = String(entryRaw).trim().toLowerCase();
+    if (!entry) continue;
+    if (entry.startsWith("*.")) {
+      const suffix = entry.slice(1); // ".example.com"
+      if (h.endsWith(suffix) && h.length > suffix.length) return true;
+    } else if (h === entry) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function validateUrl(raw: unknown): { ok: true; url: string } | { ok: false; error: string } {  if (typeof raw !== "string") return { ok: false, error: "URL is required." };
   const trimmed = raw.trim();
   if (!trimmed) return { ok: false, error: "URL is required." };
   if (trimmed.length > MAX_URL_LEN) return { ok: false, error: "URL is too long." };
@@ -265,6 +362,12 @@ export interface CreateWebhookInput {
   url?: unknown;
   events?: unknown;
   workspaceId?: unknown;
+  /**
+   * Optional workspace-level destination domain allowlist. When provided
+   * and non-empty, the URL must match. The route handler reads this off
+   * the workspace record so the policy is enforced at create time.
+   */
+  domainAllowlist?: readonly string[];
 }
 
 export async function createWebhook(input: CreateWebhookInput): Promise<CreatedWebhook> {
@@ -275,6 +378,15 @@ export async function createWebhook(input: CreateWebhookInput): Promise<CreatedW
   }
   const url = validateUrl(input.url);
   if (!url.ok) throw new Error(url.error);
+  if (input.domainAllowlist && input.domainAllowlist.length > 0) {
+    let host = "";
+    try { host = new URL(url.url).hostname; } catch { host = ""; }
+    if (!matchesDomainAllowlist(host, input.domainAllowlist)) {
+      throw new Error(
+        `URL host "${host}" is not in this workspace's webhook domain allowlist.`,
+      );
+    }
+  }
   const events = sanitizeEvents(input.events);
   for (let attempt = 0; attempt < 4; attempt++) {
     const id = crypto.randomBytes(8).toString("base64url").slice(0, ID_LEN);
@@ -630,6 +742,19 @@ async function deliverOnce(
       try { host = new URL(rec.url).hostname; } catch { host = ""; }
       if (!host || isPrivateHost(host)) {
         lastErr = "blocked: webhook URL targets a private or loopback address";
+        lastStatus = 0;
+        break;
+      }
+    }
+    // Workspace destination domain allowlist. Re-checked on every
+    // attempt so a policy that tightens after a webhook was registered
+    // takes effect immediately for in-flight deliveries.
+    {
+      let host = "";
+      try { host = new URL(rec.url).hostname; } catch { host = ""; }
+      const wsAllow = await loadWorkspaceDomainAllowlist(rec.workspaceId);
+      if (wsAllow && wsAllow.length > 0 && !matchesDomainAllowlist(host, wsAllow)) {
+        lastErr = `blocked: "${host}" not in workspace webhook domain allowlist`;
         lastStatus = 0;
         break;
       }

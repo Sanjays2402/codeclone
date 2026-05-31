@@ -19,6 +19,7 @@ import {
 import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
+import { WebhookDomainAllowlistEditor } from "../../../components/WebhookDomainAllowlistEditor";
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
@@ -338,6 +339,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <AllowlistEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <WebhookDomainAllowlistEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

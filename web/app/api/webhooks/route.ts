@@ -77,6 +77,7 @@ export async function POST(req: Request) {
       url: b.url,
       events: b.events,
       workspaceId: r.ws.id,
+      domainAllowlist: r.ws.webhookDomainAllowlist ?? [],
     });
     await tryRecordAudit(req, {
       action: "webhook.create",
