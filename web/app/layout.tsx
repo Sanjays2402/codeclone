@@ -5,6 +5,7 @@ import { TopStrip } from "../components/TopStrip";
 import { NavBar } from "../components/NavBar";
 import { PWAInstall } from "../components/PWAInstall";
 import { WelcomeBanner } from "../components/WelcomeBanner";
+import { Toaster } from "../components/Toaster";
 
 const sans = Inter_Tight({
   subsets: ["latin"],
@@ -69,6 +70,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           {children}
         </main>
         <PWAInstall />
+        <Toaster />
         <footer className="mx-auto max-w-[1280px] px-7 py-10 text-[11px] mono text-[var(--color-ink-4)]">
           codeclone · reads {process.env.CODECLONE_RUNS_DIR} · serve at {process.env.CODECLONE_SERVE_URL}
         </footer>

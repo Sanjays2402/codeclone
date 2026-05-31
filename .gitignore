@@ -99,4 +99,6 @@ uv.lock
 shares/
 api-keys/
 webhooks/
+!web/app/api/webhooks/
+!web/app/api/webhooks/**
 settings.json

@@ -30,6 +30,18 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
 - Email magic-link sign-in at `/signin`: stateless HMAC session cookies, one-shot tokens with 15-minute expiry, and a user menu in the nav. Dev mode shows the link inline so you can complete the loop locally without an SMTP provider; production swaps in a real mailer. Users persist on disk under `CODECLONE_USERS_DIR` (defaults to `../users`), keyed by a deterministic id derived from the lowercased email. Set `CODECLONE_AUTH_SECRET` in production. Routes: `POST /api/auth/request`, `GET /api/auth/verify`, `GET /api/auth/me`, `POST /api/auth/signout`.
 - First-run `/welcome`: a 3-step onboarding flow (create API key, run a comparison, save to history) with a live progress bar and a thin banner that sits under the nav on every page until you finish or dismiss. Step completion is derived from real state on disk (active API keys, a saved share, a `compared` event), so the checklist cannot lie. Override the persisted dismiss/finished state with `CODECLONE_ONBOARDING_FILE` (defaults to `../.onboarding.json`).
+- In-app notification toasts wired to the existing settings prefs: when `notifyOnCompareCompleted` is on, any comparison that takes longer than 2 seconds drops a success toast with the verdict and elapsed time. When `notifyOnWebhookFailure` is on, every page polls `/api/webhooks/recent-failures` every 20 seconds (while the tab is visible) and surfaces fresh failed deliveries as an error toast with a one-click jump to the per-endpoint delivery log. Toasts are dismissable, screen-reader friendly (`aria-live=polite`, `role=alert` for errors), bottom-right on desktop, bottom-center on mobile.
+
+### Try it: get notified when a long compare finishes
+
+1. Open `/settings`, tick "In-app toast when a long compare finishes", save.
+2. Open `/compare`, paste two big snippets, hit compare.
+3. Any run over two seconds shows a toast in the bottom-right with the elapsed time and verdict. Webhook delivery failures (when you have any registered hooks) appear as red toasts with a link to `/webhooks`.
+
+```bash
+# The aggregator endpoint that powers the failure toasts:
+curl -s 'http://localhost:3000/api/webhooks/recent-failures?limit=5'
+```
 
 ### Try it: sign in with a magic link
 

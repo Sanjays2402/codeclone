@@ -5,6 +5,7 @@ import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck,
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
+import { toast } from "../../components/Toaster";
 import { COMPARE_LANGUAGES, COMPARE_SAMPLES } from "../../lib/compare-samples";
 import { labelForScore, type SimilarityScores, type LineAlignment, type CloneClassification, type CloneType } from "../../lib/similarity";
 
@@ -71,6 +72,7 @@ export default function ComparePage() {
   const submit = useCallback(async () => {
     setLoading(true);
     setError(null);
+    const startedAt = performance.now();
     try {
       const res = await fetch("/api/compare", {
         method: "POST",
@@ -85,6 +87,16 @@ export default function ComparePage() {
         setResult(json as CompareResponse);
         setShareUrl(null);
         setShareError(null);
+        // Long-run completion toast. Toaster gates on user pref.
+        const wallMs = performance.now() - startedAt;
+        if (wallMs >= 2000) {
+          const seconds = (wallMs / 1000).toFixed(1);
+          const label = (json as CompareResponse)?.clone?.label;
+          toast.success(`Comparison finished in ${seconds}s`, {
+            description: label ? `Verdict: ${label}.` : undefined,
+            ttlMs: 6000,
+          });
+        }
         // Fire-and-forget: tell the onboarding tracker the user has
         // successfully run their first compare. Errors are ignored on
         // purpose so a slow disk write never blocks the UI.
