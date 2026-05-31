@@ -104,6 +104,22 @@ curl -s -X DELETE http://localhost:3000/api/share/JRe9kkq8kcY3
 ```
 
 Unit test: `cd web && pnpm test` runs `node --test --experimental-strip-types tests/share.test.ts` against a temp `CODECLONE_SHARES_DIR` and round-trips create / load / update / list / delete plus input validation.
+
+### Try it: bulk-export your history as CSV or JSON
+
+One-click export of every saved comparison, with the same search and tag filters as the `/history` page. Useful for spreadsheets, BI tools, or seeding a downstream pipeline.
+
+```bash
+cd web && pnpm dev          # then click "export csv" / "export json" in the /history toolbar
+
+# all history as CSV (id, created_at, title, language, clone_label, jaccard, bytes_a, bytes_b, tags, url)
+curl -sS -OJ 'http://localhost:3000/api/share/export?format=csv'
+
+# filter by tag and search, just like the UI
+curl -sS -OJ 'http://localhost:3000/api/share/export?format=json&tag=renamed-vars&q=adders'
+```
+
+Response sets `Content-Disposition: attachment; filename="codeclone-history-<ts>.<ext>"` and `X-Codeclone-Export-Count` so scripts can verify the row count without parsing the body. Covered by `tests/share-export.test.ts`.
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack

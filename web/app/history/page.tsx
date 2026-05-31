@@ -39,6 +39,13 @@ function pctBadge(v: number): string {
   return "text-[var(--color-ink-3)] border-[var(--color-rule)] bg-[var(--color-paper-2)]";
 }
 
+function exportHref(format: "csv" | "json", q: string, tag: string): string {
+  const params = new URLSearchParams({ format });
+  if (q.trim()) params.set("q", q.trim());
+  if (tag.trim()) params.set("tag", tag.trim());
+  return `/api/share/export?${params.toString()}`;
+}
+
 export default function HistoryPage() {
   const [items, setItems] = useState<ShareSummary[]>([]);
   const [status, setStatus] = useState<Status>("loading");
@@ -210,6 +217,34 @@ export default function HistoryPage() {
         </label>
         <div className="flex items-center gap-2 mono text-[11px] text-[var(--color-ink-3)]">
           <span>{filtered.length} of {items.length}</span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          <a
+            href={exportHref("csv", q, activeTag)}
+            aria-disabled={items.length === 0}
+            onClick={(e) => {
+              if (items.length === 0) e.preventDefault();
+            }}
+            className={`inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] hover:border-[color:var(--color-accent)] hover:text-[var(--color-ink)] ${
+              items.length === 0 ? "opacity-40 pointer-events-none" : "text-[var(--color-ink-2)]"
+            }`}
+            title="Download visible history as CSV"
+          >
+            <DownloadSimple weight="duotone" size={13} /> export csv
+          </a>
+          <a
+            href={exportHref("json", q, activeTag)}
+            aria-disabled={items.length === 0}
+            onClick={(e) => {
+              if (items.length === 0) e.preventDefault();
+            }}
+            className={`inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] hover:border-[color:var(--color-accent)] hover:text-[var(--color-ink)] ${
+              items.length === 0 ? "opacity-40 pointer-events-none" : "text-[var(--color-ink-2)]"
+            }`}
+            title="Download visible history as JSON"
+          >
+            <DownloadSimple weight="duotone" size={13} /> export json
+          </a>
         </div>
       </section>
 

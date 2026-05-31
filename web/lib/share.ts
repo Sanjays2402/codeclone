@@ -291,3 +291,91 @@ export async function listShares(
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
   return out;
 }
+
+/**
+ * Bulk export of share history. Re-uses listShares for filter/sort so the
+ * export matches what /history shows. CSV is RFC-4180 quoted; JSON is a
+ * stable shape suitable for re-import or downstream analysis.
+ */
+export type ExportFormat = "csv" | "json";
+
+export interface ExportOptions extends ListSharesOptions {
+  format?: ExportFormat;
+  origin?: string;
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  if (/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+export interface ExportResult {
+  body: string;
+  contentType: string;
+  filename: string;
+  count: number;
+}
+
+export async function exportShares(opts: ExportOptions = {}): Promise<ExportResult> {
+  const items = await listShares({ limit: opts.limit, q: opts.q, tag: opts.tag });
+  const fmt: ExportFormat = opts.format === "json" ? "json" : "csv";
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
+  const origin = (opts.origin ?? "").replace(/\/$/, "");
+  const link = (id: string) => (origin ? `${origin}/r/${id}` : `/r/${id}`);
+  if (fmt === "json") {
+    const body = JSON.stringify(
+      {
+        exportedAt: new Date().toISOString(),
+        count: items.length,
+        items: items.map((s) => ({ ...s, url: link(s.id) })),
+      },
+      null,
+      2,
+    );
+    return {
+      body,
+      contentType: "application/json; charset=utf-8",
+      filename: `codeclone-history-${stamp}.json`,
+      count: items.length,
+    };
+  }
+  const header = [
+    "id",
+    "created_at",
+    "updated_at",
+    "title",
+    "language",
+    "clone_label",
+    "shingle_jaccard",
+    "bytes_a",
+    "bytes_b",
+    "tags",
+    "url",
+  ];
+  const lines = [header.join(",")];
+  for (const s of items) {
+    lines.push(
+      [
+        csvCell(s.id),
+        csvCell(new Date(s.createdAt).toISOString()),
+        csvCell(s.updatedAt ? new Date(s.updatedAt).toISOString() : ""),
+        csvCell(s.title ?? ""),
+        csvCell(s.language),
+        csvCell(s.cloneLabel),
+        csvCell(s.shingleJaccard.toFixed(6)),
+        csvCell(s.bytes.a),
+        csvCell(s.bytes.b),
+        csvCell((s.tags ?? []).join("|")),
+        csvCell(link(s.id)),
+      ].join(","),
+    );
+  }
+  return {
+    body: lines.join("\n") + "\n",
+    contentType: "text/csv; charset=utf-8",
+    filename: `codeclone-history-${stamp}.csv`,
+    count: items.length,
+  };
+}
