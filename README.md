@@ -27,6 +27,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Public `/v1/compare` API with per-key auth: generate keys in the `/api-keys` page, copy-paste the curl example, call from anywhere. Each key shows its prefix, total calls, and last-used timestamp, with one-click revoke and delete. Only the SHA-256 hash of each key is persisted (override the on-disk location with `CODECLONE_KEYS_DIR`).
 - Outbound webhooks via `/webhooks`: register a URL, receive a real signed POST every time `/v1/compare` finishes. Each delivery retries up to three times with backoff, includes an HMAC-SHA256 signature (`X-CodeClone-Signature: t=<ts>,v1=<mac>`), and lands in a per-endpoint delivery log (last 50) you can browse from the dashboard. Pause, resume, or delete endpoints inline. Override the on-disk location with `CODECLONE_WEBHOOKS_DIR`.
 - Per-key usage and quota on `/usage`: every authenticated `/v1/compare` call is logged with timestamp, key id, byte count, and latency. The page shows month-to-date calls against a free-tier cap (default 1000, override with `CODECLONE_FREE_TIER_MONTHLY`), a daily bar chart for 7/30/90 day windows, and a per-key breakdown. When the cap is hit the API returns HTTP 429 with `Retry-After` and a structured `quota_exceeded` error, and every 200 response carries `x-codeclone-quota-limit` and `x-codeclone-quota-remaining` headers so clients can rate-limit themselves.
+- Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
 
 ### Try it: watch usage in real time
 
@@ -58,6 +59,28 @@ curl -sS -X POST http://localhost:3000/v1/compare \
   -d '{"a":"def add(a,b):\n return a+b\n","b":"def sum(x,y):\n return x+y\n","language":"python"}'
 
 # 3. Watch the delivery land in your receiver and in /webhooks (success count + latency).
+```
+
+### Try it: manage account settings
+
+```bash
+cd web && npm run dev      # http://localhost:3000/settings
+
+# read current preferences
+curl -s http://localhost:3000/api/settings | jq
+
+# patch defaults
+curl -s -X PATCH http://localhost:3000/api/settings \
+  -H 'content-type: application/json' \
+  -d '{"defaultLanguage":"python","cloneThreshold":0.75,"notifyOnCompareCompleted":true}' | jq
+
+# download a full GDPR-style export of shares, api key metadata, and webhooks
+curl -sOJ http://localhost:3000/api/settings/export
+
+# wipe everything (requires explicit confirm phrase)
+curl -s -X POST http://localhost:3000/api/settings/wipe \
+  -H 'content-type: application/json' \
+  -d '{"confirm":"delete everything"}' | jq
 ```
 
 ### Try it: call the public API

@@ -17,6 +17,7 @@ const items = [
   { href: "/api-keys", label: "api keys" },
   { href: "/usage",    label: "usage" },
   { href: "/webhooks", label: "webhooks" },
+  { href: "/settings", label: "settings" },
 ];
 
 export function NavBar() {
