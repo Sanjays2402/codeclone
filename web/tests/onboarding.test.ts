@@ -18,7 +18,7 @@ process.env.CODECLONE_ONBOARDING_FILE = path.join(root, ".onboarding.json");
 fs.mkdirSync(process.env.CODECLONE_KEYS_DIR, { recursive: true });
 fs.mkdirSync(process.env.CODECLONE_SHARES_DIR, { recursive: true });
 
-const { getOnboarding, dismissOnboarding, markCompared, resetOnboarding } =
+const { getOnboarding, dismissOnboarding, markCompared, resetOnboarding, seedSamples, clearSamples, listSampleShareIds } =
   await import("../lib/onboarding.ts");
 const { createKey, revokeKey } = await import("../lib/api-keys.ts");
 // createShare is imported inline within the relevant test to keep top-level tidy.
@@ -99,4 +99,31 @@ test("onboarding: dismiss sets dismissed=true and is idempotent", async () => {
   await dismissOnboarding();
   const s2 = await getOnboarding();
   assert.equal(s2.dismissed, true);
+});
+
+test("onboarding: seedSamples creates real sample shares and is idempotent", async () => {
+  // Make sure we start clean in the shared sandbox.
+  await clearSamples();
+  const before = await listSampleShareIds();
+  assert.equal(before.length, 0);
+
+  const r1 = await seedSamples();
+  assert.equal(r1.skipped, false);
+  assert.ok(r1.created.length >= 3, "should create at least 3 samples");
+
+  const ids = await listSampleShareIds();
+  assert.equal(ids.length, r1.created.length);
+
+  // Second call must not duplicate.
+  const r2 = await seedSamples();
+  assert.equal(r2.skipped, true);
+  assert.equal(r2.total, r1.created.length);
+  const idsAfter = await listSampleShareIds();
+  assert.equal(idsAfter.length, r1.created.length);
+
+  // clearSamples removes them all and leaves nothing behind.
+  const c = await clearSamples();
+  assert.equal(c.removed, r1.created.length);
+  const cleaned = await listSampleShareIds();
+  assert.equal(cleaned.length, 0);
 });

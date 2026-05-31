@@ -9,6 +9,8 @@ import {
   Sparkle,
   EyeSlash,
   ArrowClockwise,
+  Stack,
+  Trash,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { ErrorBlock } from "../../components/States";
@@ -59,6 +61,21 @@ export default function WelcomePage() {
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [seedBusy, setSeedBusy] = useState<boolean>(false);
+  const [seedMsg, setSeedMsg] = useState<string>("");
+  const [hasSamples, setHasSamples] = useState<boolean>(false);
+
+  const refreshSamples = useCallback(async () => {
+    try {
+      const res = await fetch("/api/share?limit=200&tag=sample", { cache: "no-store" });
+      if (!res.ok) return;
+      const j = (await res.json()) as { count?: number; total?: number };
+      const n = typeof j.total === "number" ? j.total : j.count ?? 0;
+      setHasSamples(n > 0);
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -78,10 +95,10 @@ export default function WelcomePage() {
 
   useEffect(() => {
     void refresh();
-  }, [refresh]);
+    void refreshSamples();
+  }, [refresh, refreshSamples]);
 
-  const dismiss = useCallback(async () => {
-    setBusy(true);
+  const dismiss = useCallback(async () => {    setBusy(true);
     try {
       await fetch("/api/onboarding", {
         method: "POST",
@@ -93,6 +110,57 @@ export default function WelcomePage() {
       setBusy(false);
     }
   }, [refresh]);
+
+  const seed = useCallback(async () => {
+    setSeedBusy(true);
+    setSeedMsg("");
+    try {
+      const res = await fetch("/api/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "seed-samples" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSeedMsg(j?.error?.message ?? `Request failed (${res.status}).`);
+      } else {
+        const created = j?.seeded?.created?.length ?? 0;
+        const skipped = j?.seeded?.skipped ?? false;
+        setSeedMsg(
+          skipped
+            ? `Samples already loaded (${created}). Open history to browse them.`
+            : `Loaded ${created} sample comparison${created === 1 ? "" : "s"}. Open history to browse.`,
+        );
+      }
+      await refresh();
+      await refreshSamples();
+    } finally {
+      setSeedBusy(false);
+    }
+  }, [refresh, refreshSamples]);
+
+  const clearSamples = useCallback(async () => {
+    setSeedBusy(true);
+    setSeedMsg("");
+    try {
+      const res = await fetch("/api/onboarding", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "clear-samples" }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setSeedMsg(j?.error?.message ?? `Request failed (${res.status}).`);
+      } else {
+        const removed = j?.cleared?.removed ?? 0;
+        setSeedMsg(`Removed ${removed} sample share${removed === 1 ? "" : "s"}.`);
+      }
+      await refresh();
+      await refreshSamples();
+    } finally {
+      setSeedBusy(false);
+    }
+  }, [refresh, refreshSamples]);
 
   const pctDone =
     state && state.total > 0 ? Math.round((state.completed / state.total) * 100) : 0;
@@ -218,6 +286,65 @@ export default function WelcomePage() {
                 banner hidden
               </span>
             )}
+          </div>
+
+          <div className="mt-6 ruled rounded-md p-5">
+            <div className="flex items-start gap-3">
+              <Stack
+                weight="duotone"
+                className="h-5 w-5 text-[var(--color-accent-ink)] shrink-0 mt-0.5"
+                aria-hidden="true"
+              />
+              <div className="flex-1 min-w-0">
+                <h2 className="text-[14.5px] font-medium tracking-tight mb-1">
+                  Want to see the product full?
+                </h2>
+                <p className="text-[13px] text-[var(--color-ink-2)] leading-relaxed mb-3">
+                  Load three real comparisons into your history so the app is
+                  not empty on your first visit: a near-duplicate, a partial
+                  overlap, and a distinct pair. Each one is a real run through
+                  the live scorer.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void seed()}
+                    disabled={seedBusy}
+                    className="inline-flex items-center gap-1.5 mono text-[11.5px] uppercase tracking-[0.14em] px-3 py-2 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-3)] transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                  >
+                    <Sparkle weight="bold" className="h-3.5 w-3.5" aria-hidden="true" />
+                    {hasSamples ? "reload samples" : "load sample comparisons"}
+                  </button>
+                  {hasSamples && (
+                    <button
+                      type="button"
+                      onClick={() => void clearSamples()}
+                      disabled={seedBusy}
+                      className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 rounded-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)] transition-colors disabled:opacity-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                    >
+                      <Trash weight="bold" className="h-3.5 w-3.5" aria-hidden="true" />
+                      remove samples
+                    </button>
+                  )}
+                  <Link
+                    href="/history?tag=sample"
+                    className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 rounded-sm text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)] transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)]"
+                  >
+                    open history
+                    <ArrowRight weight="bold" className="h-3.5 w-3.5" aria-hidden="true" />
+                  </Link>
+                </div>
+                {seedMsg && (
+                  <p
+                    className="mt-3 text-[12.5px] text-[var(--color-ink-2)]"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {seedMsg}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
 
           {state.completed === state.total && (

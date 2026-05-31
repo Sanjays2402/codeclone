@@ -13,7 +13,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { listKeys } from "./api-keys.ts";
-import { listShares } from "./share.ts";
+import { createShare, deleteShare, listShares } from "./share.ts";
+import { compareCode, alignLines, classifyClone } from "./similarity.ts";
+import { COMPARE_SAMPLES } from "./compare-samples.ts";
+
+/**
+ * Tag applied to every sample share created by seedSamples(). Used to find
+ * and remove them later without touching anything the user saved.
+ */
+export const SAMPLE_TAG = "sample";
 
 const CWD = process.cwd();
 
@@ -47,6 +55,7 @@ interface Persisted {
   startedAt: number;
   finishedAt?: number;
   comparedAt?: number;
+  seededAt?: number;
 }
 
 async function readPersisted(): Promise<Persisted> {
@@ -59,6 +68,7 @@ async function readPersisted(): Promise<Persisted> {
       startedAt: typeof j.startedAt === "number" ? j.startedAt : Date.now(),
       finishedAt: typeof j.finishedAt === "number" ? j.finishedAt : undefined,
       comparedAt: typeof j.comparedAt === "number" ? j.comparedAt : undefined,
+      seededAt: typeof j.seededAt === "number" ? j.seededAt : undefined,
     };
   } catch {
     return { v: 1, dismissed: false, startedAt: Date.now() };
@@ -154,6 +164,89 @@ export async function dismissOnboarding(): Promise<void> {
   const p = await readPersisted();
   p.dismissed = true;
   await writePersisted(p);
+}
+
+/**
+ * Find shares that were created by seedSamples(). A share counts as a sample
+ * iff it carries the SAMPLE_TAG tag we wrote at creation time.
+ */
+export async function listSampleShareIds(): Promise<string[]> {
+  try {
+    const shares = await listShares({ limit: 200 });
+    return shares
+      .filter((s) => Array.isArray(s.tags) && s.tags.includes(SAMPLE_TAG))
+      .map((s) => s.id);
+  } catch {
+    return [];
+  }
+}
+
+export interface SeedSamplesResult {
+  created: string[];
+  skipped: boolean;
+  total: number;
+}
+
+/**
+ * Seed the account with one share per built-in COMPARE_SAMPLES entry. Idempotent:
+ * if any sample-tagged share already exists, returns skipped=true and does not
+ * duplicate. Uses the real similarity pipeline so the records look identical
+ * to anything the user would produce themselves.
+ */
+export async function seedSamples(): Promise<SeedSamplesResult> {
+  const existing = await listSampleShareIds();
+  if (existing.length > 0) {
+    return { created: existing, skipped: true, total: existing.length };
+  }
+  const created: string[] = [];
+  for (const sample of COMPARE_SAMPLES) {
+    const started = performance.now();
+    const scores = compareCode(sample.a, sample.b);
+    const alignment = alignLines(sample.a, sample.b);
+    const clone = classifyClone(sample.a, sample.b, scores);
+    const latency_ms = Number((performance.now() - started).toFixed(3));
+    const rec = await createShare({
+      a: sample.a,
+      b: sample.b,
+      language: sample.language,
+      title: `Sample: ${sample.title}`,
+      tags: [SAMPLE_TAG, sample.id],
+      result: {
+        language: sample.language,
+        scores,
+        alignment,
+        clone,
+        bytes: {
+          a: Buffer.byteLength(sample.a, "utf-8"),
+          b: Buffer.byteLength(sample.b, "utf-8"),
+        },
+        latency_ms,
+        method:
+          "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+      },
+    });
+    created.push(rec.id);
+  }
+  const p = await readPersisted();
+  if (!p.seededAt) {
+    p.seededAt = Date.now();
+    await writePersisted(p);
+  }
+  return { created, skipped: false, total: created.length };
+}
+
+/**
+ * Remove every share previously created by seedSamples(). Anything the user
+ * created themselves is left alone.
+ */
+export async function clearSamples(): Promise<{ removed: number }> {
+  const ids = await listSampleShareIds();
+  let removed = 0;
+  for (const id of ids) {
+    const ok = await deleteShare(id);
+    if (ok) removed++;
+  }
+  return { removed };
 }
 
 export async function markCompared(): Promise<void> {

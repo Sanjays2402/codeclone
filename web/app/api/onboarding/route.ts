@@ -9,9 +9,11 @@
  */
 import { NextResponse } from "next/server";
 import {
+  clearSamples,
   dismissOnboarding,
   getOnboarding,
   markCompared,
+  seedSamples,
 } from "../../../lib/onboarding";
 
 export const runtime = "nodejs";
@@ -40,16 +42,41 @@ export async function POST(req: Request) {
     );
   }
   const action = typeof body.action === "string" ? body.action : "";
-  if (action === "dismiss") {
-    await dismissOnboarding();
-  } else if (action === "compared") {
-    await markCompared();
-  } else {
+  let extra: Record<string, unknown> = {};
+  try {
+    if (action === "dismiss") {
+      await dismissOnboarding();
+    } else if (action === "compared") {
+      await markCompared();
+    } else if (action === "seed-samples") {
+      const r = await seedSamples();
+      extra = { seeded: r };
+    } else if (action === "clear-samples") {
+      const r = await clearSamples();
+      extra = { cleared: r };
+    } else {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message:
+              "Unknown action. Expected 'dismiss', 'compared', 'seed-samples', or 'clear-samples'.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+  } catch (err) {
     return NextResponse.json(
-      { error: { type: "invalid_request", message: "Unknown action. Expected 'dismiss' or 'compared'." } },
-      { status: 400 },
+      {
+        error: {
+          type: "internal",
+          message: err instanceof Error ? err.message : String(err),
+        },
+      },
+      { status: 500 },
     );
   }
   const state = await getOnboarding();
-  return NextResponse.json(state, { headers: { "cache-control": "no-store" } });
+  return NextResponse.json({ ...state, ...extra }, { headers: { "cache-control": "no-store" } });
 }
