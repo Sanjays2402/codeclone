@@ -9,6 +9,7 @@ import {
   ArrowsClockwise,
   Copy,
   XCircle,
+  Gauge,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../../components/Headings";
 import { ErrorBlock } from "../../../components/States";
@@ -404,6 +405,77 @@ export default function MfaSettingsPage() {
           Open lockout console
         </a>
       </section>
+
+      <SessionRateLimitsCard />
     </main>
+  );
+}
+
+interface RateLimitBucket {
+  bucket: string;
+  label: string;
+  description: string;
+  limit_rpm: number;
+  window_seconds: number;
+}
+
+function SessionRateLimitsCard() {
+  const [items, setItems] = useState<RateLimitBucket[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/session-rate-limits", { cache: "no-store" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = (await res.json()) as { buckets: RateLimitBucket[] };
+        if (alive) setItems(data.buckets ?? []);
+      } catch (e) {
+        if (alive) setError(e instanceof Error ? e.message : "Failed to load.");
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+  return (
+    <section className="mt-10 rounded-lg border border-zinc-200 bg-white p-6">
+      <div className="flex items-center gap-2">
+        <Gauge weight="duotone" className="size-5 text-zinc-700" />
+        <H2>Session rate limits</H2>
+      </div>
+      <p className="mt-2 text-sm text-zinc-600">
+        Per-user ceilings on browser-driven endpoints. The limit applies
+        in a 60-second sliding window and exceeds return HTTP 429 with
+        standard X-RateLimit-* and Retry-After headers.
+      </p>
+      {loading ? (
+        <p className="mt-4 text-sm text-zinc-500">Loading...</p>
+      ) : error ? (
+        <ErrorBlock message={error} />
+      ) : items && items.length > 0 ? (
+        <ul className="mt-4 divide-y divide-zinc-200 rounded-md border border-zinc-200">
+          {items.map((b) => (
+            <li key={b.bucket} className="flex items-start justify-between gap-4 px-4 py-3">
+              <div>
+                <p className="text-sm font-medium text-zinc-900">{b.label}</p>
+                <p className="text-xs text-zinc-500">{b.description}</p>
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-sm font-semibold text-zinc-900 tabular-nums">
+                  {b.limit_rpm.toLocaleString()} rpm
+                </p>
+                <p className="text-xs text-zinc-500">window {b.window_seconds}s</p>
+              </div>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-4 text-sm text-zinc-500">No buckets configured.</p>
+      )}
+    </section>
   );
 }

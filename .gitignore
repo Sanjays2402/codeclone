@@ -104,3 +104,5 @@ webhooks/
 !web/app/api/webhooks/
 !web/app/api/webhooks/**
 settings.json
+rate-limit/
+session-rate-limit/

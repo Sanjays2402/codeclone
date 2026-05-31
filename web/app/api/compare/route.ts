@@ -3,6 +3,10 @@ import { compareCode, alignLines, classifyClone } from "../../../lib/similarity"
 import { tryRecordAudit } from "../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { instrument } from "../../../lib/instrument";
+import {
+  enforceSession,
+  tooManyRequestsResponse,
+} from "../../../lib/session-rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,12 +45,28 @@ export const POST = instrument("/api/compare", async function POST(req) {
   if ("error" in parsed) {
     return NextResponse.json({ error: parsed.error }, { status: 400 });
   }
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  const limit = await enforceSession(req, user?.id ?? null, "compare");
+  if (!limit.decision.allowed) {
+    await tryRecordAudit(req, {
+      action: "compare.rate_limited",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "compare" },
+      meta: {
+        bucket: limit.bucket,
+        subject_kind: limit.kind,
+        limit: limit.decision.limit,
+        retry_after_seconds: limit.decision.retryAfter,
+      },
+    });
+    return tooManyRequestsResponse(limit);
+  }
   const started = performance.now();
   const scores = compareCode(parsed.a, parsed.b);
   const alignment = alignLines(parsed.a, parsed.b);
   const clone = classifyClone(parsed.a, parsed.b, scores);
   const latencyMs = performance.now() - started;
-  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   await tryRecordAudit(req, {
     action: "compare.run",
     actorId: user?.id ?? null,
@@ -60,13 +80,16 @@ export const POST = instrument("/api/compare", async function POST(req) {
       clone_type: clone.type,
     },
   });
-  return NextResponse.json({
-    language: parsed.language,
-    bytes: { a: Buffer.byteLength(parsed.a, "utf-8"), b: Buffer.byteLength(parsed.b, "utf-8") },
-    scores,
-    alignment,
-    clone,
-    latency_ms: Number(latencyMs.toFixed(3)),
-    method: "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
-  });
+  return NextResponse.json(
+    {
+      language: parsed.language,
+      bytes: { a: Buffer.byteLength(parsed.a, "utf-8"), b: Buffer.byteLength(parsed.b, "utf-8") },
+      scores,
+      alignment,
+      clone,
+      latency_ms: Number(latencyMs.toFixed(3)),
+      method: "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+    },
+    { headers: limit.headers },
+  );
 });

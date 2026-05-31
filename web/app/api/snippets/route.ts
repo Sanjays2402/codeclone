@@ -3,6 +3,10 @@ import { cookies } from "next/headers";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { tryRecordAudit } from "../../../lib/audit";
 import {
+  enforceSession,
+  tooManyRequestsResponse,
+} from "../../../lib/session-rate-limit";
+import {
   createSnippet,
   listSnippets,
   SnippetError,
@@ -35,6 +39,21 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const limit = await enforceSession(req, user.id, "snippets-write");
+  if (!limit.decision.allowed) {
+    await tryRecordAudit(req, {
+      action: "snippet.rate_limited",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "snippet" },
+      meta: {
+        bucket: limit.bucket,
+        limit: limit.decision.limit,
+        retry_after_seconds: limit.decision.retryAfter,
+      },
+    });
+    return tooManyRequestsResponse(limit);
+  }
   let body: unknown;
   try {
     body = await req.json();
@@ -56,7 +75,7 @@ export async function POST(req: Request) {
       target: { type: "snippet", id: rec.id, label: rec.title },
       diff: { after: { title: rec.title, language: rec.language, tags: rec.tags } },
     });
-    return NextResponse.json({ snippet: rec }, { status: 201 });
+    return NextResponse.json({ snippet: rec }, { status: 201, headers: limit.headers });
   } catch (err) {
     if (err instanceof SnippetError) {
       return NextResponse.json({ error: err.message }, { status: err.status });

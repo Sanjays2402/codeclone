@@ -10,6 +10,41 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Per-user session rate limits on browser-driven endpoints. The public `/v1/*` API already enforces per-API-key ceilings, but the cookie-session routes the dashboard calls (`/api/compare`, `/api/snippets`) had no per-tenant cap, so a single signed-in user could DOS the comparator from a tight loop in the UI. A new sliding-window limiter (`web/lib/session-rate-limit.ts`) buckets each authenticated user into named pools (default: 60 rpm for compare, 30 rpm for snippet writes) and falls back to a per-IP bucket for anonymous callers, so unauthenticated probes cannot bypass the ceiling. Counters are filesystem-backed under `$CODECLONE_SESSION_RATELIMIT_DIR`, separate from the API-key limiter, so ops can tune the two surfaces independently with `CODECLONE_SESSION_RATELIMIT_COMPARE_RPM` / `CODECLONE_SESSION_RATELIMIT_SNIPPETS_RPM`. Every response carries the standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `X-RateLimit-Policy` headers; over-limit calls return HTTP 429 with `Retry-After`, a structured `{error:{type:"rate_limited", bucket, limit, retry_after_seconds}}` body, and an immutable audit entry (`compare.rate_limited` / `snippet.rate_limited`) so SOC reviewers can see when a tenant was throttled. Settings -> Security renders a live card showing the buckets in effect, and a new introspection endpoint `/api/session-rate-limits` returns the same data for programmatic clients. Pinned by `web/tests/session-rate-limit.test.ts` (5 cases: env override, per-user isolation, 429 headers, bucket independence, anonymous IP fallback).
+
+### Try it: hit the per-user compare ceiling
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Sign in, then introspect the effective limits:
+curl -s http://localhost:3000/api/session-rate-limits -b "$COOKIE" | jq
+# { "buckets": [
+#   { "bucket": "compare",        "label": "Compare requests",  "limit_rpm": 60, "window_seconds": 60 },
+#   { "bucket": "snippets-write", "label": "Snippet writes",    "limit_rpm": 30, "window_seconds": 60 },
+#   { "bucket": "default",        "label": "Default session bucket", "limit_rpm": 120, "window_seconds": 60 }
+# ] }
+
+# Watch the headers on a normal compare request:
+curl -si -X POST http://localhost:3000/api/compare \
+  -H 'content-type: application/json' -b "$COOKIE" \
+  -d '{"a":"int x=1;","b":"int x=2;","language":"c"}' | grep -i ratelimit
+# X-RateLimit-Limit: 60
+# X-RateLimit-Remaining: 59
+# X-RateLimit-Reset: 1717282860
+# X-RateLimit-Policy: 60;w=60
+
+# Tighten the limit for the demo and burst until 429:
+CODECLONE_SESSION_RATELIMIT_COMPARE_RPM=3 pnpm dev
+for i in 1 2 3 4; do
+  curl -s -o /dev/null -w "%{http_code} " -X POST http://localhost:3000/api/compare \
+    -H 'content-type: application/json' -b "$COOKIE" \
+    -d '{"a":"a","b":"b","language":"c"}'
+done
+echo
+# 200 200 200 429
+```
+
 - Rotate webhook signing secrets with zero dropped deliveries. Workspace editors and owners open a registered webhook under `/webhooks` and click Rotate to issue a fresh `whsec_...` secret. The plaintext is shown exactly once, only its SHA-256 hash is persisted, and the existing secret stays primary so nothing breaks. For the next 24 hours (configurable per call, 1m to 30d) every delivery is signed with BOTH secrets: the existing one in `X-CodeClone-Signature` / `X-CodeClone-Hash`, and the new one in `X-CodeClone-Signature-Next` / `X-CodeClone-Hash-Next`. Receivers verify with whichever secret they already have, deploy a verifier that accepts the new secret, then the operator clicks Finalize to promote the pending secret to primary and stop dual-signing. Cancel discards the pending secret without touching primary. Every initiate/finalize/cancel writes an immutable audit entry (`webhook.secret.rotate_initiate|finalize|cancel`) with the rotating prefixes in the diff, the same call flows through `audit.recorded` for SIEM streaming, and viewers are denied at the API layer. Cross-workspace callers see a 404 because rotation is workspace-scoped end to end. Pinned by `web/tests/webhooks-rotate.test.ts` (plaintext-once, dual-sign header verification with HMAC re-derivation, finalize promotion, cancel no-op on primary, cross-tenant isolation).
 
 ### Try it: rotate a webhook signing secret
