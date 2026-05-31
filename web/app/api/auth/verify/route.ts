@@ -18,6 +18,7 @@ import {
   getUserTtl,
 } from "../../../../lib/sessions";
 import { tryRecordAudit } from "../../../../lib/audit";
+import { applyAutoJoinForUser } from "../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,5 +58,22 @@ export async function GET(req: Request) {
     target: { type: "session", id: jti },
     meta: { ttlSec },
   });
+  try {
+    const joined = await applyAutoJoinForUser({
+      userId: user.id,
+      email: user.email,
+      viaSso: false,
+    });
+    for (const ws of joined) {
+      await tryRecordAudit(req, {
+        action: "workspace.auto_join",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "workspace", id: ws.id, label: ws.name },
+        meta: { role: ws.autoJoinRole ?? "viewer", via: "magic_link" },
+      });
+    }
+  } catch { /* never block sign-in on auto-join */ }
   return res;
 }

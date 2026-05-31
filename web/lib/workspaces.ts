@@ -62,6 +62,14 @@ export interface WorkspaceRecord {
    * tier until an owner upgrades.
    */
   plan?: PlanId | null;
+  /**
+   * Domain auto-join policy. When a user signs in (magic link or SSO) with
+   * an email whose domain matches one of these entries, they are added to
+   * this workspace with `autoJoinRole`. Owner-only configuration. Each
+   * auto-join event is recorded in the audit log.
+   */
+  autoJoinDomains?: string[];
+  autoJoinRole?: Exclude<Role, "owner">;
   sso?: {
     provider: "oidc";
     issuer: string;
@@ -275,6 +283,89 @@ export async function setWorkspacePlan(
   ws.plan = plan;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+/**
+ * Owner-only: replace the workspace's auto-join domain list and default
+ * role. Domains are normalised to lowercase, deduped, and validated. Caller
+ * writes the audit entry; we just validate and persist.
+ */
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/;
+
+export function sanitizeAutoJoinDomains(input: unknown): { ok: string[]; rejected: string[] } {
+  const ok: string[] = [];
+  const rejected: string[] = [];
+  const seen = new Set<string>();
+  if (!Array.isArray(input)) return { ok, rejected };
+  for (const raw of input) {
+    if (typeof raw !== "string") { rejected.push(String(raw)); continue; }
+    let d = raw.trim().toLowerCase();
+    if (d.startsWith("@")) d = d.slice(1);
+    if (!d) continue;
+    if (!DOMAIN_RE.test(d) || d.length > 253) { rejected.push(raw); continue; }
+    if (seen.has(d)) continue;
+    seen.add(d);
+    ok.push(d);
+  }
+  return { ok, rejected };
+}
+
+export async function setAutoJoin(
+  ws: WorkspaceRecord,
+  domains: string[],
+  role: Exclude<Role, "owner">,
+): Promise<WorkspaceRecord> {
+  if (role !== "editor" && role !== "viewer") throw new Error("invalid_role");
+  ws.autoJoinDomains = domains;
+  ws.autoJoinRole = role;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Apply domain auto-join for a freshly-signed-in user. Scans every
+ * workspace, adds the user as a member of each workspace whose
+ * `autoJoinDomains` contains the user's email domain, and returns the
+ * list of workspaces the user was added to (for audit logging).
+ *
+ * Cross-tenant safe: we only mutate workspaces whose owner explicitly
+ * listed the domain. Existing members are left untouched. SSO-enforced
+ * workspaces never auto-join from magic-link sign-ins (caller passes
+ * `viaSso` so we can gate that).
+ */
+export async function applyAutoJoinForUser(opts: {
+  userId: string;
+  email: string;
+  viaSso: boolean;
+}): Promise<WorkspaceRecord[]> {
+  const email = opts.email.toLowerCase();
+  const at = email.lastIndexOf("@");
+  if (at < 0) return [];
+  const domain = email.slice(at + 1);
+  if (!domain) return [];
+  const all = await listWorkspaces();
+  const joined: WorkspaceRecord[] = [];
+  for (const ws of all) {
+    const list = Array.isArray(ws.autoJoinDomains) ? ws.autoJoinDomains : [];
+    if (!list.includes(domain)) continue;
+    // If this workspace enforces SSO for the user's domain, only auto-join
+    // when the sign-in actually came through SSO.
+    if (ws.sso && ws.sso.enforced && ws.sso.allowedDomain === domain && !opts.viaSso) {
+      continue;
+    }
+    if (ws.members.some((m) => m.userId === opts.userId)) continue;
+    const role: Role = ws.autoJoinRole === "editor" ? "editor" : "viewer";
+    ws.members.push({
+      userId: opts.userId,
+      email: opts.email,
+      role,
+      joinedAt: Date.now(),
+    });
+    await writeJson(workspacePath(ws.id), ws);
+    await addToMemberIndex(opts.userId, ws.id);
+    joined.push(ws);
+  }
+  return joined;
 }
 
 export async function listWorkspaces(): Promise<WorkspaceRecord[]> {
