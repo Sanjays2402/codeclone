@@ -225,3 +225,50 @@ export async function setUserTtl(userId: string, ttlSec: number): Promise<number
   await writeJson(ttlPath(userId), { ttlSec: clamped, updatedAt: Date.now() });
   return clamped;
 }
+
+/**
+ * Enforce a concurrent-session cap for a user.
+ *
+ * After persisting a brand-new session, the caller invokes this with the
+ * owner-configured cap (the strictest non-zero value across the user's
+ * workspaces; see `effectiveSessionPolicyForUser`). If the total number of
+ * active sessions exceeds the cap, the oldest sessions (by `createdAt`,
+ * tie-broken by `jti` for determinism) are revoked one by one until the
+ * count drops to the cap. The just-issued session is always preserved by
+ * passing its `jti` as `keepJti`.
+ *
+ * Returns the list of evicted SessionRecords so the caller can audit them.
+ * Pass cap <= 0 to mean "no cap" - this is a no-op.
+ *
+ * Note: cross-tenant isolation is preserved by construction. Sessions are
+ * stored under the user's own directory and listed/revoked per userId, so
+ * a workspace-scoped cap can never reach into another user's sessions.
+ */
+export async function enforceConcurrentSessionCap(
+  userId: string,
+  cap: number,
+  keepJti: string,
+): Promise<SessionRecord[]> {
+  if (!Number.isFinite(cap) || cap <= 0) return [];
+  const active = await listSessions(userId);
+  if (active.length <= cap) return [];
+  // Oldest first; if multiple sessions share a createdAt the jti acts as a
+  // stable tie-breaker so the same set is evicted regardless of fs order.
+  const ordered = [...active].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    return a.jti < b.jti ? -1 : a.jti > b.jti ? 1 : 0;
+  });
+  const evicted: SessionRecord[] = [];
+  // We need to evict (active.length - cap) entries. Never touch keepJti.
+  let toEvict = active.length - cap;
+  for (const s of ordered) {
+    if (toEvict <= 0) break;
+    if (s.jti === keepJti) continue;
+    if (s.revokedAt) continue;
+    if (await revokeSession(userId, s.jti)) {
+      evicted.push(s);
+      toEvict -= 1;
+    }
+  }
+  return evicted;
+}

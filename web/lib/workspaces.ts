@@ -160,6 +160,13 @@ export interface WorkspaceRecord {
   sessionPolicy?: {
     maxLifetimeSec: number;
     idleTimeoutSec: number;
+    /**
+     * Maximum number of concurrently active server-side sessions a single
+     * member may hold. When a new sign-in would exceed the cap, the oldest
+     * sessions for that user are revoked (and audited) so the cap is
+     * always satisfied. 0 means "no limit from this workspace".
+     */
+    maxConcurrentSessions: number;
     updatedAt: number;
     updatedBy: string;
   } | null;
@@ -666,11 +673,15 @@ export function retentionCutoffMs(ws: WorkspaceRecord, now = Date.now()): number
 export const SESSION_POLICY_BOUNDS = {
   maxLifetime: { min: 5 * 60, max: 60 * 60 * 24 * 90 },
   idleTimeout: { min: 60, max: 60 * 60 * 24 * 30 },
+  maxConcurrentSessions: { min: 1, max: 20 },
 } as const;
 
 export function sanitizeSessionPolicy(
-  input: { maxLifetimeSec?: unknown; idleTimeoutSec?: unknown } | null | undefined,
-): { maxLifetimeSec: number; idleTimeoutSec: number } | null {
+  input:
+    | { maxLifetimeSec?: unknown; idleTimeoutSec?: unknown; maxConcurrentSessions?: unknown }
+    | null
+    | undefined,
+): { maxLifetimeSec: number; idleTimeoutSec: number; maxConcurrentSessions: number } | null {
   if (!input || typeof input !== "object") return null;
   const max = Number((input as Record<string, unknown>).maxLifetimeSec);
   const idle = Number((input as Record<string, unknown>).idleTimeoutSec);
@@ -687,22 +698,40 @@ export function sanitizeSessionPolicy(
         SESSION_POLICY_BOUNDS.idleTimeout.max,
         Math.max(SESSION_POLICY_BOUNDS.idleTimeout.min, Math.floor(idle)),
       );
-  return { maxLifetimeSec: mi, idleTimeoutSec: id };
+  // maxConcurrentSessions: optional in body for back-compat. Anything
+  // non-finite or <= 0 collapses to 0 ("no cap from this workspace").
+  const capRaw = (input as Record<string, unknown>).maxConcurrentSessions;
+  let cap = 0;
+  if (capRaw !== undefined && capRaw !== null) {
+    const c = Number(capRaw);
+    if (Number.isFinite(c) && c >= 1) {
+      cap = Math.min(
+        SESSION_POLICY_BOUNDS.maxConcurrentSessions.max,
+        Math.max(SESSION_POLICY_BOUNDS.maxConcurrentSessions.min, Math.floor(c)),
+      );
+    }
+  }
+  return { maxLifetimeSec: mi, idleTimeoutSec: id, maxConcurrentSessions: cap };
 }
 
 // Replace the workspace session policy. Pass null (or both values 0) to
 // clear. Caller must enforce owner permission and write the audit entry.
 export async function setSessionPolicy(
   ws: WorkspaceRecord,
-  policy: { maxLifetimeSec: number; idleTimeoutSec: number } | null,
+  policy: { maxLifetimeSec: number; idleTimeoutSec: number; maxConcurrentSessions?: number } | null,
   actor: string,
 ): Promise<WorkspaceRecord> {
-  if (!policy || (policy.maxLifetimeSec === 0 && policy.idleTimeoutSec === 0)) {
+  const cap = policy?.maxConcurrentSessions ?? 0;
+  if (
+    !policy ||
+    (policy.maxLifetimeSec === 0 && policy.idleTimeoutSec === 0 && cap === 0)
+  ) {
     ws.sessionPolicy = null;
   } else {
     ws.sessionPolicy = {
       maxLifetimeSec: policy.maxLifetimeSec,
       idleTimeoutSec: policy.idleTimeoutSec,
+      maxConcurrentSessions: cap,
       updatedAt: Date.now(),
       updatedBy: actor,
     };
@@ -874,12 +903,25 @@ export async function effectiveMfaPolicyForUser(
 // they belong to. Strictest non-zero wins; 0 means no limit.
 export async function effectiveSessionPolicyForUser(
   userId: string,
-): Promise<{ maxLifetimeSec: number; idleTimeoutSec: number; sourceWorkspaceId: string | null }> {
+): Promise<{
+  maxLifetimeSec: number;
+  idleTimeoutSec: number;
+  maxConcurrentSessions: number;
+  sourceWorkspaceId: string | null;
+  capSourceWorkspaceId: string | null;
+}> {
   const workspaces = await listWorkspacesForUser(userId);
   let max = 0;
   let idle = 0;
+  let cap = 0;
   let source: string | null = null;
+  let capSource: string | null = null;
   for (const w of workspaces) {
+    // Only members in good standing should be constrained by a workspace.
+    // isMemberActive already excludes expired support grants and suspended
+    // accounts so a stale link cannot extend a workspace's reach.
+    const m = w.members.find((x) => x.userId === userId);
+    if (!m || !isMemberActive(m)) continue;
     const p = w.sessionPolicy;
     if (!p) continue;
     if (p.maxLifetimeSec > 0 && (max === 0 || p.maxLifetimeSec < max)) {
@@ -890,8 +932,19 @@ export async function effectiveSessionPolicyForUser(
       idle = p.idleTimeoutSec;
       source = source ?? w.id;
     }
+    const pCap = p.maxConcurrentSessions ?? 0;
+    if (pCap > 0 && (cap === 0 || pCap < cap)) {
+      cap = pCap;
+      capSource = w.id;
+    }
   }
-  return { maxLifetimeSec: max, idleTimeoutSec: idle, sourceWorkspaceId: source };
+  return {
+    maxLifetimeSec: max,
+    idleTimeoutSec: idle,
+    maxConcurrentSessions: cap,
+    sourceWorkspaceId: source,
+    capSourceWorkspaceId: capSource,
+  };
 }
 
 /**

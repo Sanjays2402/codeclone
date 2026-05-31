@@ -36,12 +36,19 @@ export const dynamic = "force-dynamic";
 
 function publicPolicy(ws: Awaited<ReturnType<typeof getWorkspace>>) {
   if (!ws || !ws.sessionPolicy) {
-    return { maxLifetimeSec: 0, idleTimeoutSec: 0, updatedAt: null, updatedBy: null };
+    return {
+      maxLifetimeSec: 0,
+      idleTimeoutSec: 0,
+      maxConcurrentSessions: 0,
+      updatedAt: null,
+      updatedBy: null,
+    };
   }
   const p = ws.sessionPolicy;
   return {
     maxLifetimeSec: p.maxLifetimeSec,
     idleTimeoutSec: p.idleTimeoutSec,
+    maxConcurrentSessions: p.maxConcurrentSessions ?? 0,
     updatedAt: p.updatedAt,
     updatedBy: p.updatedBy,
   };
@@ -93,8 +100,12 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     return NextResponse.json({ error: "invalid_policy" }, { status: 400 });
   }
   const before = ws.sessionPolicy
-    ? { maxLifetimeSec: ws.sessionPolicy.maxLifetimeSec, idleTimeoutSec: ws.sessionPolicy.idleTimeoutSec }
-    : { maxLifetimeSec: 0, idleTimeoutSec: 0 };
+    ? {
+        maxLifetimeSec: ws.sessionPolicy.maxLifetimeSec,
+        idleTimeoutSec: ws.sessionPolicy.idleTimeoutSec,
+        maxConcurrentSessions: ws.sessionPolicy.maxConcurrentSessions ?? 0,
+      }
+    : { maxLifetimeSec: 0, idleTimeoutSec: 0, maxConcurrentSessions: 0 };
   const updated = await setSessionPolicy(ws, sanitized, user.id);
   await tryRecordAudit(req, {
     action: "workspace.session_policy_update",
@@ -130,8 +141,12 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const before = ws.sessionPolicy
-    ? { maxLifetimeSec: ws.sessionPolicy.maxLifetimeSec, idleTimeoutSec: ws.sessionPolicy.idleTimeoutSec }
-    : { maxLifetimeSec: 0, idleTimeoutSec: 0 };
+    ? {
+        maxLifetimeSec: ws.sessionPolicy.maxLifetimeSec,
+        idleTimeoutSec: ws.sessionPolicy.idleTimeoutSec,
+        maxConcurrentSessions: ws.sessionPolicy.maxConcurrentSessions ?? 0,
+      }
+    : { maxLifetimeSec: 0, idleTimeoutSec: 0, maxConcurrentSessions: 0 };
   const updated = await setSessionPolicy(ws, null, user.id);
   await tryRecordAudit(req, {
     action: "workspace.session_policy_update",
@@ -141,7 +156,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     target: { type: "workspace", id: ws.id, label: ws.name },
     diff: {
       before: { sessionPolicy: before },
-      after: { sessionPolicy: { maxLifetimeSec: 0, idleTimeoutSec: 0 } },
+      after: { sessionPolicy: { maxLifetimeSec: 0, idleTimeoutSec: 0, maxConcurrentSessions: 0 } },
     },
   });
   return NextResponse.json({ policy: publicPolicy(updated) });

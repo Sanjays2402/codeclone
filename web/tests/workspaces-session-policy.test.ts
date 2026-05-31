@@ -29,7 +29,7 @@ const sessions = await import("../lib/sessions.ts");
 test("sanitizeSessionPolicy clamps to bounds and respects 0", () => {
   assert.deepEqual(
     ws.sanitizeSessionPolicy({ maxLifetimeSec: 0, idleTimeoutSec: 0 }),
-    { maxLifetimeSec: 0, idleTimeoutSec: 0 },
+    { maxLifetimeSec: 0, idleTimeoutSec: 0, maxConcurrentSessions: 0 },
   );
   const huge = ws.sanitizeSessionPolicy({ maxLifetimeSec: 9999999999, idleTimeoutSec: 9999999999 });
   assert.ok(huge);

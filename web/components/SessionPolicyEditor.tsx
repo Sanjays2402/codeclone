@@ -7,18 +7,22 @@ interface PolicyResponse {
   policy: {
     maxLifetimeSec: number;
     idleTimeoutSec: number;
+    maxConcurrentSessions: number;
     updatedAt: number | null;
     updatedBy: string | null;
   };
   effective: {
     maxLifetimeSec: number;
     idleTimeoutSec: number;
+    maxConcurrentSessions: number;
     sourceWorkspaceId: string | null;
+    capSourceWorkspaceId: string | null;
   };
   canEdit: boolean;
   bounds: {
     maxLifetime: { min: number; max: number };
     idleTimeout: { min: number; max: number };
+    maxConcurrentSessions: { min: number; max: number };
   };
 }
 
@@ -51,6 +55,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [maxLifetimeSec, setMaxLifetimeSec] = useState(0);
   const [idleTimeoutSec, setIdleTimeoutSec] = useState(0);
+  const [maxConcurrentSessions, setMaxConcurrentSessions] = useState(0);
   const [saving, setSaving] = useState(false);
   const [savedFlash, setSavedFlash] = useState(false);
 
@@ -64,6 +69,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
       setData(j);
       setMaxLifetimeSec(j.policy.maxLifetimeSec);
       setIdleTimeoutSec(j.policy.idleTimeoutSec);
+      setMaxConcurrentSessions(j.policy.maxConcurrentSessions);
       setStatus("ready");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -81,7 +87,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
       const r = await fetch(`/api/workspaces/${workspaceId}/session-policy`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ maxLifetimeSec, idleTimeoutSec }),
+        body: JSON.stringify({ maxLifetimeSec, idleTimeoutSec, maxConcurrentSessions }),
       });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -91,6 +97,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
       setData((d) => (d ? { ...d, policy: j.policy } : d));
       setMaxLifetimeSec(j.policy.maxLifetimeSec);
       setIdleTimeoutSec(j.policy.idleTimeoutSec);
+      setMaxConcurrentSessions(j.policy.maxConcurrentSessions);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (e) {
@@ -98,7 +105,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [data?.canEdit, idleTimeoutSec, maxLifetimeSec, workspaceId]);
+  }, [data?.canEdit, idleTimeoutSec, maxLifetimeSec, maxConcurrentSessions, workspaceId]);
 
   const clear = useCallback(async () => {
     if (!data?.canEdit) return;
@@ -111,6 +118,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
       setData((d) => (d ? { ...d, policy: j.policy } : d));
       setMaxLifetimeSec(0);
       setIdleTimeoutSec(0);
+      setMaxConcurrentSessions(0);
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 1500);
     } catch (e) {
@@ -121,7 +129,9 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
   }, [data?.canEdit, workspaceId]);
 
   const dirty = data
-    ? maxLifetimeSec !== data.policy.maxLifetimeSec || idleTimeoutSec !== data.policy.idleTimeoutSec
+    ? maxLifetimeSec !== data.policy.maxLifetimeSec ||
+      idleTimeoutSec !== data.policy.idleTimeoutSec ||
+      maxConcurrentSessions !== data.policy.maxConcurrentSessions
     : false;
 
   return (
@@ -190,11 +200,33 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
                   {fmtDuration(idleTimeoutSec)} (min {fmtDuration(data.bounds.idleTimeout.min)}, max {fmtDuration(data.bounds.idleTimeout.max)})
                 </span>
               </label>
+
+              <label className="block sm:col-span-2">
+                <span className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-4)] block mb-1">
+                  max concurrent sessions per member
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={data.bounds.maxConcurrentSessions.max}
+                  value={maxConcurrentSessions}
+                  disabled={!data.canEdit || saving}
+                  onChange={(e) => setMaxConcurrentSessions(Math.max(0, parseInt(e.target.value || "0", 10) || 0))}
+                  className="w-full px-3 h-9 rounded border border-[var(--color-rule)] bg-[var(--color-paper)] text-[13px] mono disabled:opacity-60"
+                />
+                <span className="mono text-[10.5px] text-[var(--color-ink-4)] mt-1 block">
+                  {maxConcurrentSessions === 0
+                    ? "no cap (any number of active sign-ins allowed)"
+                    : `cap at ${maxConcurrentSessions} (oldest session is revoked on a new sign-in)`}
+                  {" "}(min {data.bounds.maxConcurrentSessions.min}, max {data.bounds.maxConcurrentSessions.max})
+                </span>
+              </label>
             </div>
 
             <div className="mono text-[10.5px] text-[var(--color-ink-4)] mb-3">
               effective for you: lifetime {fmtDuration(data.effective.maxLifetimeSec)},
-              idle {fmtDuration(data.effective.idleTimeoutSec)}
+              idle {fmtDuration(data.effective.idleTimeoutSec)},
+              cap {data.effective.maxConcurrentSessions === 0 ? "none" : data.effective.maxConcurrentSessions}
               {data.effective.sourceWorkspaceId && data.effective.sourceWorkspaceId !== workspaceId
                 ? " (set by another workspace)"
                 : ""}
@@ -213,7 +245,7 @@ export function SessionPolicyEditor({ workspaceId }: Props) {
                 <button
                   type="button"
                   onClick={clear}
-                  disabled={saving || (maxLifetimeSec === 0 && idleTimeoutSec === 0 && !data.policy.updatedAt)}
+                  disabled={saving || (maxLifetimeSec === 0 && idleTimeoutSec === 0 && maxConcurrentSessions === 0 && !data.policy.updatedAt)}
                   className="inline-flex items-center gap-1.5 px-3 h-9 rounded border border-[var(--color-rule)] text-[13px] text-[var(--color-ink-3)] disabled:opacity-50 hover:bg-[var(--color-paper-2)]"
                 >
                   <Trash weight="duotone" size={14} /> remove policy

@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Concurrent session cap per member. Workspace owners now set a maximum number of simultaneously active server-side sessions any one member may hold (1 to 20, or 0 for no cap), enforced on every sign-in path. The cap lives on the existing `sessionPolicy` record alongside `maxLifetimeSec` and `idleTimeoutSec`, sanitized server-side, persisted by `setSessionPolicy`, and surfaced read-only via `effectiveSessionPolicyForUser` which picks the strictest non-zero cap across only the workspaces the user is an active member of. Cross-tenant isolation is structural: sessions are stored per userId, so a workspace cap can never reach into a non-member's sessions. Enforcement runs in `enforceConcurrentSessionCap` (web/lib/sessions.ts), which is called from both `/api/auth/verify` (magic link) and `/api/auth/sso/[workspaceId]/callback` (OIDC) immediately after `createSession`. When the cap is exceeded, the oldest sessions are revoked first (ordered by `createdAt`, jti as tie-breaker), the just-issued session is preserved by jti, and every eviction writes a `session.evicted_for_cap` audit row with the cap, source workspace, evicted jti, original IP, and login channel (`magic_link` or `sso`) so a SOC2 reviewer can reconstruct exactly who was forced off. The session-policy editor at `/workspaces/<id>` exposes a third field with a clear "oldest session is revoked on a new sign-in" hint and shows the effective cap below the inputs. Four regression tests in `web/tests/workspaces-session-cap.test.ts` pin the contract (sanitize bounds and zero default, persist and clear on all-zero, strictest-cap selection with cross-tenant isolation between two unrelated workspace owners, and end-to-end eviction that revokes the oldest two of four sessions while leaving another user's session untouched). Covers the standard procurement ask (SOC 2 CC6.1, NIST 800-53 AC-10): "the number of concurrent sessions for a user account is limited."
+
+### Try it: cap members at one active session
+
+```sh
+cd web && npm run dev   # http://localhost:3000
+
+# Owner sets the cap at 1 (also keeps any existing lifetime/idle limits).
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/session-policy \
+  -H 'cookie: cc_session=...' \
+  -H 'content-type: application/json' \
+  -d '{"maxLifetimeSec": 0, "idleTimeoutSec": 0, "maxConcurrentSessions": 1}'
+
+# Members can read the effective cap (strictest non-zero across their workspaces).
+curl -s http://localhost:3000/api/workspaces/$WS_ID/session-policy \
+  -H 'cookie: cc_session=...' | jq '.effective.maxConcurrentSessions'
+# 1
+
+# Sign in a second time and watch /audit for a session.evicted_for_cap row
+# pointing at the older jti. The newer session keeps working.
+```
+
 - Trust center and baseline security headers. Every dashboard and API response now carries the headers an enterprise procurement review checks for: a strict `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, locked `base-uri` and `form-action`), `Strict-Transport-Security` with preload, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, a hardware-denying `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, and `Cross-Origin-Resource-Policy: same-origin`. The header set is built by `web/lib/security-headers.ts::buildSecurityHeaders`, applied by the existing Edge middleware on every route, and pinned by `web/tests/security-headers.test.ts` so a regression that drops one fails CI. A new server-rendered `/trust` page reads the same function and renders the live header values next to a shipped-controls matrix (SSO, SCIM, MFA, RBAC, tamper-evident audit, residency, IP allowlists, rate limits, redaction, GDPR export, webhook HMAC), the subprocessor list, and the vulnerability disclosure contacts so a security reviewer can verify the posture in one URL. The disclosure policy is also published machine-readably at `/.well-known/security.txt` (RFC 9116) with `Contact`, `Expires`, `Canonical`, `Policy`, and `Acknowledgments` lines pointing back at SECURITY.md and the trust page. Covers the standard procurement ask (SOC 2 CC6.7, OWASP ASVS V14.4): "the application sets the documented set of security response headers and publishes a vulnerability disclosure channel."
 
 ### Try it: inspect the trust posture

@@ -30,9 +30,13 @@ import {
   newJti,
   clientIpFromHeaders,
   getUserTtl,
+  enforceConcurrentSessionCap,
 } from "../../../../../../lib/sessions";
 import { tryRecordAudit } from "../../../../../../lib/audit";
-import { applyAutoJoinForUser } from "../../../../../../lib/workspaces";
+import {
+  applyAutoJoinForUser,
+  effectiveSessionPolicyForUser,
+} from "../../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -148,6 +152,31 @@ export async function GET(req: Request, ctx: { params: Promise<{ workspaceId: st
   const ip = clientIpFromHeaders(req.headers);
   const ua = req.headers.get("user-agent");
   await createSession({ userId: user.id, jti, ttlSec, ip, userAgent: ua });
+  try {
+    const eff = await effectiveSessionPolicyForUser(user.id);
+    if (eff.maxConcurrentSessions > 0) {
+      const evicted = await enforceConcurrentSessionCap(
+        user.id,
+        eff.maxConcurrentSessions,
+        jti,
+      );
+      for (const ev of evicted) {
+        await tryRecordAudit(req, {
+          action: "session.evicted_for_cap",
+          actorId: user.id,
+          actorEmail: email,
+          workspaceId: eff.capSourceWorkspaceId ?? ws.id,
+          target: { type: "session", id: ev.jti },
+          meta: {
+            cap: eff.maxConcurrentSessions,
+            via: "sso",
+            evictedCreatedAt: ev.createdAt,
+            evictedIp: ev.createdIp,
+          },
+        });
+      }
+    }
+  } catch { /* never block sign-in on cap enforcement */ }
   const session = signSession(user.id, ttlSec, jti);
 
   const dest = claims.redirect && claims.redirect.startsWith("/") && !claims.redirect.startsWith("//")
