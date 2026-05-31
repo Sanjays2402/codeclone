@@ -1,18 +1,23 @@
 /**
  * Next.js middleware.
  *
- * Assigns a request id to every request so logs, audit entries, and the
- * client response can be correlated end to end. Customers see the id in
- * the `X-Request-Id` response header and can quote it in support tickets.
+ * Two jobs, both running on every request:
  *
- * Runs on the Edge runtime, so we keep this dependency-free.
+ * 1. Assigns a request id (`X-Request-Id`) so logs, audit entries, and
+ *    the client response correlate end to end. Customers see the id in
+ *    the response header and can quote it in support tickets.
+ *
+ * 2. Applies the baseline security headers every enterprise procurement
+ *    review asks for. The header set lives in `lib/security-headers.ts`
+ *    so tests (and the /trust page) can verify it without pulling in
+ *    `next/server`.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { buildSecurityHeaders } from "./lib/security-headers";
 
 const HEADER = "x-request-id";
 
 function newId(): string {
-  // crypto.randomUUID is available on the Edge runtime.
   const u = crypto.randomUUID().replace(/-/g, "");
   return u.slice(0, 16);
 }
@@ -27,10 +32,22 @@ export function middleware(req: NextRequest) {
 
   const res = NextResponse.next({ request: { headers: requestHeaders } });
   res.headers.set(HEADER, rid);
+
+  // Apply baseline security headers. Safe to set on both HTML and JSON
+  // responses because they govern UA behaviour, not the payload format.
+  // Route handlers that need to override (rare) can pre-set the header.
+  for (const [name, value] of Object.entries(buildSecurityHeaders())) {
+    if (!res.headers.has(name)) {
+      res.headers.set(name, value);
+    }
+  }
+
   return res;
 }
 
 export const config = {
-  // Run on every request except Next's internal asset endpoints.
+  // Run on every request except Next's internal asset endpoints. The
+  // .well-known paths are intentionally included so security.txt picks
+  // up the headers too.
   matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

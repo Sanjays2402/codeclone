@@ -28,6 +28,7 @@ const items = [
   { href: "/notifications", label: "inbox" },
   { href: "/workspaces", label: "team" },
   { href: "/audit", label: "audit" },
+  { href: "/trust", label: "trust" },
   { href: "/status", label: "status" },
   { href: "/settings", label: "settings" },
 ];

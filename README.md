@@ -10,6 +10,23 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Trust center and baseline security headers. Every dashboard and API response now carries the headers an enterprise procurement review checks for: a strict `Content-Security-Policy` (`default-src 'self'`, `frame-ancestors 'none'`, `object-src 'none'`, locked `base-uri` and `form-action`), `Strict-Transport-Security` with preload, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, a hardware-denying `Permissions-Policy`, `Cross-Origin-Opener-Policy: same-origin`, and `Cross-Origin-Resource-Policy: same-origin`. The header set is built by `web/lib/security-headers.ts::buildSecurityHeaders`, applied by the existing Edge middleware on every route, and pinned by `web/tests/security-headers.test.ts` so a regression that drops one fails CI. A new server-rendered `/trust` page reads the same function and renders the live header values next to a shipped-controls matrix (SSO, SCIM, MFA, RBAC, tamper-evident audit, residency, IP allowlists, rate limits, redaction, GDPR export, webhook HMAC), the subprocessor list, and the vulnerability disclosure contacts so a security reviewer can verify the posture in one URL. The disclosure policy is also published machine-readably at `/.well-known/security.txt` (RFC 9116) with `Contact`, `Expires`, `Canonical`, `Policy`, and `Acknowledgments` lines pointing back at SECURITY.md and the trust page. Covers the standard procurement ask (SOC 2 CC6.7, OWASP ASVS V14.4): "the application sets the documented set of security response headers and publishes a vulnerability disclosure channel."
+
+### Try it: inspect the trust posture
+
+```sh
+cd web && npm run dev   # http://localhost:3000
+
+# Browse the live posture page.
+open http://localhost:3000/trust
+
+# Headers on any response, dashboard or API.
+curl -sI http://localhost:3000/ | grep -iE 'content-security-policy|strict-transport|x-frame-options|permissions-policy|referrer-policy'
+
+# Machine-readable disclosure policy.
+curl -s http://localhost:3000/.well-known/security.txt
+```
+
 - Tamper-evident inference audit log. Every row written by the `/v1/*` audit middleware now carries `seq`, `prev_hash`, and `hash` (sha256 over canonical JSON of the row payload chained from the previous row's hash), with a sidecar `audit.log.state` for crash recovery and chain resume on restart. A new admin-scoped endpoint `GET /v1/audit/verify` walks the on-disk JSONL, recomputes every link, and returns `{ok, total_entries, chained_entries, legacy_entries, last_hash, last_seq, broken_at_seq, broken_reason, chain_head}` with HTTP 200 on a clean chain and 409 plus `X-Audit-Chain-Status: broken` on tampering. Compliance teams pin `last_hash` externally so any silent rewrite of the log fails verification on the next run; rotation is preserved because the chain extends across rotated files as the writer reloads its tail. The audit dashboard at `/audit` grows a `verify serve chain` button next to the existing web chain verifier; the new Next.js route `/api/audit/serve-verify` proxies to the serve service using `CODECLONE_SERVE_ADMIN_KEY` so the admin token never reaches the browser, and the verification call itself is audited. Pinned by `services/serve/tests/test_audit_chain.py` (every row chains, endpoint returns ok on clean log, non-admin keys get 403, payload tampering surfaces `broken_at_seq` with HTTP 409). Covers the standard procurement ask (SOC 2 CC7.2, NIST 800-53 AU-9): "audit records are protected from unauthorized modification and integrity can be independently verified."
 
 ### Try it: verify the inference audit chain
