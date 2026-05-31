@@ -26,7 +26,13 @@ interface ApiKeySummary {
   revoked?: boolean;
   expiresAt?: number;
   expired?: boolean;
+  scopes?: string[];
 }
+
+const ALL_SCOPES = [
+  { id: "compare:write", label: "compare", desc: "POST /v1/compare" },
+  { id: "batch:write", label: "batch", desc: "POST /v1/batch" },
+] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";
 
@@ -69,6 +75,7 @@ export default function ApiKeysPage() {
   const [error, setError] = useState("");
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
+  const [scopes, setScopes] = useState<string[]>(["compare:write", "batch:write"]);
   const [creating, setCreating] = useState(false);
   const [reveal, setReveal] = useState<{ id: string; plaintext: string } | null>(null);
   const [busy, setBusy] = useState("");
@@ -112,6 +119,7 @@ export default function ApiKeysPage() {
         body: JSON.stringify({
           label: label.trim() || "Untitled key",
           ...(expNum ? { expiresInDays: expNum } : {}),
+          scopes,
         }),
       });
       if (res.status === 401) {
@@ -135,7 +143,7 @@ export default function ApiKeysPage() {
     } finally {
       setCreating(false);
     }
-  }, [label, expiresInDays, refresh]);
+  }, [label, expiresInDays, scopes, refresh]);
 
   const onRevoke = useCallback(
     async (id: string) => {
@@ -270,6 +278,45 @@ export default function ApiKeysPage() {
             {creating ? "Creating" : "Create key"}
           </button>
         </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <span className="mono text-[10px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] mr-1">scopes</span>
+          {ALL_SCOPES.map((s) => {
+            const checked = scopes.includes(s.id);
+            const disabled = checked && scopes.length === 1;
+            return (
+              <label
+                key={s.id}
+                title={s.desc + (disabled ? " (at least one scope required)" : "")}
+                className={`inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border cursor-pointer select-none ${
+                  checked
+                    ? "border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent-ink)]"
+                    : "border-[var(--color-rule)] text-[var(--color-ink-3)] hover:bg-[var(--color-paper-2)]"
+                } ${disabled ? "opacity-70 cursor-not-allowed" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  className="sr-only"
+                  checked={checked}
+                  disabled={disabled}
+                  onChange={(e) => {
+                    setScopes((cur) => {
+                      if (e.target.checked) {
+                        return cur.includes(s.id) ? cur : [...cur, s.id];
+                      }
+                      const next = cur.filter((x) => x !== s.id);
+                      return next.length === 0 ? cur : next;
+                    });
+                  }}
+                />
+                {checked ? <Check size={11} weight="bold" /> : <Plus size={11} weight="bold" />}
+                {s.label}
+              </label>
+            );
+          })}
+          <span className="mono text-[10.5px] text-[var(--color-ink-3)] hidden sm:inline">
+            limit a key to just what your integration needs
+          </span>
+        </div>
       </div>
 
       <H2 eyebrow="keys">Your keys</H2>
@@ -326,6 +373,32 @@ export default function ApiKeysPage() {
               </div>
               <div className="mono text-[11.5px] text-[var(--color-ink-2)] truncate">
                 {k.prefix}…
+                {Array.isArray(k.scopes) && (
+                  <div className="mt-0.5 flex flex-wrap gap-1">
+                    {k.scopes.length === 0 ? (
+                      <span className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-neg)] bg-[var(--color-neg-soft)]">
+                        no scopes
+                      </span>
+                    ) : (
+                      k.scopes.map((s) => (
+                        <span
+                          key={s}
+                          className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]"
+                        >
+                          {s.replace(":write", "")}
+                        </span>
+                      ))
+                    )}
+                  </div>
+                )}
+                {!Array.isArray(k.scopes) && (
+                  <span
+                    title="Legacy key issued before scoped permissions; treated as full access."
+                    className="ml-1 mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]"
+                  >
+                    full
+                  </span>
+                )}
               </div>
               <div className="mono tnum text-right text-[var(--color-ink-2)]">
                 {fmtInt(k.usageCount)}

@@ -184,3 +184,35 @@ test("api-keys: extractBearer handles Authorization and x-api-key", () => {
   const r3 = new Request("http://x");
   assert.equal(extractBearer(r3), null);
 });
+
+test("api-keys: scopes restrict access and legacy keys keep full access", async () => {
+  const { hasScope } = await import("../lib/api-keys.ts");
+
+  // Legacy key (no scopes field) authorizes everything.
+  const legacy = await createKey("legacy full");
+  const legacyRec = await loadKey(legacy.record.id);
+  assert.ok(legacyRec);
+  assert.equal(legacyRec!.scopes, undefined);
+  assert.equal(hasScope(legacyRec, "compare:write"), true);
+  assert.equal(hasScope(legacyRec, "batch:write"), true);
+
+  // Scoped to compare only.
+  const compareOnly = await createKey("ci compare", { scopes: ["compare:write"] });
+  assert.deepEqual(compareOnly.record.scopes, ["compare:write"]);
+  const compareRec = await loadKey(compareOnly.record.id);
+  assert.equal(hasScope(compareRec, "compare:write"), true);
+  assert.equal(hasScope(compareRec, "batch:write"), false);
+
+  // Garbage/unknown scopes are dropped silently. Empty after filter -> no scopes field.
+  const garbage = await createKey("garbage", { scopes: ["nonsense", 42, ""] });
+  assert.equal(garbage.record.scopes, undefined);
+
+  // Duplicates collapse and result is sorted.
+  const dup = await createKey("dup", {
+    scopes: ["batch:write", "compare:write", "batch:write"],
+  });
+  assert.deepEqual(dup.record.scopes, ["batch:write", "compare:write"]);
+
+  // Null record is unauthorized.
+  assert.equal(hasScope(null, "compare:write"), false);
+});

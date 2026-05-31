@@ -10,6 +10,7 @@ import { NextResponse } from "next/server";
 import {
   extractBearer,
   findByPlaintext,
+  hasScope,
   recordUse,
 } from "../../../../lib/api-keys";
 import { dispatchEvent } from "../../../../lib/webhooks";
@@ -41,6 +42,19 @@ export async function POST(req: Request) {
   const key = await findByPlaintext(token);
   if (!key) {
     return unauthorized("Invalid or revoked API key.");
+  }
+  if (!hasScope(key, "batch:write")) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "insufficient_scope",
+          message: "This key is missing the 'batch:write' scope. Rotate it with the scope enabled or issue a new key.",
+          required_scope: "batch:write",
+          granted_scopes: key.scopes ?? null,
+        },
+      },
+      { status: 403 },
+    );
   }
 
   const quota = await quotaCheck();

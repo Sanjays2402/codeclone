@@ -23,6 +23,47 @@ const SECRET_BYTES = 24; // 24 random bytes -> 32 base64url chars
 const MAX_LABEL_LEN = 60;
 const ID_LEN = 10;
 
+/**
+ * Canonical scope identifiers. A key is granted one or more scopes at
+ * creation (or rotation) time; /v1 endpoints reject calls that present
+ * a key missing the required scope. Legacy keys with no `scopes` field
+ * are treated as fully privileged so older integrations keep working.
+ */
+export const ALL_SCOPES = [
+  "compare:write",
+  "batch:write",
+] as const;
+export type Scope = (typeof ALL_SCOPES)[number];
+
+export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
+  "compare:write": "Call POST /v1/compare on two snippets.",
+  "batch:write": "Call POST /v1/batch for bulk pairwise comparisons.",
+};
+
+function normalizeScopes(input: unknown): Scope[] | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (!Array.isArray(input)) return undefined;
+  const valid = new Set<string>(ALL_SCOPES);
+  const out = new Set<Scope>();
+  for (const raw of input) {
+    if (typeof raw !== "string") continue;
+    const v = raw.trim().toLowerCase();
+    if (valid.has(v)) out.add(v as Scope);
+  }
+  if (out.size === 0) return undefined;
+  return [...out].sort();
+}
+
+export function hasScope(
+  rec: { scopes?: string[] } | null | undefined,
+  required: Scope,
+): boolean {
+  if (!rec) return false;
+  // Legacy keys (no scopes recorded) keep working with full privileges.
+  if (!Array.isArray(rec.scopes)) return true;
+  return rec.scopes.includes(required);
+}
+
 export interface ApiKeyRecord {
   v: 1;
   id: string;
@@ -35,6 +76,7 @@ export interface ApiKeyRecord {
   revoked?: boolean;
   userId?: string; // owning user; absent on legacy/unscoped records
   expiresAt?: number; // optional epoch ms; absent means never expires
+  scopes?: Scope[]; // permission scopes; absent on legacy records = full access
 }
 
 export interface ApiKeySummary {
@@ -48,6 +90,7 @@ export interface ApiKeySummary {
   userId?: string;
   expiresAt?: number;
   expired?: boolean;
+  scopes?: Scope[];
 }
 
 const MAX_EXPIRES_DAYS = 365;
@@ -99,6 +142,7 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     userId: rec.userId,
     expiresAt: rec.expiresAt,
     expired: isExpired(rec),
+    scopes: rec.scopes,
   };
 }
 
@@ -110,6 +154,7 @@ export interface CreatedKey {
 export interface CreateOptions {
   userId?: string;
   expiresInDays?: unknown;
+  scopes?: unknown;
 }
 
 export async function createKey(label: unknown, opts: CreateOptions = {}): Promise<CreatedKey> {
@@ -139,6 +184,8 @@ export async function createKey(label: unknown, opts: CreateOptions = {}): Promi
     }
     const exp = normalizeExpiresInDays(opts.expiresInDays);
     if (exp) rec.expiresAt = exp;
+    const scopes = normalizeScopes(opts.scopes);
+    if (scopes) rec.scopes = scopes;
     await fs.writeFile(file, JSON.stringify(rec), "utf-8");
     return { record: summarize(rec), plaintext };
   }

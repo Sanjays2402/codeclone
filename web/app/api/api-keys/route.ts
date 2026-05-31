@@ -27,6 +27,7 @@ export async function GET(req: Request) {
 interface CreateBody {
   label?: unknown;
   expiresInDays?: unknown;
+  scopes?: unknown;
 }
 
 export async function POST(req: Request) {
@@ -42,6 +43,7 @@ export async function POST(req: Request) {
     const { record, plaintext } = await createKey(body.label, {
       userId: user.id,
       expiresInDays: body.expiresInDays,
+      scopes: body.scopes,
     });
     return NextResponse.json({ key: record, plaintext }, { status: 201 });
   } catch (e) {

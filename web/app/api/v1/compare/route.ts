@@ -4,7 +4,7 @@
  * curl this directly with a documented contract.
  */
 import { NextResponse } from "next/server";
-import { extractBearer, findByPlaintext, recordUse } from "../../../../lib/api-keys";
+import { extractBearer, findByPlaintext, hasScope, recordUse } from "../../../../lib/api-keys";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
@@ -42,6 +42,19 @@ export async function POST(req: Request) {
   const key = await findByPlaintext(token);
   if (!key) {
     return unauthorized("Invalid or revoked API key.");
+  }
+  if (!hasScope(key, "compare:write")) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "insufficient_scope",
+          message: "This key is missing the 'compare:write' scope. Rotate it with the scope enabled or issue a new key.",
+          required_scope: "compare:write",
+          granted_scopes: key.scopes ?? null,
+        },
+      },
+      { status: 403 },
+    );
   }
 
   const quota = await quotaCheck();
