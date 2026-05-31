@@ -19,6 +19,7 @@ import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
+import { WorkspaceDataControls } from "../../../components/WorkspaceDataControls";
 import { fmtTs } from "../../../lib/format";
 
 type Role = "owner" | "editor" | "viewer";
@@ -304,6 +305,15 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SsoEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <WorkspaceDataControls
+          workspaceId={ws.id}
+          workspaceSlug={ws.slug}
+          workspaceName={ws.name}
+          isOwner={ws.myRole === "owner"}
+        />
       )}
 
       {ws.myRole && ws.myRole !== "owner" && (
