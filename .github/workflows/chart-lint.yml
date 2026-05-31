@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - run: helm lint infra/helm/codeclone
       - run: helm template codeclone infra/helm/codeclone > /tmp/render.yaml
       - name: Smoke check rendered manifest (defaults)
