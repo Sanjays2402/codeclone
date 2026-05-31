@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { extractBearer, findByPlaintext, recordUse } from "../../../../lib/api-keys";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
+import { logUsage, quotaCheck } from "../../../../lib/usage";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,6 +42,31 @@ export async function POST(req: Request) {
   const key = await findByPlaintext(token);
   if (!key) {
     return unauthorized("Invalid or revoked API key.");
+  }
+
+  const quota = await quotaCheck();
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "quota_exceeded",
+          message: `Free tier monthly quota of ${quota.limit} requests reached. Upgrade to keep calling /v1/compare.`,
+        },
+        quota: {
+          monthToDate: quota.monthToDate,
+          limit: quota.limit,
+          remaining: 0,
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": "3600",
+          "x-codeclone-quota-limit": String(quota.limit),
+          "x-codeclone-quota-remaining": "0",
+        },
+      },
+    );
   }
 
   let raw: Body;
@@ -81,6 +107,13 @@ export async function POST(req: Request) {
 
   // Fire-and-forget usage recording; the response should not block on it.
   void recordUse(key.id);
+  void logUsage({
+    ts: Date.now(),
+    keyId: key.id,
+    endpoint: "/v1/compare",
+    bytes: Buffer.byteLength(a, "utf-8") + Buffer.byteLength(b, "utf-8"),
+    latencyMs: Number(latencyMs.toFixed(3)),
+  });
 
   // Fan-out to registered webhooks. Best-effort: failures are logged
   // per-delivery and never block the API response.
@@ -117,6 +150,8 @@ export async function POST(req: Request) {
       headers: {
         "x-codeclone-key-id": key.id,
         "x-codeclone-key-prefix": key.prefix,
+        "x-codeclone-quota-limit": String(quota.limit),
+        "x-codeclone-quota-remaining": String(Math.max(0, quota.remaining - 1)),
       },
     },
   );
