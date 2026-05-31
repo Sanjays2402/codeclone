@@ -27,6 +27,7 @@ from .auth import (
     verify_api_key,  # noqa: F401  (re-exported for back-compat)
 )
 from .data_lifecycle import register as register_data_lifecycle
+from .ip_allowlist import IpAllowlistMiddleware, parse_policy
 from .model_handle import ModelHandle, load_handle
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .readiness import ReadinessProbe
@@ -148,6 +149,30 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             sink.close()
 
     # ---- Rate limiting (per IP and per API key, token bucket) ----
+    # ---- Per-tenant IP allowlist ----
+    # Enterprise customers commonly require that API credentials only work
+    # from a fixed set of egress IPs. The allowlist is opt-in per tenant:
+    # tenants with no entry are unrestricted, so existing deployments are
+    # unaffected. Added BEFORE the rate limit middleware so that, given the
+    # last-added-runs-first wrapping order, the rate limiter still evaluates
+    # first (cheap brute-force defence) and only legitimate, throttled
+    # traffic reaches the CIDR check.
+    if settings.ip_allowlist_enabled:
+        policy = parse_policy(settings.ip_allowlist)
+        if policy:
+            app.state.ip_allowlist_policy = policy
+            app.add_middleware(
+                IpAllowlistMiddleware,
+                policy=policy,
+                trust_forwarded=settings.ratelimit_trust_forwarded,
+            )
+            log.info(
+                "ip_allowlist.enabled",
+                tenants=sorted(policy.keys()),
+            )
+        else:
+            log.info("ip_allowlist.disabled", reason="no tenant policies configured")
+
     if settings.ratelimit_enabled:
         app.add_middleware(
             RateLimitMiddleware,
@@ -165,6 +190,8 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             ),
             trust_forwarded=settings.ratelimit_trust_forwarded,
         )
+
+
 
     # ---- Observability: OpenTelemetry distributed tracing ----
     # No-op when OTEL_EXPORTER_OTLP_ENDPOINT is unset. When set, this installs

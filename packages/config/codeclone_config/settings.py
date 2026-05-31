@@ -182,6 +182,43 @@ class Settings(BaseSettings):
             raise ValueError(f"audit_log_backup_count must be >= 0, got {v}")
         return v
 
+    # ---- Per-tenant IP allowlist ----
+    # CSV of ``tenant=cidr1+cidr2`` entries. When a tenant has at least one
+    # CIDR configured, requests authenticated as that tenant whose client IP
+    # falls outside every listed network are rejected with HTTP 403. Tenants
+    # with no entry are unrestricted (backward compatible). The literal value
+    # ``tenant=*`` is also accepted as an explicit "allow any source" entry,
+    # useful when an operator wants to declare the policy is intentionally open.
+    # Example: ``acme=10.0.0.0/8+192.0.2.5/32,beta=*``.
+    ip_allowlist_enabled: bool = Field(
+        default=True, alias="CODECLONE_IP_ALLOWLIST_ENABLED"
+    )
+    ip_allowlist: str = Field(default="", alias="CODECLONE_IP_ALLOWLIST")
+
+    @field_validator("ip_allowlist")
+    @classmethod
+    def _ip_allowlist_shape(cls, v: str) -> str:
+        # Defer full CIDR parsing to the middleware (which already imports
+        # ipaddress) so we only do cheap structural checks here. Goal: fail
+        # fast on obviously malformed env without duplicating the parser.
+        for entry in (v or "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                raise ValueError(
+                    f"ip_allowlist entry missing '=': {entry!r}; "
+                    "use 'tenant=cidr+cidr' or 'tenant=*'"
+                )
+            tenant, _, rhs = entry.partition("=")
+            tenant = tenant.strip()
+            rhs = rhs.strip()
+            if not tenant or not rhs:
+                raise ValueError(
+                    f"ip_allowlist entry has empty tenant or cidr: {entry!r}"
+                )
+        return v
+
     @field_validator("cors_allow_origins")
     @classmethod
     def _cors_origins_shape(cls, v: str) -> str:
