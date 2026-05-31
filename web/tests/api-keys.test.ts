@@ -69,6 +69,63 @@ test("api-keys: recordUse increments counter and stamps lastUsedAt", async () =>
   assert.ok(loaded!.lastUsedAt && loaded!.lastUsedAt > 0);
 });
 
+test("api-keys: recordUse tracks recent source IPs as a bounded ring buffer", async () => {
+  const { RECENT_IPS_LIMIT, summarize } = await import("../lib/api-keys.ts");
+  const { record } = await createKey("ip-tracker");
+
+  // First call from IP A -> single entry, count 1.
+  await recordUse(record.id, "203.0.113.10");
+  let loaded = await loadKey(record.id);
+  assert.ok(loaded);
+  assert.equal(loaded!.recentIps?.length, 1);
+  assert.equal(loaded!.recentIps?.[0].ip, "203.0.113.10");
+  assert.equal(loaded!.recentIps?.[0].count, 1);
+  assert.ok(loaded!.recentIps?.[0].firstSeenAt > 0);
+  assert.equal(loaded!.recentIps?.[0].firstSeenAt, loaded!.recentIps?.[0].lastSeenAt);
+
+  // Second call from same IP A -> still one entry, count 2.
+  await recordUse(record.id, "203.0.113.10");
+  loaded = await loadKey(record.id);
+  assert.equal(loaded!.recentIps?.length, 1);
+  assert.equal(loaded!.recentIps?.[0].count, 2);
+
+  // Call from a different IP B -> two entries.
+  await recordUse(record.id, "198.51.100.7");
+  loaded = await loadKey(record.id);
+  assert.equal(loaded!.recentIps?.length, 2);
+  const ips = new Set(loaded!.recentIps!.map((e) => e.ip));
+  assert.ok(ips.has("203.0.113.10"));
+  assert.ok(ips.has("198.51.100.7"));
+
+  // Empty/missing IP is a no-op for the ring buffer but still bumps counter.
+  const beforeUsage = loaded!.usageCount;
+  await recordUse(record.id, "");
+  await recordUse(record.id, null);
+  loaded = await loadKey(record.id);
+  assert.equal(loaded!.recentIps?.length, 2);
+  assert.equal(loaded!.usageCount, beforeUsage + 2);
+
+  // Ring buffer is bounded: 6 fresh IPs -> only RECENT_IPS_LIMIT kept,
+  // and the most-recently-seen ones survive.
+  for (let i = 0; i < RECENT_IPS_LIMIT + 1; i += 1) {
+    await recordUse(record.id, `10.0.0.${i + 1}`);
+  }
+  loaded = await loadKey(record.id);
+  assert.ok(loaded!.recentIps!.length <= RECENT_IPS_LIMIT);
+  // The very first IP (203.0.113.10) should have been evicted, since the
+  // RECENT_IPS_LIMIT + 1 newer distinct IPs were all seen after it.
+  assert.ok(!loaded!.recentIps!.some((e) => e.ip === "203.0.113.10"));
+
+  // Summaries surface the same data so the UI can render it.
+  const summary = summarize(loaded!);
+  assert.ok(Array.isArray(summary.recentIps));
+  assert.ok(summary.recentIps!.length <= RECENT_IPS_LIMIT);
+  // Sorted newest-first.
+  for (let i = 1; i < summary.recentIps!.length; i += 1) {
+    assert.ok(summary.recentIps![i - 1].lastSeenAt >= summary.recentIps![i].lastSeenAt);
+  }
+});
+
 test("api-keys: list and delete round-trip", async () => {
   const before = await listKeys();
   const { record } = await createKey("temp");

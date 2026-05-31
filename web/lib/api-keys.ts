@@ -87,7 +87,23 @@ export interface ApiKeyRecord {
   scopes?: Scope[]; // permission scopes; absent on legacy records = full access
   rateLimit?: { rpm: number }; // per-key requests-per-minute cap; absent = default
   ipAllowlist?: string[]; // per-key source IP CIDR allowlist; absent/empty = open
+  /**
+   * Ring buffer of recent source IPs that successfully used the key.
+   * Bounded length so admins can spot leaked keys ("why is this key
+   * being called from 3 countries?") without unbounded log growth.
+   */
+  recentIps?: RecentIp[];
 }
+
+export interface RecentIp {
+  ip: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+}
+
+/** Max distinct source IPs we keep per key. */
+export const RECENT_IPS_LIMIT = 5;
 
 export interface ApiKeySummary {
   id: string;
@@ -104,6 +120,7 @@ export interface ApiKeySummary {
   scopes?: Scope[];
   rateLimit?: { rpm: number };
   ipAllowlist?: string[];
+  recentIps?: RecentIp[];
 }
 
 const MAX_EXPIRES_DAYS = 365;
@@ -159,6 +176,9 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     scopes: rec.scopes,
     rateLimit: rec.rateLimit,
     ipAllowlist: Array.isArray(rec.ipAllowlist) && rec.ipAllowlist.length > 0 ? rec.ipAllowlist : undefined,
+    recentIps: Array.isArray(rec.recentIps) && rec.recentIps.length > 0
+      ? rec.recentIps.slice().sort((a, b) => b.lastSeenAt - a.lastSeenAt)
+      : undefined,
   };
 }
 
@@ -406,13 +426,33 @@ export async function findByPlaintext(plain: string): Promise<ApiKeyRecord | nul
 /**
  * Record a successful API call against a key. Best-effort: failures are
  * swallowed so a write hiccup never blocks a 200 response.
+ *
+ * When `sourceIp` is supplied we maintain a small ring buffer of the
+ * most-recently-seen source IPs (up to RECENT_IPS_LIMIT) so admins
+ * can audit where a key has been used from. Useful for spotting a
+ * leaked key calling from an unexpected network.
  */
-export async function recordUse(id: string): Promise<void> {
+export async function recordUse(id: string, sourceIp?: string | null): Promise<void> {
   try {
     const rec = await loadKey(id);
     if (!rec) return;
     rec.usageCount = (rec.usageCount ?? 0) + 1;
-    rec.lastUsedAt = Date.now();
+    const now = Date.now();
+    rec.lastUsedAt = now;
+    const ip = typeof sourceIp === "string" ? sourceIp.trim() : "";
+    if (ip) {
+      const list: RecentIp[] = Array.isArray(rec.recentIps) ? rec.recentIps.slice() : [];
+      const existing = list.find((e) => e && e.ip === ip);
+      if (existing) {
+        existing.lastSeenAt = now;
+        existing.count = (existing.count ?? 0) + 1;
+      } else {
+        list.push({ ip, firstSeenAt: now, lastSeenAt: now, count: 1 });
+      }
+      // Keep only the most-recently-seen RECENT_IPS_LIMIT distinct IPs.
+      list.sort((a, b) => b.lastSeenAt - a.lastSeenAt);
+      rec.recentIps = list.slice(0, RECENT_IPS_LIMIT);
+    }
     await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
   } catch {
     // ignore

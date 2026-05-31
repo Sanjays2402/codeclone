@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Recent source IPs per API key. Every successful call through `/v1/compare`, `/v1/batch`, `/v1/shares`, and `/v1/shares/[id]` now records the caller's source IP against the key in a bounded ring buffer (most-recent five distinct IPs, each with first-seen, last-seen, and call count). The `/api-keys` settings page exposes a per-key disclosure that lists the IPs the key has been used from, so an owner who suspects a leak can immediately see whether the key is being exercised from an unexpected network without having to scrape the audit log. Storage is capped per key (no unbounded growth), the buffer is updated alongside the existing `usageCount` and `lastUsedAt` fields, and the new data is only ever returned to the key's owner via the existing GET `/api/api-keys/:id` route, which already does owner scoping. Pinned by `web/tests/api-keys.test.ts` ("recordUse tracks recent source IPs as a bounded ring buffer"): same-IP coalescing, distinct-IP fan-out, empty/null IP no-op, ring eviction at the cap, and summarize ordering newest-first. Maps to the standard SOC 2 CC7.2 / ISO 27001 A.9.4.2 procurement ask: "customer must be able to detect anomalous credential use."
+
+### Try it: see which IPs a key has been used from
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Call /v1/compare a few times from your machine using a real key:
+curl -s -X POST http://localhost:3000/api/v1/compare \
+  -H "Authorization: Bearer $CC_KEY" -H 'content-type: application/json' \
+  -d '{"a":"def f():\n  return 1\n","b":"def g():\n  return 1\n","language":"python"}'
+
+# Then read the key's detail record (owner-scoped):
+curl -s http://localhost:3000/api/api-keys/$KEY_ID -b "$COOKIE" \
+  | jq '.recentIps'
+# [
+#   { "ip": "203.0.113.10", "firstSeenAt": ..., "lastSeenAt": ..., "count": 3 }
+# ]
+```
+
+Open `/api-keys` and click **recent source ips** under any key row to see the same list in the UI.
+
 - Snippet data classification with a workspace share ceiling. Every saved snippet now carries a standard four-level sensitivity tag (public, internal, confidential, restricted) and defaults to internal. The workspace owner sets the most permissive label that members may turn into an outbound share at `/workspaces/<id>`; the default ceiling is internal so confidential and restricted snippets are blocked until policy is loosened. The decision is centralised in `web/lib/snippets-policy.ts` and consumed by both the snippets UI (a share-check button surfaces allowed/blocked plus the reason) and the `GET /api/snippets/:id/share-policy` endpoint that future PDF or share paths must call. Owner mutations write `workspace.snippet_share_policy_update` to the tamper-evident audit log with a before/after diff; snippet create and update audit rows now include the classification too. Cross-tenant: a user belonging to multiple workspaces gets the most permissive ceiling among them, and a restricted snippet is still blocked when no workspace allows it, proved in `web/tests/snippet-classification.test.ts`. Maps to the standard SOC 2 CC6.7 / ISO 27001 A.5.12 / NIST 800-53 MP-3 procurement ask: "every stored artifact must carry a classification label and egress must be gated against that label."
 
 ### Try it: tag a snippet and check the workspace share ceiling

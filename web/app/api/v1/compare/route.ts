@@ -7,6 +7,7 @@ import { NextResponse } from "next/server";
 import { extractBearer, findByPlaintext, hasScope, recordUse } from "../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
+import { clientIpFromRequest } from "../../../../lib/ip-allowlist";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceDpaForKey } from "../../../../lib/dpa-enforce";
@@ -330,7 +331,7 @@ export async function POST(req: Request) {
   }
 
   // Fire-and-forget usage recording; the response should not block on it.
-  void recordUse(key.id);
+  void recordUse(key.id, clientIpFromRequest(req));
   void tryRecordAudit(req, {
     action: "v1.compare",
     actorId: key.userId ?? null,

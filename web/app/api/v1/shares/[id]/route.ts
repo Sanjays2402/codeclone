@@ -16,6 +16,7 @@ import {
 } from "../../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../../lib/ip-allowlist-enforce";
+import { clientIpFromRequest } from "../../../../../lib/ip-allowlist";
 import { enforceWorkspaceResidencyForKey } from "../../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceLockdownForKey } from "../../../../../lib/lockdown-enforce";
@@ -90,7 +91,7 @@ export async function GET(
       );
     }
 
-    void recordUse(key.id);
+    void recordUse(key.id, clientIpFromRequest(req));
     void logUsage({
       ts: Date.now(),
       keyId: key.id,

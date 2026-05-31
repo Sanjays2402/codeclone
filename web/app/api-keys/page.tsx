@@ -13,6 +13,9 @@ import {
   ArrowsClockwise,
   Gauge,
   ShieldCheck,
+  Globe,
+  CaretDown,
+  CaretRight,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -466,9 +469,9 @@ export default function ApiKeysPage() {
             <div className="text-right">actions</div>
           </div>
           {items.map((k) => (
+            <div key={k.id} className="border-b border-[var(--color-rule)] last:border-b-0">
             <div
-              key={k.id}
-              className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 min-h-11 items-center py-2 border-b border-[var(--color-rule)] last:border-b-0 text-[12.5px]"
+              className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 min-h-11 items-center py-2 text-[12.5px]"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <Key size={13} weight="duotone" className="text-[var(--color-ink-3)] shrink-0" />
@@ -597,6 +600,8 @@ export default function ApiKeysPage() {
                 </button>
               </div>
             </div>
+            <RecentIpsRow keyId={k.id} usageCount={k.usageCount} />
+            </div>
           ))}
         </div>
       )}
@@ -618,6 +623,110 @@ export default function ApiKeysPage() {
       <p className="mt-3 text-[12.5px] text-[var(--color-ink-3)]">
         Response includes similarity scores, line alignment, and a clone-type label (Type-1 through Type-4). Each authorized call increments the key&apos;s usage counter.
       </p>
+    </div>
+  );
+}
+
+interface RecentIp {
+  ip: string;
+  firstSeenAt: number;
+  lastSeenAt: number;
+  count: number;
+}
+
+/**
+ * Disclosure row underneath each API key showing the most recent distinct
+ * source IPs that used the key. Fetches the detail record on expand so
+ * the list endpoint stays cheap. Helps owners spot leaked keys being
+ * exercised from unexpected networks.
+ */
+function RecentIpsRow({ keyId, usageCount }: { keyId: string; usageCount: number }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [ips, setIps] = useState<RecentIp[] | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`/api/api-keys/${encodeURIComponent(keyId)}`, {
+        credentials: "same-origin",
+      });
+      if (!res.ok) {
+        setError(`Could not load source IPs (${res.status}).`);
+        setIps([]);
+        return;
+      }
+      const data = (await res.json()) as { recentIps?: RecentIp[] };
+      setIps(Array.isArray(data.recentIps) ? data.recentIps : []);
+    } catch {
+      setError("Could not load source IPs.");
+      setIps([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [keyId]);
+
+  const onToggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      if (next && ips === null && !loading) void load();
+      return next;
+    });
+  }, [ips, loading, load]);
+
+  return (
+    <div className="px-4 pb-2">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        aria-controls={`recent-ips-${keyId}`}
+        className="inline-flex items-center gap-1.5 mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)] hover:text-[var(--color-ink-2)] focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--color-ink-3)] rounded-sm"
+      >
+        {open ? <CaretDown size={10} weight="bold" /> : <CaretRight size={10} weight="bold" />}
+        <Globe size={11} weight="duotone" />
+        recent source ips
+      </button>
+      {open && (
+        <div id={`recent-ips-${keyId}`} className="mt-2 ml-4">
+          {loading && (
+            <div className="mono text-[11px] text-[var(--color-ink-3)]">Loading…</div>
+          )}
+          {!loading && error && (
+            <div className="mono text-[11px] text-[var(--color-neg)]">{error}</div>
+          )}
+          {!loading && !error && ips && ips.length === 0 && (
+            <div className="mono text-[11px] text-[var(--color-ink-3)]">
+              {usageCount > 0
+                ? "No source IPs recorded for older calls. New calls will appear here."
+                : "No calls yet. Source IPs appear here after the key is used."}
+            </div>
+          )}
+          {!loading && !error && ips && ips.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {ips.map((entry) => (
+                <li
+                  key={entry.ip}
+                  className="flex items-center gap-3 mono text-[11px] text-[var(--color-ink-2)]"
+                >
+                  <span className="min-w-[11rem] truncate">{entry.ip}</span>
+                  <span className="tnum text-[var(--color-ink-3)]">
+                    {fmtInt(entry.count)} call{entry.count === 1 ? "" : "s"}
+                  </span>
+                  <span className="text-[var(--color-ink-3)]">
+                    last {fmtTs(entry.lastSeenAt)}
+                  </span>
+                  <span className="text-[var(--color-ink-3)] hidden sm:inline">
+                    first {fmtTs(entry.firstSeenAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
     </div>
   );
 }
