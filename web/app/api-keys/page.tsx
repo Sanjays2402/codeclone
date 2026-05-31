@@ -11,6 +11,7 @@ import {
   Terminal,
   Eye,
   ArrowsClockwise,
+  Gauge,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -27,6 +28,7 @@ interface ApiKeySummary {
   expiresAt?: number;
   expired?: boolean;
   scopes?: string[];
+  rateLimit?: { rpm: number };
 }
 
 const ALL_SCOPES = [
@@ -77,6 +79,7 @@ export default function ApiKeysPage() {
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [scopes, setScopes] = useState<string[]>(["compare:write", "batch:write"]);
+  const [rpm, setRpm] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [reveal, setReveal] = useState<{ id: string; plaintext: string } | null>(null);
   const [busy, setBusy] = useState("");
@@ -121,6 +124,7 @@ export default function ApiKeysPage() {
           label: label.trim() || "Untitled key",
           ...(expNum ? { expiresInDays: expNum } : {}),
           scopes,
+          ...(rpm.trim() ? { rpm: Number(rpm.trim()) } : {}),
         }),
       });
       if (res.status === 401) {
@@ -138,13 +142,14 @@ export default function ApiKeysPage() {
       setReveal({ id: j.key.id, plaintext: j.plaintext });
       setLabel("");
       setExpiresInDays("");
+      setRpm("");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }
-  }, [label, expiresInDays, scopes, refresh]);
+  }, [label, expiresInDays, scopes, rpm, refresh]);
 
   const onRevoke = useCallback(
     async (id: string) => {
@@ -181,6 +186,47 @@ export default function ApiKeysPage() {
         }
         const j = (await res.json()) as { key: ApiKeySummary; plaintext: string };
         setReveal({ id: j.key.id, plaintext: j.plaintext });
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [refresh],
+  );
+
+  const onSetRpm = useCallback(
+    async (id: string, current: number | undefined) => {
+      const ans = window.prompt(
+        "Requests per minute for this key (blank to use the default 60, or 1-100000):",
+        current ? String(current) : "",
+      );
+      if (ans === null) return;
+      const trimmed = ans.trim();
+      let payload: { rpm: number | null };
+      if (trimmed === "") {
+        payload = { rpm: null };
+      } else {
+        const n = Number(trimmed);
+        if (!Number.isFinite(n) || n < 1 || n > 100000) {
+          setError("Rate limit must be an integer between 1 and 100000.");
+          return;
+        }
+        payload = { rpm: Math.floor(n) };
+      }
+      setBusy(id);
+      setError("");
+      try {
+        const res = await fetch(`/api/api-keys/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error?.message ?? `Update failed (${res.status}).`);
+        }
         await refresh();
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
@@ -269,6 +315,18 @@ export default function ApiKeysPage() {
               if (e.key === "Enter") void onCreate();
             }}
           />
+          <input
+            type="number"
+            value={rpm}
+            onChange={(e) => setRpm(e.target.value)}
+            placeholder="Rate limit (rpm, blank = 60)"
+            min={1}
+            max={100000}
+            className="sm:w-48 bg-transparent outline-none text-[13.5px] px-2 py-1.5 border border-[var(--color-rule)] rounded-sm focus:border-[var(--color-accent)]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onCreate();
+            }}
+          />
           <button
             type="button"
             onClick={onCreate}
@@ -338,7 +396,7 @@ export default function ApiKeysPage() {
       )}
       {status === "ready" && items.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
-          <div className="grid grid-cols-[1fr_10rem_7rem_7rem_11rem] gap-3 px-4 h-9 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+          <div className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 h-9 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
             <div>label</div>
             <div>prefix</div>
             <div className="text-right">calls</div>
@@ -348,7 +406,7 @@ export default function ApiKeysPage() {
           {items.map((k) => (
             <div
               key={k.id}
-              className="grid grid-cols-[1fr_10rem_7rem_7rem_11rem] gap-3 px-4 h-11 items-center border-b border-[var(--color-rule)] last:border-b-0 text-[12.5px]"
+              className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 min-h-11 items-center py-2 border-b border-[var(--color-rule)] last:border-b-0 text-[12.5px]"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <Key size={13} weight="duotone" className="text-[var(--color-ink-3)] shrink-0" />
@@ -408,6 +466,22 @@ export default function ApiKeysPage() {
                 {fmtTs(k.lastUsedAt)}
               </div>
               <div className="flex items-center justify-end gap-1.5">
+                {!k.revoked && !k.expired && (
+                  <button
+                    type="button"
+                    onClick={() => void onSetRpm(k.id, k.rateLimit?.rpm)}
+                    disabled={busy === k.id}
+                    title={
+                      k.rateLimit
+                        ? `Per-minute rate limit: ${k.rateLimit.rpm}. Click to change.`
+                        : "No custom limit. Defaults to 60 rpm. Click to set."
+                    }
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-1.5 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+                  >
+                    <Gauge size={11} weight="duotone" />
+                    {k.rateLimit ? `${k.rateLimit.rpm}/m` : "60/m"}
+                  </button>
+                )}
                 {!k.revoked && !k.expired && (
                   <button
                     type="button"

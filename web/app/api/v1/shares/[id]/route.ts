@@ -14,6 +14,7 @@ import {
   hasScope,
   recordUse,
 } from "../../../../../lib/api-keys";
+import { enforce as enforceRateLimit } from "../../../../../lib/rate-limit";
 import { loadShare } from "../../../../../lib/share";
 import { logUsage } from "../../../../../lib/usage";
 
@@ -54,6 +55,9 @@ export async function GET(
     );
   }
 
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
   const { id } = await ctx.params;
   if (!id || !/^[A-Za-z0-9_-]{8,32}$/.test(id)) {
     return NextResponse.json(
@@ -91,7 +95,7 @@ export async function GET(
       b: rec.b,
       result: rec.result,
       url: `/r/${rec.id}`,
-    });
+    }, { headers: rl.headers });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(

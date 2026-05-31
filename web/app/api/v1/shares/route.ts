@@ -23,6 +23,7 @@ import {
   hasScope,
   recordUse,
 } from "../../../../lib/api-keys";
+import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { listSharesPage } from "../../../../lib/share";
 import { logUsage } from "../../../../lib/usage";
 
@@ -69,6 +70,9 @@ export async function GET(req: Request) {
     );
   }
 
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
   const url = new URL(req.url);
   const sp = url.searchParams;
   const limitParam = sp.get("limit");
@@ -114,7 +118,7 @@ export async function GET(req: Request) {
         page.offset + page.items.length < page.total
           ? page.offset + page.items.length
           : null,
-    });
+    }, { headers: rl.headers });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json(

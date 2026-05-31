@@ -13,6 +13,7 @@ import {
   hasScope,
   recordUse,
 } from "../../../../lib/api-keys";
+import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
@@ -58,6 +59,9 @@ export async function POST(req: Request) {
     );
   }
 
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
   const quota = await quotaCheck();
   if (!quota.allowed) {
     return NextResponse.json(
@@ -75,6 +79,7 @@ export async function POST(req: Request) {
       {
         status: 429,
         headers: {
+          ...rl.headers,
           "Retry-After": "3600",
           "x-codeclone-quota-limit": String(quota.limit),
           "x-codeclone-quota-remaining": "0",
@@ -128,6 +133,7 @@ export async function POST(req: Request) {
 
   return NextResponse.json(result, {
     headers: {
+      ...rl.headers,
       "x-codeclone-key-id": key.id,
       "x-codeclone-key-prefix": key.prefix,
       "x-codeclone-quota-limit": String(quota.limit),

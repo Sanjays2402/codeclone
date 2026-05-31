@@ -11,6 +11,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { normalizeRpm } from "./rate-limit.ts";
+
+const MIN_RPM_HINT = 1;
 
 const CWD = process.cwd();
 
@@ -79,6 +82,7 @@ export interface ApiKeyRecord {
   userId?: string; // owning user; absent on legacy/unscoped records
   expiresAt?: number; // optional epoch ms; absent means never expires
   scopes?: Scope[]; // permission scopes; absent on legacy records = full access
+  rateLimit?: { rpm: number }; // per-key requests-per-minute cap; absent = default
 }
 
 export interface ApiKeySummary {
@@ -93,6 +97,7 @@ export interface ApiKeySummary {
   expiresAt?: number;
   expired?: boolean;
   scopes?: Scope[];
+  rateLimit?: { rpm: number };
 }
 
 const MAX_EXPIRES_DAYS = 365;
@@ -145,6 +150,7 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     expiresAt: rec.expiresAt,
     expired: isExpired(rec),
     scopes: rec.scopes,
+    rateLimit: rec.rateLimit,
   };
 }
 
@@ -157,6 +163,7 @@ export interface CreateOptions {
   userId?: string;
   expiresInDays?: unknown;
   scopes?: unknown;
+  rpm?: unknown;
 }
 
 export async function createKey(label: unknown, opts: CreateOptions = {}): Promise<CreatedKey> {
@@ -188,6 +195,8 @@ export async function createKey(label: unknown, opts: CreateOptions = {}): Promi
     if (exp) rec.expiresAt = exp;
     const scopes = normalizeScopes(opts.scopes);
     if (scopes) rec.scopes = scopes;
+    const rpm = normalizeRpm(opts.rpm);
+    if (typeof rpm === "number") rec.rateLimit = { rpm };
     await fs.writeFile(file, JSON.stringify(rec), "utf-8");
     return { record: summarize(rec), plaintext };
   }
@@ -233,6 +242,34 @@ export async function rotateKey(
   rec.hash = hashKey(plaintext);
   await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
   return { record: summarize(rec), plaintext };
+}
+
+/**
+ * Mutate a non-secret field on an existing key. Currently supports
+ * the per-key rate limit (rpm). Returns the updated summary, or null
+ * if the key is missing or owned by a different user.
+ */
+export async function updateKey(
+  id: string,
+  patch: { rpm?: unknown },
+  userId?: string,
+): Promise<ApiKeySummary | null> {
+  const rec = await loadKey(id);
+  if (!rec) return null;
+  if (userId !== undefined && rec.userId && rec.userId !== userId) return null;
+  if ("rpm" in patch) {
+    if (patch.rpm === null || patch.rpm === "" || patch.rpm === undefined) {
+      delete rec.rateLimit;
+    } else {
+      const rpm = normalizeRpm(patch.rpm);
+      if (typeof rpm !== "number") {
+        throw new Error(`rpm must be an integer between ${MIN_RPM_HINT} and 100000`);
+      }
+      rec.rateLimit = { rpm };
+    }
+  }
+  await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
+  return summarize(rec);
 }
 
 export async function revokeKey(id: string, userId?: string): Promise<boolean> {

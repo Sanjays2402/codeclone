@@ -29,6 +29,7 @@ interface CreateBody {
   label?: unknown;
   expiresInDays?: unknown;
   scopes?: unknown;
+  rpm?: unknown;
 }
 
 export async function POST(req: Request) {
@@ -45,13 +46,14 @@ export async function POST(req: Request) {
       userId: user.id,
       expiresInDays: body.expiresInDays,
       scopes: body.scopes,
+      rpm: body.rpm,
     });
     await tryRecordAudit(req, {
       action: "api_key.create",
       actorId: user.id,
       actorEmail: user.email,
       target: { type: "api_key", id: record.id, label: record.label },
-      diff: { after: { label: record.label, scopes: record.scopes, expiresAt: record.expiresAt } },
+      diff: { after: { label: record.label, scopes: record.scopes, expiresAt: record.expiresAt, rateLimit: record.rateLimit } },
     });
     return NextResponse.json({ key: record, plaintext }, { status: 201 });
   } catch (e) {
