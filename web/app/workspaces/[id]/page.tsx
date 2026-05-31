@@ -149,6 +149,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
+      if (r.status === 401 && j?.error === "mfa_required") {
+        setError("MFA required to change a member's role. Verify your code in Settings then try again.");
+        return;
+      }
       setError(j?.error || `HTTP ${r.status}`);
       return;
     }
@@ -176,12 +180,16 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
   }
 
   async function removeMember(userId: string) {
-    if (!confirm("Remove this member from the workspace?")) return;
+    if (!confirm("Remove this member? Their sessions and API keys will be revoked immediately.")) return;
     const r = await fetch(`/api/workspaces/${id}?userId=${encodeURIComponent(userId)}`, {
       method: "DELETE",
     });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
+      if (r.status === 401 && j?.error === "mfa_required") {
+        setError("MFA required to remove a member. Verify your code in Settings then try again.");
+        return;
+      }
       setError(j?.error || `HTTP ${r.status}`);
       return;
     }
