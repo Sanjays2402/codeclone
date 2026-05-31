@@ -15,6 +15,7 @@ const items = [
   { href: "/datasets", label: "datasets" },
   { href: "/models",   label: "models" },
   { href: "/api-keys", label: "api keys" },
+  { href: "/webhooks", label: "webhooks" },
 ];
 
 export function NavBar() {

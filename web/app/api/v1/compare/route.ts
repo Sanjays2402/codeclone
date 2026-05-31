@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { extractBearer, findByPlaintext, recordUse } from "../../../../lib/api-keys";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
+import { dispatchEvent } from "../../../../lib/webhooks";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -80,6 +81,23 @@ export async function POST(req: Request) {
 
   // Fire-and-forget usage recording; the response should not block on it.
   void recordUse(key.id);
+
+  // Fan-out to registered webhooks. Best-effort: failures are logged
+  // per-delivery and never block the API response.
+  void dispatchEvent({
+    event: "compare.completed",
+    payload: {
+      key_id: key.id,
+      language,
+      bytes: {
+        a: Buffer.byteLength(a, "utf-8"),
+        b: Buffer.byteLength(b, "utf-8"),
+      },
+      scores,
+      clone,
+      latency_ms: Number(latencyMs.toFixed(3)),
+    },
+  }).catch(() => {});
 
   return NextResponse.json(
     {
