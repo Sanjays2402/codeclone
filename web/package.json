@@ -8,7 +8,7 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/share.test.ts",
+    "test": "node --test --experimental-strip-types tests/share.test.ts tests/api-keys.test.ts",
     "seed": "node scripts/seed-fixtures.mjs"
   },
   "dependencies": {

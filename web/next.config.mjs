@@ -9,6 +9,12 @@ const nextConfig = {
     CODECLONE_ADAPTERS_DIR: process.env.CODECLONE_ADAPTERS_DIR || "./adapters",
     CODECLONE_DATA_DIR: process.env.CODECLONE_DATA_DIR || "./data",
   },
+  async rewrites() {
+    return [
+      // Public versioned API surface. Customers call /v1/* directly.
+      { source: "/v1/:path*", destination: "/api/v1/:path*" },
+    ];
+  },
 };
 
 export default nextConfig;

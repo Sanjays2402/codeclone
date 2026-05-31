@@ -24,6 +24,26 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
 - Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with OG metadata, copy-link button, and a one-click "open in compare" entry. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
 - Saved comparisons in `/history`: every share you create shows up in a browsable list with rename, tagging, JSON download, and delete. Search by title, id, language, or clone label; filter by tag. All writes go to the same on-disk store as `/r/<id>`, so links and history stay in sync.
+- Public `/v1/compare` API with per-key auth: generate keys in the `/api-keys` page, copy-paste the curl example, call from anywhere. Each key shows its prefix, total calls, and last-used timestamp, with one-click revoke and delete. Only the SHA-256 hash of each key is persisted (override the on-disk location with `CODECLONE_KEYS_DIR`).
+
+### Try it: call the public API
+
+```bash
+cd web && npm run dev      # http://localhost:3000/api-keys
+
+# 1. Create a key in the UI, copy the plaintext (shown once)
+# 2. Compare two snippets with that key:
+curl -sS -X POST http://localhost:3000/v1/compare \
+  -H "Authorization: Bearer $CODECLONE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "a": "def add(a,b):\n    return a+b\n",
+    "b": "def sum(x,y):\n    return x+y\n",
+    "language": "python"
+  }' | jq '.clone.label, .scores.shingleJaccard'
+# -> "Type-2 clone (renamed)"
+# -> 0.176
+```
 
 ### Try it: share a comparison
 

@@ -14,6 +14,7 @@ const items = [
   { href: "/eval",     label: "eval" },
   { href: "/datasets", label: "datasets" },
   { href: "/models",   label: "models" },
+  { href: "/api-keys", label: "api keys" },
 ];
 
 export function NavBar() {
