@@ -157,6 +157,35 @@ export async function loadKey(id: string): Promise<ApiKeyRecord | null> {
   }
 }
 
+export interface RotatedKey {
+  record: ApiKeySummary;
+  plaintext: string;
+}
+
+/**
+ * Issue a fresh secret for an existing key while preserving id, label,
+ * createdAt, usageCount, lastUsedAt, owner and expiresAt. Returns the
+ * new plaintext (shown to the caller exactly once). Refuses to rotate
+ * revoked or expired keys, and refuses cross-user rotation when a
+ * userId scope is supplied.
+ */
+export async function rotateKey(
+  id: string,
+  userId?: string,
+): Promise<RotatedKey | null> {
+  const rec = await loadKey(id);
+  if (!rec) return null;
+  if (userId !== undefined && rec.userId && rec.userId !== userId) return null;
+  if (rec.revoked) return null;
+  if (isExpired(rec)) return null;
+  const secret = crypto.randomBytes(SECRET_BYTES).toString("base64url");
+  const plaintext = `${KEY_PREFIX}${secret}`;
+  rec.prefix = plaintext.slice(0, 12);
+  rec.hash = hashKey(plaintext);
+  await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
+  return { record: summarize(rec), plaintext };
+}
+
 export async function revokeKey(id: string, userId?: string): Promise<boolean> {
   const rec = await loadKey(id);
   if (!rec) return false;

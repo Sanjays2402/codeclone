@@ -22,6 +22,7 @@ const {
   findByPlaintext,
   recordUse,
   extractBearer,
+  rotateKey,
 } = await import("../lib/api-keys.ts");
 
 test("api-keys: create returns plaintext once and persists only hash", async () => {
@@ -131,6 +132,42 @@ test("api-keys: expiresInDays sets expiresAt and findByPlaintext rejects expired
   fs.writeFileSync(path.join(tmp, `${record.id}.json`), JSON.stringify(rec));
   const expired = await findByPlaintext(plaintext);
   assert.equal(expired, null);
+});
+
+test("api-keys: rotate issues a new secret while preserving id, label, and usage", async () => {
+  const userId = "u_dan00000";
+  const { record, plaintext } = await createKey("webhook signer", { userId });
+  await recordUse(record.id);
+  await recordUse(record.id);
+
+  // Cross-user rotation is refused.
+  const stolen = await rotateKey(record.id, "u_eve00000");
+  assert.equal(stolen, null);
+
+  const before = await loadKey(record.id);
+  assert.ok(before);
+
+  const rotated = await rotateKey(record.id, userId);
+  assert.ok(rotated);
+  assert.notEqual(rotated!.plaintext, plaintext);
+  assert.equal(rotated!.record.id, record.id);
+  assert.equal(rotated!.record.label, "webhook signer");
+  assert.equal(rotated!.record.usageCount, 2);
+  assert.equal(rotated!.record.userId, userId);
+  assert.equal(rotated!.record.prefix, rotated!.plaintext.slice(0, 12));
+
+  // Old secret no longer authenticates.
+  const oldMatch = await findByPlaintext(plaintext);
+  assert.equal(oldMatch, null);
+  // New secret does.
+  const newMatch = await findByPlaintext(rotated!.plaintext);
+  assert.ok(newMatch);
+  assert.equal(newMatch!.id, record.id);
+
+  // Revoked keys cannot be rotated.
+  await revokeKey(record.id, userId);
+  const denied = await rotateKey(record.id, userId);
+  assert.equal(denied, null);
 });
 
 test("api-keys: extractBearer handles Authorization and x-api-key", () => {

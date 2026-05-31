@@ -10,6 +10,7 @@ import {
   Warning,
   Terminal,
   Eye,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -153,6 +154,34 @@ export default function ApiKeysPage() {
     [refresh],
   );
 
+  const onRotate = useCallback(
+    async (id: string) => {
+      if (
+        !confirm(
+          "Rotate this key? The current secret stops working immediately and the new one will be shown once.",
+        )
+      )
+        return;
+      setBusy(id);
+      setError("");
+      try {
+        const res = await fetch(`/api/api-keys/${id}/rotate`, { method: "POST" });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error?.message ?? `Rotate failed (${res.status}).`);
+        }
+        const j = (await res.json()) as { key: ApiKeySummary; plaintext: string };
+        setReveal({ id: j.key.id, plaintext: j.plaintext });
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [refresh],
+  );
+
   const onDelete = useCallback(
     async (id: string) => {
       if (!confirm("Delete this key record permanently?")) return;
@@ -185,7 +214,7 @@ export default function ApiKeysPage() {
                 Copy this key now. It will not be shown again.
               </div>
               <div className="text-[12.5px] text-[var(--color-ink-2)] mt-0.5">
-                Only the SHA-256 hash is stored on the server.
+                Only the SHA-256 hash is stored on the server. Update any client or webhook that holds the previous secret.
               </div>
             </div>
           </div>
@@ -261,7 +290,7 @@ export default function ApiKeysPage() {
       )}
       {status === "ready" && items.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
-          <div className="grid grid-cols-[1fr_10rem_7rem_7rem_8rem] gap-3 px-4 h-9 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+          <div className="grid grid-cols-[1fr_10rem_7rem_7rem_11rem] gap-3 px-4 h-9 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
             <div>label</div>
             <div>prefix</div>
             <div className="text-right">calls</div>
@@ -271,7 +300,7 @@ export default function ApiKeysPage() {
           {items.map((k) => (
             <div
               key={k.id}
-              className="grid grid-cols-[1fr_10rem_7rem_7rem_8rem] gap-3 px-4 h-11 items-center border-b border-[var(--color-rule)] last:border-b-0 text-[12.5px]"
+              className="grid grid-cols-[1fr_10rem_7rem_7rem_11rem] gap-3 px-4 h-11 items-center border-b border-[var(--color-rule)] last:border-b-0 text-[12.5px]"
             >
               <div className="flex items-center gap-2 min-w-0">
                 <Key size={13} weight="duotone" className="text-[var(--color-ink-3)] shrink-0" />
@@ -305,6 +334,18 @@ export default function ApiKeysPage() {
                 {fmtTs(k.lastUsedAt)}
               </div>
               <div className="flex items-center justify-end gap-1.5">
+                {!k.revoked && !k.expired && (
+                  <button
+                    type="button"
+                    onClick={() => void onRotate(k.id)}
+                    disabled={busy === k.id}
+                    title="Rotate (issue a new secret, keep id and usage history)"
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-1.5 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+                  >
+                    <ArrowsClockwise size={11} weight="duotone" />
+                    Rotate
+                  </button>
+                )}
                 {!k.revoked && (
                   <button
                     type="button"
