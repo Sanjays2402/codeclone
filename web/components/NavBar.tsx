@@ -3,6 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import { ThemeToggle } from "./ThemeToggle";
+import { UserMenu } from "./UserMenu";
 
 const items = [
   { href: "/",         label: "overview" },
@@ -49,7 +50,10 @@ export function NavBar() {
             );
           })}
         </nav>
-        <ThemeToggle />
+        <div className="ml-auto flex items-center gap-2">
+          <ThemeToggle />
+          <UserMenu />
+        </div>
       </div>
     </header>
   );

@@ -28,7 +28,26 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Outbound webhooks via `/webhooks`: register a URL, receive a real signed POST every time `/v1/compare` finishes. Each delivery retries up to three times with backoff, includes an HMAC-SHA256 signature (`X-CodeClone-Signature: t=<ts>,v1=<mac>`), and lands in a per-endpoint delivery log (last 50) you can browse from the dashboard. Pause, resume, or delete endpoints inline. Override the on-disk location with `CODECLONE_WEBHOOKS_DIR`.
 - Per-key usage and quota on `/usage`: every authenticated `/v1/compare` call is logged with timestamp, key id, byte count, and latency. The page shows month-to-date calls against a free-tier cap (default 1000, override with `CODECLONE_FREE_TIER_MONTHLY`), a daily bar chart for 7/30/90 day windows, and a per-key breakdown. When the cap is hit the API returns HTTP 429 with `Retry-After` and a structured `quota_exceeded` error, and every 200 response carries `x-codeclone-quota-limit` and `x-codeclone-quota-remaining` headers so clients can rate-limit themselves.
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
+- Email magic-link sign-in at `/signin`: stateless HMAC session cookies, one-shot tokens with 15-minute expiry, and a user menu in the nav. Dev mode shows the link inline so you can complete the loop locally without an SMTP provider; production swaps in a real mailer. Users persist on disk under `CODECLONE_USERS_DIR` (defaults to `../users`), keyed by a deterministic id derived from the lowercased email. Set `CODECLONE_AUTH_SECRET` in production. Routes: `POST /api/auth/request`, `GET /api/auth/verify`, `GET /api/auth/me`, `POST /api/auth/signout`.
 - First-run `/welcome`: a 3-step onboarding flow (create API key, run a comparison, save to history) with a live progress bar and a thin banner that sits under the nav on every page until you finish or dismiss. Step completion is derived from real state on disk (active API keys, a saved share, a `compared` event), so the checklist cannot lie. Override the persisted dismiss/finished state with `CODECLONE_ONBOARDING_FILE` (defaults to `../.onboarding.json`).
+
+### Try it: sign in with a magic link
+
+```bash
+cd web && npm run dev                                # http://localhost:3000/signin
+
+# Request a sign-in link. In dev (no CODECLONE_AUTH_SECRET set, or
+# CODECLONE_AUTH_DEV=1) the response includes `devLink` so you can
+# click straight through without an email provider.
+curl -sS http://localhost:3000/api/auth/request \
+  -H 'content-type: application/json' \
+  -d '{"email":"you@example.com"}' | jq
+
+# The magic link is also printed to the dev-server stderr. Open it in
+# your browser; you land back at `/` with the session cookie set, and
+# the nav now shows your email with a sign-out menu.
+curl -sS -b 'cc_session=...' http://localhost:3000/api/auth/me | jq
+```
 
 ### Try it: walk through the welcome flow
 
