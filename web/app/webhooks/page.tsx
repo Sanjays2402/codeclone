@@ -19,6 +19,7 @@ import {
   Buildings,
   Key,
   ArrowsClockwise,
+  PaperPlaneTilt,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -111,6 +112,9 @@ export default function WebhooksPage() {
   const [delivStatus, setDelivStatus] = useState<Record<string, Status>>({});
   const [redelivering, setRedelivering] = useState<string>("");
   const [redeliverErr, setRedeliverErr] = useState<string>("");
+  const [pinging, setPinging] = useState<string>("");
+  const [pingResult, setPingResult] = useState<Record<string, { ok: boolean; status: number; durationMs: number; error?: string | null }>>({});
+  const [pingErr, setPingErr] = useState<string>("");
 
   const myRole = useMemo(
     () => workspaces.find((w) => w.id === activeWs)?.myRole ?? null,
@@ -364,6 +368,49 @@ export default function WebhooksPage() {
     [activeWs],
   );
 
+  const sendPing = useCallback(
+    async (webhookId: string) => {
+      setPingErr("");
+      setPinging(webhookId);
+      try {
+        const res = await fetch(
+          `/api/webhooks/${webhookId}/ping?workspaceId=${encodeURIComponent(activeWs)}`,
+          { method: "POST" },
+        );
+        const j = (await res.json().catch(() => ({}))) as {
+          delivery?: { ok: boolean; status: number; durationMs: number; error?: string };
+          error?: { message?: string } | string;
+        };
+        if (!res.ok && !j.delivery) {
+          const msg =
+            typeof j.error === "string"
+              ? j.error
+              : j.error?.message ?? `Ping failed (${res.status}).`;
+          throw new Error(msg);
+        }
+        const d = j.delivery;
+        if (d) {
+          setPingResult((p) => ({
+            ...p,
+            [webhookId]: {
+              ok: d.ok,
+              status: d.status,
+              durationMs: d.durationMs,
+              error: d.error ?? null,
+            },
+          }));
+        }
+        if (open === webhookId) await loadDeliveries(webhookId);
+        await refresh();
+      } catch (e) {
+        setPingErr(e instanceof Error ? e.message : "Ping failed.");
+      } finally {
+        setPinging("");
+      }
+    },
+    [activeWs, loadDeliveries, refresh, open],
+  );
+
   const redeliver = useCallback(
     async (webhookId: string, deliveryId: string) => {
       setRedeliverErr("");
@@ -564,6 +611,14 @@ export default function WebhooksPage() {
 
       {status === "loading" && <LoadingRow rows={3} />}
       {status === "error" && <ErrorBlock message={error} />}
+      {pingErr && (
+        <div
+          role="alert"
+          className="mb-3 mono text-[11.5px] text-[var(--color-neg)] border border-[var(--color-neg)] bg-[var(--color-neg-soft)] rounded-sm px-3 py-2"
+        >
+          {pingErr}
+        </div>
+      )}
       {status === "ready" && items.length === 0 && (
         <Empty
           title={activeWs ? "No webhooks yet." : "Select a workspace."}
@@ -620,6 +675,23 @@ export default function WebhooksPage() {
                   </button>
                   <button
                     type="button"
+                    disabled={busy === w.id || pinging === w.id || !canWrite || !!w.disabled}
+                    onClick={() => void sendPing(w.id)}
+                    aria-label="Send signed test ping"
+                    title={
+                      !canWrite
+                        ? "Viewers cannot send test pings."
+                        : w.disabled
+                          ? "Resume the webhook first."
+                          : "Send a signed webhook.ping delivery to verify HMAC and reachability."
+                    }
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50"
+                  >
+                    <PaperPlaneTilt size={11} weight="duotone" />
+                    {pinging === w.id ? "pinging" : "ping"}
+                  </button>
+                  <button
+                    type="button"
                     disabled={busy === w.id || !canWrite}
                     onClick={() => void rotate(w.id)}
                     aria-label="Rotate signing secret"
@@ -639,6 +711,34 @@ export default function WebhooksPage() {
                     <Trash size={11} weight="duotone" /> delete
                   </button>
                 </div>
+                {(pingResult[w.id] || (pingErr && pinging === "" && open !== w.id)) && (
+                  <div
+                    className="px-4 pb-3 -mt-2 mono text-[11.5px] flex flex-wrap items-center gap-x-3 gap-y-1"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    {pingResult[w.id] && (
+                      pingResult[w.id].ok ? (
+                        <span className="inline-flex items-center gap-1 text-[var(--color-pos)]">
+                          <CheckCircle size={12} weight="duotone" />
+                          ping ok
+                          <span className="text-[var(--color-ink-3)]">
+                            HTTP {pingResult[w.id].status} in {pingResult[w.id].durationMs}ms
+                          </span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 text-[var(--color-neg)]">
+                          <XCircle size={12} weight="duotone" />
+                          ping failed
+                          <span className="text-[var(--color-ink-3)]">
+                            {pingResult[w.id].status ? `HTTP ${pingResult[w.id].status}` : "network error"}
+                            {pingResult[w.id].error ? `: ${pingResult[w.id].error}` : ""}
+                          </span>
+                        </span>
+                      )
+                    )}
+                  </div>
+                )}
                 {isOpen && (
                   <div className="px-4 pb-4 pt-1 bg-[var(--color-paper-2)] border-t border-[var(--color-rule)]">
                     <div className="mb-3 flex flex-wrap gap-x-6 gap-y-1 mono text-[11.5px] text-[var(--color-ink-3)]">

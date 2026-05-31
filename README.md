@@ -487,6 +487,33 @@ curl -s -X PUT "http://localhost:3000/api/webhooks/$WH/rotate?workspaceId=$WS" -
 curl -s -X DELETE "http://localhost:3000/api/webhooks/$WH/rotate?workspaceId=$WS" -b "$COOKIE" | jq
 ```
 
+- Webhook test ping for pre-launch HMAC verification. Workspace editors and owners click the new Ping button on any registered webhook under `/webhooks` to fire a single, fully-signed `webhook.ping` delivery against the live URL. Same signing pipeline, headers, and retry budget as a real event, so a passing ping is real proof the receiver verifies the HMAC and is reachable; counters and the delivery log update exactly like a live dispatch, and the dashboard renders the HTTP status, latency, and any error inline next to the row. Disabled webhooks are refused with HTTP 409 `webhook_disabled` so a ping cannot mask a paused integration, viewers get 403, and cross-workspace callers see 404 with no side effects. Every attempt (ok, error, denied) writes a `webhook.ping` audit row with the delivery id, HTTP status, attempts, duration, and error message so a procurement reviewer can pivot from the audit log to which integrator validated their endpoint and when. Pinned by `web/tests/webhooks-ping.test.ts` (signature verifies against the documented HMAC algorithm using the primary secret hash, failure path bumps `failureCount` and records `lastError`, cross-tenant ping returns null with no HTTP call and no counter change).
+
+### Try it: send a webhook test ping
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# 1. From the dashboard: open /webhooks, click Ping on the row. The result
+#    (HTTP status, latency, error) appears inline.
+#
+# 2. Or from the CLI (editor/owner cookie required):
+WH=wh_xxxxxxxx        # webhook id
+WS=ws_yyyyyyyyyyy     # workspace id
+curl -s -X POST "http://localhost:3000/api/webhooks/$WH/ping?workspaceId=$WS" \
+  -b "$COOKIE" | jq
+# { "delivery": {
+#     "id": "...", "event": "webhook.ping", "ok": true,
+#     "status": 200, "attempts": 1, "durationMs": 42,
+#     "requestBodyPreview": "{\"event\":\"webhook.ping\",...}"
+#   } }
+#
+# The receiver gets the standard signed envelope:
+#   X-CodeClone-Event:     webhook.ping
+#   X-CodeClone-Signature: t=<unix>,v1=<hmac-sha256>
+#   X-CodeClone-Hash:      <first 16 of secret hash>
+```
+
 - Brute-force protection on the sign-in endpoint with per-email and per-IP fixed-window counters. Magic link issuance at `POST /api/auth/request` evaluates both scopes before doing any work, returns a structured 429 with `Retry-After` and `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `X-RateLimit-Policy` headers when either ceiling is exceeded, and records `auth.magic_link_throttled_email` or `auth.magic_link_throttled_ip` audit entries (which flow through the same SIEM webhook pipeline as every other security event). Tripping the limit promotes the source to a lockout for the remainder of the window so an attacker cannot enumerate accounts or bomb a user's inbox. Defaults are 5 attempts per email and 20 per IP in 15 minutes, all overridable via `CODECLONE_AUTH_THROTTLE_EMAIL_MAX`, `CODECLONE_AUTH_THROTTLE_IP_MAX`, `CODECLONE_AUTH_THROTTLE_WINDOW_SEC`, and `CODECLONE_AUTH_THROTTLE_LOCKOUT_SEC`; setting any maximum to 0 disables that scope. Workspace owners get a console at `/settings/security/lockouts` that shows active blocks as opaque hashes (so the UI itself never leaks raw emails or IPs) with countdowns until they clear, and `GET /api/security/lockouts` returns the same data for automation. Cross-scope independence, lockout semantics, header shape, and active-lockout enumeration are pinned by `web/tests/auth-throttle.test.ts`.
 
 ### Try it: trip and inspect a sign-in lockout

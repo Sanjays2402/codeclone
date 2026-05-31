@@ -39,6 +39,12 @@ export const SUPPORTED_EVENTS = [
   // a signed `audit.recorded` delivery, so customers can stream their
   // SOC2 trail to Splunk/Datadog/S3 without polling /api/audit.
   "audit.recorded",
+  // Manual connectivity + signature test. Owners/editors fire one from
+  // the dashboard with `pingWebhook` to validate HMAC verification and
+  // network reachability before flipping a webhook live. Always sent to
+  // the targeted webhook regardless of its `events` subscription so
+  // receivers do not have to opt in to be testable.
+  "webhook.ping",
 ] as const;
 export type WebhookEvent = (typeof SUPPORTED_EVENTS)[number];
 
@@ -796,6 +802,58 @@ export async function dispatchEvent(opts: DispatchOptions): Promise<DeliveryReco
  *
  * Returns null if the webhook or original delivery cannot be found.
  */
+/**
+ * Send a one-shot signed test delivery (`webhook.ping`) to a single
+ * webhook. Used by the dashboard "send test" action so customers can
+ * confirm HMAC verification and connectivity before subscribing to
+ * real events. Bypasses the per-webhook event subscription filter on
+ * purpose. Same signing path, headers, and retry budget as a live
+ * dispatch, so a passing ping is a real proof of integration.
+ *
+ * Returns null if the webhook is not found OR does not belong to the
+ * supplied workspace (tenant isolation). Errors during delivery are
+ * captured in the returned DeliveryRecord (ok=false, error) rather
+ * than thrown so the caller can always audit + render the result.
+ */
+export async function pingWebhook(
+  webhookId: string,
+  workspaceId: string,
+  actor: { id: string; email: string | null } | null,
+  fetchImpl?: typeof fetch,
+): Promise<DeliveryRecord | null> {
+  const wsId = validateWorkspaceId(workspaceId);
+  if (!wsId) return null;
+  const rec = await loadWebhookForWorkspace(webhookId, wsId);
+  if (!rec) return null;
+  const event: WebhookEvent = "webhook.ping";
+  const body = JSON.stringify({
+    event,
+    created_at: Math.floor(Date.now() / 1000),
+    data: {
+      message:
+        "This is a CodeClone webhook test ping. Verify the HMAC signature, then ignore.",
+      webhook_id: rec.id,
+      workspace_id: wsId,
+      actor: actor ? { id: actor.id, email: actor.email } : null,
+    },
+  });
+  const fetcher = fetchImpl ?? fetch;
+  const delivery = await deliverOnce(rec, event, body, fetcher);
+  rec.lastDeliveryAt = delivery.attemptedAt;
+  rec.lastStatus = delivery.status;
+  if (delivery.ok) {
+    rec.successCount += 1;
+    rec.lastError = undefined;
+  } else {
+    rec.failureCount += 1;
+    rec.lastError = delivery.error;
+  }
+  rec.updatedAt = Date.now();
+  await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  await appendDelivery(delivery);
+  return delivery;
+}
+
 export async function redeliverDelivery(
   webhookId: string,
   deliveryId: string,
