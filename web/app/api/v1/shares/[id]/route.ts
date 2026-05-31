@@ -15,6 +15,7 @@ import {
   recordUse,
 } from "../../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../../lib/rate-limit";
+import { enforceWorkspaceAllowlistForKey } from "../../../../../lib/ip-allowlist-enforce";
 import { loadShare } from "../../../../../lib/share";
 import { logUsage } from "../../../../../lib/usage";
 
@@ -54,6 +55,9 @@ export async function GET(
       { status: 403 },
     );
   }
+
+  const blocked = await enforceWorkspaceAllowlistForKey(req, key);
+  if (blocked) return blocked;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;

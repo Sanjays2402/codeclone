@@ -8,7 +8,7 @@
     "start": "next start -p 3000",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types tests/share.test.ts tests/share-pagination.test.ts tests/share-rerun.test.ts tests/api-keys.test.ts tests/webhooks.test.ts tests/share-export.test.ts tests/share-pdf.test.ts tests/usage.test.ts tests/settings.test.ts tests/batch.test.ts tests/pwa.test.ts tests/og-image.test.ts tests/onboarding.test.ts tests/auth.test.ts tests/recent-failures.test.ts tests/notifications.test.ts tests/snippets.test.ts tests/collections.test.ts tests/workspaces.test.ts tests/v1-shares.test.ts tests/navbar-mobile.test.ts tests/audit.test.ts tests/docs.test.ts tests/observability.test.ts tests/sessions.test.ts tests/rate-limit.test.ts",
+    "test": "node --test --experimental-strip-types tests/share.test.ts tests/share-pagination.test.ts tests/share-rerun.test.ts tests/api-keys.test.ts tests/webhooks.test.ts tests/share-export.test.ts tests/share-pdf.test.ts tests/usage.test.ts tests/settings.test.ts tests/batch.test.ts tests/pwa.test.ts tests/og-image.test.ts tests/onboarding.test.ts tests/auth.test.ts tests/recent-failures.test.ts tests/notifications.test.ts tests/snippets.test.ts tests/collections.test.ts tests/workspaces.test.ts tests/v1-shares.test.ts tests/navbar-mobile.test.ts tests/audit.test.ts tests/docs.test.ts tests/observability.test.ts tests/sessions.test.ts tests/rate-limit.test.ts tests/ip-allowlist.test.ts",
     "seed": "node scripts/seed-fixtures.mjs"
   },
   "dependencies": {

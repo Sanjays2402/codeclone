@@ -80,6 +80,7 @@ export interface ApiKeyRecord {
   usageCount: number;
   revoked?: boolean;
   userId?: string; // owning user; absent on legacy/unscoped records
+  workspaceId?: string; // workspace this key is bound to; gates IP allowlist enforcement
   expiresAt?: number; // optional epoch ms; absent means never expires
   scopes?: Scope[]; // permission scopes; absent on legacy records = full access
   rateLimit?: { rpm: number }; // per-key requests-per-minute cap; absent = default
@@ -94,6 +95,7 @@ export interface ApiKeySummary {
   usageCount: number;
   revoked?: boolean;
   userId?: string;
+  workspaceId?: string;
   expiresAt?: number;
   expired?: boolean;
   scopes?: Scope[];
@@ -147,6 +149,7 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     usageCount: rec.usageCount,
     revoked: rec.revoked,
     userId: rec.userId,
+    workspaceId: rec.workspaceId,
     expiresAt: rec.expiresAt,
     expired: isExpired(rec),
     scopes: rec.scopes,
@@ -161,6 +164,7 @@ export interface CreatedKey {
 
 export interface CreateOptions {
   userId?: string;
+  workspaceId?: string;
   expiresInDays?: unknown;
   scopes?: unknown;
   rpm?: unknown;
@@ -190,6 +194,9 @@ export async function createKey(label: unknown, opts: CreateOptions = {}): Promi
     };
     if (opts.userId && typeof opts.userId === "string") {
       rec.userId = opts.userId;
+    }
+    if (opts.workspaceId && typeof opts.workspaceId === "string" && /^ws_[A-Za-z0-9_-]{6,32}$/.test(opts.workspaceId)) {
+      rec.workspaceId = opts.workspaceId;
     }
     const exp = normalizeExpiresInDays(opts.expiresInDays);
     if (exp) rec.expiresAt = exp;

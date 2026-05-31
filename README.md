@@ -10,6 +10,8 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace IP allowlist: every workspace owner can pin API + dashboard access to a list of IPv4 or IPv6 CIDR ranges from `/workspaces/<id>`. When an API key is bound to a workspace, every call to `/api/v1/compare`, `/api/v1/batch`, and `/api/v1/shares` is checked against that workspace's allowlist before any work runs; non-matching IPs get a structured `403 ip_not_allowed` with the caller's IP echoed back so the on-call engineer can copy it into the rule. Loopback is always permitted so local health checks never lock the owner out, and an empty rule list means no restriction (the prior default). Every edit and every block writes an entry to the audit log (`workspace.allowlist_update`, `workspace.ip_block`) so procurement reviewers can answer who tightened the rule, when, and which IP got rejected. Try it: `curl -X PUT http://localhost:3000/api/workspaces/<ws_id>/allowlist -H 'content-type: application/json' -d '{"entries":["203.0.113.0/24"]}'`.
+
 - Active sessions & force logout at `/settings/sessions`: every sign-in now creates a server-side session record (signed cookie carries a `jti`), so users can see every device that has authenticated to their account with IP, user agent, signed-in time, last-seen time, and expiry. Revoke a single session, sign out every other device while staying logged in here, or sign out everywhere in one click — the revoked `jti` is checked on every authenticated request, so a stolen cookie stops working before its TTL expires. Session lifetime is configurable per user (1 hour to 90 days) and applied to new sign-ins. Every event writes a structured audit entry (`auth.signin`, `auth.signout`, `auth.session_revoke`, `auth.session_revoke_others`, `auth.session_revoke_all`, `auth.session_ttl_update`) so workspace owners can answer the procurement question "who signed in from where, and when did we cut them off?" Tracked sessions live on disk under `CODECLONE_SESSIONS_DIR` (defaults to `../sessions`). Legacy cookies issued before this feature stay valid until they expire.
 
 - Commit exporter with author-email filtering, license mode (`strict | permissive_only | off`), and per-language tagging
@@ -40,6 +42,33 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Enterprise audit log at `/audit`: every mutating action across snippets, collections, API keys, webhooks, workspaces, shares, settings, notifications, onboarding, sign-in/out, public `/v1/compare` and `/v1/batch` API calls, and the internal `/api/compare` and `/api/batch` runs is recorded with actor id, actor email, IP, request id, user agent, optional workspace id, and a trimmed before/after diff. Storage is append-only JSONL by UTC day under `CODECLONE_AUDIT_DIR` (defaults to `../audit`); the app never updates or deletes entries. The page filters by action prefix, actor, workspace, and status (ok/denied/error), and a single click streams a CSV export. Denied permission checks (for example a non-owner trying to rename a workspace) are recorded alongside successes so security review can prove enforcement, not just intent. Reading and exporting the log are themselves audited.
 - Observability for ops teams at `/status`: every API request goes through a Next.js middleware that assigns a 16-char `X-Request-Id` (or reuses the one a load balancer already set), echoes it on the response, and threads it into the audit log so a customer can hand support one id and get back the full request trail. A `/api/metrics` endpoint emits Prometheus text format 0.0.4 (counters for `codeclone_http_requests_total{method,route,status}`, an in-flight gauge, and an `codeclone_http_request_duration_ms` histogram with 11 buckets from 5ms to 10s), `/api/healthz` is a dependency-free liveness probe, and `/api/readyz` returns 200 with a structured `checks` array only when the on-disk stores (runs, audit, users) are writable; the inference backend is reported but does not hard-fail readiness so the dashboard can still serve auth/docs when serve is down. The `/status` page renders the same numbers as a live tile grid plus a sortable by-route latency table (count, avg, p50, p95) that refreshes every 5 seconds. Route labels are normalized so ids never blow up Prometheus cardinality. Structured one-line JSON logs (level, ts, route, method, status, duration_ms, request_id) are emitted for every instrumented handler so they pipe straight into Datadog, Loki, or CloudWatch without a parser.
 - Interactive API reference at `/docs`: every public `/v1` endpoint (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) is documented in-product with method, path, required scope, parameter table, copy-paste curl example, and a sample JSON response. The page also includes a **Try it** panel that posts the request straight from the browser using your pasted API key, shows the HTTP status, round-trip latency, and pretty-printed response body, and warns you when none of your saved keys carry the scope an endpoint requires. The spec is driven from a single typed module (`web/lib/api-spec.ts`) that the test suite validates against the real route files, so the docs cannot drift from the implementation.
+
+- Workspace IP allowlist on `/workspaces/<id>`: workspace owners can paste a list of corporate egress CIDRs (IPv4 and IPv6, bare IPs treated as `/32` and `/128`) to gate every public `/v1` API call made with a key bound to that workspace. Empty list means open; loopback is always permitted so on-host health probes do not lock the owner out. Every `PUT` writes a structured audit entry with the full before/after CIDR set; every blocked call writes a `workspace.ip_block` audit entry with the offending IP, the api-key id, and the rule count, so security teams can prove enforcement during procurement review. Enforced uniformly across `POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, and `GET /v1/shares/{id}`; the dashboard editor validates and dedupes CIDRs client-side and surfaces server-side rejects.
+
+### Try it: lock a workspace down to your office IP
+
+Sign in, open `/workspaces`, create or pick a workspace you own, scroll to the IP allowlist card, paste a CIDR per line (for example `203.0.113.0/24`), and save. Then mint an API key scoped to that workspace and watch a request from any other IP return 403:
+
+```bash
+cd web && npm run dev
+
+# As workspace owner: set the allowlist.
+curl -s -X PUT http://localhost:3000/api/workspaces/WS_ID/allowlist \
+  -H 'Content-Type: application/json' \
+  -b cookies.txt \
+  -d '{"entries":["203.0.113.0/24","2001:db8::/32"]}' | jq
+
+# As the API caller: simulate a request from a blocked IP.
+curl -s -i -X POST http://localhost:3000/api/v1/compare \
+  -H 'Authorization: Bearer cck_live_...' \
+  -H 'X-Forwarded-For: 198.51.100.42' \
+  -H 'Content-Type: application/json' \
+  -d '{"a":"def f():pass","b":"def g():pass"}'
+# => HTTP/1.1 403 Forbidden
+# {"error":{"type":"ip_not_allowed",...}}
+```
+
+The block is recorded under `workspace.ip_block` in `/audit`, with the api-key id, the rejected IP, and the active rule count.
 
 ### Try it: enforce a per-key rate limit
 

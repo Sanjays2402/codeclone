@@ -6,6 +6,7 @@
 import { NextResponse } from "next/server";
 import { extractBearer, findByPlaintext, hasScope, recordUse } from "../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
+import { enforceWorkspaceAllowlistForKey } from "../../../../lib/ip-allowlist-enforce";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
@@ -58,6 +59,9 @@ export async function POST(req: Request) {
       { status: 403 },
     );
   }
+
+  const blocked = await enforceWorkspaceAllowlistForKey(req, key);
+  if (blocked) return blocked;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;

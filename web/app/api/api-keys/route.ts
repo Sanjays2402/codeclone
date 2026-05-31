@@ -30,6 +30,7 @@ interface CreateBody {
   expiresInDays?: unknown;
   scopes?: unknown;
   rpm?: unknown;
+  workspaceId?: unknown;
 }
 
 export async function POST(req: Request) {
@@ -44,6 +45,7 @@ export async function POST(req: Request) {
   try {
     const { record, plaintext } = await createKey(body.label, {
       userId: user.id,
+      workspaceId: typeof body.workspaceId === "string" ? body.workspaceId : undefined,
       expiresInDays: body.expiresInDays,
       scopes: body.scopes,
       rpm: body.rpm,

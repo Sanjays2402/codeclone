@@ -17,6 +17,7 @@ import {
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
+import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { fmtTs } from "../../../lib/format";
 
 type Role = "owner" | "editor" | "viewer";
@@ -294,6 +295,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
             ))}
           </div>
         </section>
+      )}
+
+      {ws.myRole && (
+        <AllowlistEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && ws.myRole !== "owner" && (

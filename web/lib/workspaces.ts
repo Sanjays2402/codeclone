@@ -39,6 +39,12 @@ export interface WorkspaceRecord {
   createdAt: number;
   createdBy: string; // userId
   members: Member[];
+  /**
+   * Optional CIDR allowlist that gates API + dashboard access for this
+   * workspace. Empty / missing means no restriction. Edited via
+   * `setIpAllowlist`; enforced by `lib/ip-allowlist.ts`.
+   */
+  ipAllowlist?: string[];
 }
 
 export interface InviteRecord {
@@ -202,6 +208,20 @@ export function canInvite(ws: WorkspaceRecord, userId: string): boolean {
 export function canManage(ws: WorkspaceRecord, userId: string): boolean {
   const m = getMember(ws, userId);
   return m?.role === "owner";
+}
+
+/**
+ * Replace the workspace IP allowlist. Caller is responsible for sanitising
+ * the entries (see `sanitizeCidrList` in lib/ip-allowlist.ts) and for
+ * permission checks. We only persist what we are given.
+ */
+export async function setIpAllowlist(
+  ws: WorkspaceRecord,
+  entries: string[],
+): Promise<WorkspaceRecord> {
+  ws.ipAllowlist = Array.isArray(entries) ? entries.slice(0, 64) : [];
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
 }
 
 export async function renameWorkspace(ws: WorkspaceRecord, name: string): Promise<WorkspaceRecord> {
