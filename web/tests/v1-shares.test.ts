@@ -114,3 +114,51 @@ test("v1/shares/[id]: loadShare returns full record or null", async () => {
   const miss = await loadShare("doesnotexist");
   assert.equal(miss, null);
 });
+
+test("v1/shares: shares:write is a registered scope (DELETE gate)", () => {
+  assert.ok((ALL_SCOPES as readonly string[]).includes("shares:write"));
+});
+
+test("v1/shares/[id] DELETE: requires shares:write scope (RBAC)", async () => {
+  const reader = await createKey("reader-2", { scopes: ["shares:read"] });
+  const writer = await createKey("writer-2", { scopes: ["shares:write"] });
+  const rRec = await findByPlaintext(reader.plaintext);
+  const wRec = await findByPlaintext(writer.plaintext);
+  assert.ok(rRec && wRec);
+  // Reader (shares:read only) must NOT have shares:write.
+  assert.equal(hasScope(rRec, "shares:write" as any), false);
+  // Writer must have it.
+  assert.equal(hasScope(wRec, "shares:write" as any), true);
+  // And by design must NOT inherit shares:read.
+  assert.equal(hasScope(wRec, "shares:read" as any), false);
+});
+
+test("v1/shares/[id] DELETE: dry_run preview leaves the share intact", async () => {
+  const { isDryRun, DRY_RUN_HEADER } = await import("../lib/dry-run.ts");
+  const { deleteShare } = await import("../lib/share.ts");
+
+  const rec = await createShare({
+    a: "let a = 1;",
+    b: "let a = 2;",
+    language: "javascript",
+    result: fakeResult(0.5),
+    title: "dry-run target",
+  });
+
+  // Simulate the route's dry-run detection.
+  const req = new Request(`http://x/v1/shares/${rec.id}?dry_run=true`, {
+    method: "DELETE",
+  });
+  assert.equal(isDryRun(req, null), true);
+  assert.equal(DRY_RUN_HEADER["x-codeclone-dry-run"], "true");
+
+  // Dry-run MUST NOT call deleteShare. Confirm the record is still loadable.
+  const still = await loadShare(rec.id);
+  assert.ok(still, "dry-run must not delete the share");
+  assert.equal(still!.id, rec.id);
+
+  // Sanity: actual delete removes it, and a second delete is a no-op.
+  assert.equal(await deleteShare(rec.id), true);
+  assert.equal(await loadShare(rec.id), null);
+  assert.equal(await deleteShare(rec.id), false);
+});

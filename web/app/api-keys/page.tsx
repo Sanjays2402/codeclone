@@ -40,6 +40,7 @@ const ALL_SCOPES = [
   { id: "compare:write", label: "compare", desc: "POST /v1/compare" },
   { id: "batch:write", label: "batch", desc: "POST /v1/batch" },
   { id: "shares:read", label: "shares", desc: "GET /v1/shares" },
+  { id: "shares:write", label: "shares delete", desc: "DELETE /v1/shares/:id" },
 ] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";
