@@ -9,6 +9,9 @@ import {
   Lightning,
   Key,
   ArrowRight,
+  PlugsConnected,
+  Pulse,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import Link from "next/link";
 import { H1, H2 } from "../../components/Headings";
@@ -17,6 +20,12 @@ import { fmtInt, fmtTs } from "../../lib/format";
 
 interface DailyUsage { date: string; count: number }
 interface KeyUsage { keyId: string; count: number }
+interface EndpointUsage {
+  endpoint: string;
+  count: number;
+  avgLatencyMs: number | null;
+  totalBytes: number;
+}
 interface UsageSummary {
   windowDays: number;
   totalCalls: number;
@@ -26,7 +35,37 @@ interface UsageSummary {
   quotaPercent: number;
   byDay: DailyUsage[];
   byKey: KeyUsage[];
+  byEndpoint: EndpointUsage[];
   lastEventAt: number | null;
+}
+interface RecentCall {
+  ts: number;
+  keyId: string;
+  endpoint: string;
+  bytes?: number;
+  latencyMs?: number;
+}
+interface RecentResponse {
+  events: RecentCall[];
+  limit: number;
+  windowDays: number;
+}
+
+function fmtBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function fmtRel(ts: number, now: number): string {
+  const s = Math.max(0, Math.floor((now - ts) / 1000));
+  if (s < 60) return `${s}s ago`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 const fetcher = async (url: string) => {
@@ -213,6 +252,52 @@ export default function UsagePage() {
           </H2>
           <DailyBars days={data.byDay} />
 
+          <H2 eyebrow="Endpoints">By endpoint</H2>
+          {data.byEndpoint.length === 0 ? (
+            <Empty
+              title="No endpoint traffic yet"
+              hint="Calls to /v1/* will be grouped here with average latency and total bytes."
+            />
+          ) : (
+            <div className="ruled rounded-md overflow-hidden">
+              <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-4 py-2 mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]">
+                <div>Endpoint</div>
+                <div className="text-right">Calls</div>
+                <div className="text-right">Avg latency</div>
+                <div className="text-right">Bytes in</div>
+                <div className="text-right w-40">Share</div>
+              </div>
+              {data.byEndpoint.map((e) => {
+                const share = data.totalCalls
+                  ? (e.count / data.totalCalls) * 100
+                  : 0;
+                return (
+                  <div
+                    key={e.endpoint}
+                    className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-4 px-4 py-2.5 border-t border-[var(--color-rule)] items-center"
+                  >
+                    <div className="mono text-[12px] text-[var(--color-ink)] inline-flex items-center gap-1.5">
+                      <PlugsConnected size={12} weight="duotone" />
+                      {e.endpoint}
+                    </div>
+                    <div className="text-right mono text-[12px] tabular-nums">{fmtInt(e.count)}</div>
+                    <div className="text-right mono text-[12px] tabular-nums text-[var(--color-ink-3)]">
+                      {e.avgLatencyMs == null ? "—" : `${e.avgLatencyMs.toFixed(1)} ms`}
+                    </div>
+                    <div className="text-right mono text-[12px] tabular-nums text-[var(--color-ink-3)]">
+                      {fmtBytes(e.totalBytes)}
+                    </div>
+                    <div className="w-40">
+                      <Bar pct={share} tone="var(--color-ink-2)" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <RecentCallsPanel />
+
           <H2 eyebrow="Keys">By API key</H2>
           {data.byKey.length === 0 ? (
             <Empty
@@ -255,5 +340,82 @@ export default function UsagePage() {
         </>
       )}
     </main>
+  );
+}
+
+function RecentCallsPanel() {
+  const { data, error, isLoading, mutate } = useSWR<RecentResponse>(
+    `/api/usage/recent?limit=50&days=7`,
+    fetcher as unknown as (url: string) => Promise<RecentResponse>,
+    { refreshInterval: 15_000 },
+  );
+  const now = Date.now();
+  return (
+    <>
+      <H2
+        eyebrow="Log"
+        right={
+          <button
+            type="button"
+            onClick={() => void mutate()}
+            className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule)] inline-flex items-center gap-1.5"
+            aria-label="Refresh recent calls"
+          >
+            <ArrowsClockwise size={12} weight="duotone" /> Refresh
+          </button>
+        }
+      >
+        Recent API calls
+      </H2>
+      {error && <ErrorBlock message={(error as Error).message} />}
+      {isLoading && !data && <LoadingRow rows={3} />}
+      {data && data.events.length === 0 && (
+        <Empty
+          title="No recent calls"
+          hint="Authenticated calls in the last 7 days will appear here, newest first."
+          mono="curl -H 'Authorization: Bearer cc_live_...' http://localhost:3000/v1/compare"
+        />
+      )}
+      {data && data.events.length > 0 && (
+        <div className="ruled rounded-md overflow-hidden">
+          <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-2 mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]">
+            <div>When</div>
+            <div>Endpoint</div>
+            <div className="text-right">Key</div>
+            <div className="text-right">Latency</div>
+            <div className="text-right">Bytes</div>
+          </div>
+          {data.events.map((ev, i) => (
+            <div
+              key={`${ev.ts}-${i}`}
+              className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-2 border-t border-[var(--color-rule)] items-center"
+            >
+              <div
+                className="mono text-[11.5px] text-[var(--color-ink-3)] tabular-nums"
+                title={new Date(ev.ts).toISOString()}
+              >
+                {fmtRel(ev.ts, now)}
+              </div>
+              <div className="mono text-[12px] text-[var(--color-ink)] inline-flex items-center gap-1.5 truncate">
+                <Pulse size={12} weight="duotone" />
+                {ev.endpoint}
+              </div>
+              <Link
+                href="/api-keys"
+                className="mono text-[11.5px] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:underline text-right"
+              >
+                {ev.keyId}
+              </Link>
+              <div className="text-right mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
+                {ev.latencyMs == null ? "—" : `${ev.latencyMs.toFixed(1)} ms`}
+              </div>
+              <div className="text-right mono text-[11.5px] tabular-nums text-[var(--color-ink-3)]">
+                {ev.bytes == null ? "—" : fmtBytes(ev.bytes)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }

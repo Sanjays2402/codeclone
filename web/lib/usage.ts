@@ -43,6 +43,21 @@ export interface KeyUsage {
   count: number;
 }
 
+export interface EndpointUsage {
+  endpoint: string;
+  count: number;
+  avgLatencyMs: number | null;
+  totalBytes: number;
+}
+
+export interface RecentCall {
+  ts: number;
+  keyId: string;
+  endpoint: string;
+  bytes?: number;
+  latencyMs?: number;
+}
+
 export interface UsageSummary {
   windowDays: number;
   totalCalls: number;
@@ -52,6 +67,7 @@ export interface UsageSummary {
   quotaPercent: number;
   byDay: DailyUsage[];
   byKey: KeyUsage[];
+  byEndpoint: EndpointUsage[];
   lastEventAt: number | null;
 }
 
@@ -121,6 +137,10 @@ export async function summarize(
   const days = buildEmptyDays(windowDays, now);
   const counts = new Map<string, number>(days.map((d) => [d, 0]));
   const byKey = new Map<string, number>();
+  const byEndpoint = new Map<
+    string,
+    { count: number; latencySum: number; latencySamples: number; bytes: number }
+  >();
   let totalCalls = 0;
   let lastEventAt: number | null = null;
 
@@ -131,6 +151,22 @@ export async function summarize(
       if (!counts.has(dk)) continue;
       counts.set(dk, (counts.get(dk) ?? 0) + 1);
       byKey.set(ev.keyId, (byKey.get(ev.keyId) ?? 0) + 1);
+      const epKey = typeof ev.endpoint === "string" && ev.endpoint ? ev.endpoint : "(unknown)";
+      const epRec = byEndpoint.get(epKey) ?? {
+        count: 0,
+        latencySum: 0,
+        latencySamples: 0,
+        bytes: 0,
+      };
+      epRec.count += 1;
+      if (typeof ev.latencyMs === "number" && Number.isFinite(ev.latencyMs)) {
+        epRec.latencySum += ev.latencyMs;
+        epRec.latencySamples += 1;
+      }
+      if (typeof ev.bytes === "number" && Number.isFinite(ev.bytes)) {
+        epRec.bytes += ev.bytes;
+      }
+      byEndpoint.set(epKey, epRec);
       totalCalls += 1;
       if (lastEventAt === null || ev.ts > lastEventAt) lastEventAt = ev.ts;
     }
@@ -159,8 +195,49 @@ export async function summarize(
     byKey: Array.from(byKey.entries())
       .map(([keyId, count]) => ({ keyId, count }))
       .sort((a, b) => b.count - a.count),
+    byEndpoint: Array.from(byEndpoint.entries())
+      .map(([endpoint, r]) => ({
+        endpoint,
+        count: r.count,
+        avgLatencyMs:
+          r.latencySamples > 0
+            ? Number((r.latencySum / r.latencySamples).toFixed(2))
+            : null,
+        totalBytes: r.bytes,
+      }))
+      .sort((a, b) => b.count - a.count),
     lastEventAt,
   };
+}
+
+/**
+ * Return the most recent N usage events across the trailing windowDays.
+ * Useful for a Stripe-style "recent API calls" log in the dashboard.
+ */
+export async function recentEvents(
+  limit = 50,
+  windowDays = 7,
+  now: number = Date.now(),
+): Promise<RecentCall[]> {
+  await ensureDir();
+  const cap = Math.max(1, Math.min(500, Math.floor(limit)));
+  const win = Math.max(1, Math.min(90, Math.floor(windowDays)));
+  const days = buildEmptyDays(win, now);
+  const events = await Promise.all(days.map(readDay));
+  const flat: RecentCall[] = [];
+  for (const list of events) {
+    for (const ev of list) {
+      flat.push({
+        ts: ev.ts,
+        keyId: ev.keyId,
+        endpoint: ev.endpoint,
+        bytes: ev.bytes,
+        latencyMs: ev.latencyMs,
+      });
+    }
+  }
+  flat.sort((a, b) => b.ts - a.ts);
+  return flat.slice(0, cap);
 }
 
 export async function quotaCheck(

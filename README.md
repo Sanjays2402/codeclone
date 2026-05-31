@@ -210,7 +210,12 @@ curl -sS http://localhost:3000/v1/compare \
 
 # Inspect the JSON aggregate directly:
 curl -sS http://localhost:3000/api/usage?days=30 | jq .
+
+# Stripe-style recent calls log (newest first, last 7 days):
+curl -sS 'http://localhost:3000/api/usage/recent?limit=20&days=7' | jq .
 ```
+
+The `/usage` page now shows a **per-endpoint breakdown** (calls, average latency, total bytes in) and a live **Recent API calls** log that auto-refreshes every 15 seconds, so you can watch traffic land the moment your client hits `/v1/compare`, `/v1/batch`, or `/v1/shares`.
 
 ### Try it: see the OG share card
 

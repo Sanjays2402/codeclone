@@ -14,7 +14,7 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codeclone-usage-"));
 process.env.CODECLONE_KEYS_DIR = tmp;
 process.env.CODECLONE_FREE_TIER_MONTHLY = "100";
 
-const { logUsage, summarize, quotaCheck, USAGE_DIR } = await import(
+const { logUsage, summarize, quotaCheck, recentEvents, USAGE_DIR } = await import(
   "../lib/usage.ts"
 );
 
@@ -74,4 +74,39 @@ test("usage: malformed lines are skipped", async () => {
   const s = await summarize(7, now);
   // total unchanged (still 3 valid events from today logged earlier)
   assert.equal(s.byDay[s.byDay.length - 1].count, 2);
+});
+
+test("usage: byEndpoint aggregates count, avg latency, and bytes", async () => {
+  const tmp2 = fs.mkdtempSync(path.join(os.tmpdir(), "codeclone-usage-ep-"));
+  process.env.CODECLONE_KEYS_DIR = tmp2;
+  const mod = await import(`../lib/usage.ts?ep=${Date.now()}`);
+  const now = Date.UTC(2026, 4, 15, 12, 0, 0);
+  await mod.logUsage({ ts: now, keyId: "k1", endpoint: "/v1/compare", latencyMs: 10, bytes: 100 });
+  await mod.logUsage({ ts: now, keyId: "k1", endpoint: "/v1/compare", latencyMs: 30, bytes: 200 });
+  await mod.logUsage({ ts: now, keyId: "k1", endpoint: "/v1/batch", latencyMs: 50, bytes: 1000 });
+  const s = await mod.summarize(7, now);
+  assert.equal(s.byEndpoint.length, 2);
+  // sorted desc by count: compare (2) first, then batch (1)
+  assert.equal(s.byEndpoint[0].endpoint, "/v1/compare");
+  assert.equal(s.byEndpoint[0].count, 2);
+  assert.equal(s.byEndpoint[0].avgLatencyMs, 20);
+  assert.equal(s.byEndpoint[0].totalBytes, 300);
+  assert.equal(s.byEndpoint[1].endpoint, "/v1/batch");
+  assert.equal(s.byEndpoint[1].avgLatencyMs, 50);
+  assert.equal(s.byEndpoint[1].totalBytes, 1000);
+});
+
+test("usage: recentEvents returns newest first and respects limit", async () => {
+  const tmp3 = fs.mkdtempSync(path.join(os.tmpdir(), "codeclone-usage-recent-"));
+  process.env.CODECLONE_KEYS_DIR = tmp3;
+  const mod = await import(`../lib/usage.ts?recent=${Date.now()}`);
+  const now = Date.UTC(2026, 4, 15, 12, 0, 0);
+  await mod.logUsage({ ts: now - 3000, keyId: "k1", endpoint: "/v1/compare" });
+  await mod.logUsage({ ts: now - 2000, keyId: "k1", endpoint: "/v1/batch" });
+  await mod.logUsage({ ts: now - 1000, keyId: "k2", endpoint: "/v1/shares" });
+  const evs = await mod.recentEvents(2, 7, now);
+  assert.equal(evs.length, 2);
+  assert.equal(evs[0].endpoint, "/v1/shares");
+  assert.equal(evs[1].endpoint, "/v1/batch");
+  assert.ok(evs[0].ts > evs[1].ts);
 });
