@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace data residency policy with per-region enforcement on the public API. Owners pin a workspace to `us`, `eu`, `apac`, or `global` under the workspace settings page; flipping `enforced` causes every `/v1/*` request served by a node whose `CODECLONE_REGION` does not match to be refused with HTTP 451 (Unavailable For Legal Reasons) and a structured `{error:{type:"residency_violation", pinned_region, serving_region}}` body. Non-enforced mismatches still succeed but emit a `workspace.residency_warn` audit entry so ops can watch drift before flipping the policy on. Enforcement runs inside the same `enforceWorkspace*ForKey` chain as the IP allowlist and per-key allowlist (`web/lib/residency-enforce.ts`) and is wired into every existing v1 surface (`/v1/compare`, `/v1/batch`, `/v1/shares`, `/v1/shares/[id]`), not just one new route, so a half-migrated EU workspace cannot leak through a forgotten endpoint. The settings card shows the current serving region next to the pinned region with a banner that calls out a live mismatch, so an EU customer staring at a US node sees the problem before their first call fails. Every change writes a tamper-evident audit entry (`workspace.residency_update`, `workspace.residency_clear`) with a before/after diff of the policy, and members trying to PUT the endpoint get a denied entry so owners can see attempted privilege escalation. Pinned by `web/tests/residency.test.ts` (sanitization, persistence, decision matrix, 451 body shape, cross-tenant isolation between an EU-pinned and US-pinned workspace on the same node).
+
+### Try it: pin a workspace to EU and watch a US node refuse the call
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# As the workspace owner, set the policy:
+curl -s -X PUT http://localhost:3000/api/workspaces/$WS_ID/residency \
+  -b "$COOKIE" -H 'content-type: application/json' \
+  -d '{"region":"eu","enforced":true}' | jq
+# { "residency": { "region": "eu", "enforced": true, ... }, "servingRegion": "us" }
+
+# Any v1 call from a key bound to that workspace, served by a US node, now fails:
+CODECLONE_REGION=us pnpm dev
+curl -si -X POST http://localhost:3000/api/v1/compare \
+  -H "Authorization: Bearer $WS_KEY" -H 'content-type: application/json' \
+  -d '{"a":"x","b":"y"}'
+# HTTP/1.1 451 Unavailable For Legal Reasons
+# {"error":{"type":"residency_violation","pinned_region":"eu","serving_region":"us",...}}
+```
+
 - Inbound prompt redaction for PII and secrets. Every request that hits `/v1/chat/completions` or `/v1/completions` is scanned before it reaches the model and rewritten in place using deterministic placeholders (`[REDACTED_AWS_ACCESS_KEY_ID]`, `[REDACTED_GITHUB_TOKEN]`, `[REDACTED_JWT]`, `[REDACTED_PRIVATE_KEY]`, `[REDACTED_EMAIL]`, `[REDACTED_IPV4]`, ...). Operators set the default policy with `CODECLONE_REDACT_POLICY=off|redact|block` and override per tenant with `CODECLONE_REDACT_OVERRIDES=acme=block,beta=redact`. In `redact` mode the rewritten prompt is sent to the model and the response carries `X-Codeclone-Redactions: N` plus an `X-Codeclone-Redaction-Categories` breakdown; in `block` mode the request is rejected with HTTP 422 and a structured `{error:{type:"redaction_blocked", findings}}` body so a leaking client cannot silently retry around the policy. Every scan emits a `redaction.scan` audit entry (request id, tenant, route, mode, blocked flag, per-category counts) so security teams can prove DLP enforcement after the fact. Detectors cover AWS access keys + secret keys, GitHub PAT/fine-grained tokens, OpenAI/Anthropic/Slack prefixed keys, JWTs, `Authorization: Bearer ...` headers, PEM private key blocks, emails, and IPv4 literals. Tenant overrides are isolated end to end: a key bound to `@acme` with policy `block` cannot leak the same secret that another tenant with policy `off` is allowed to send through. Pinned by `services/serve/tests/test_redaction.py` (17 cases: per-detector accuracy, policy parser shape, three-mode HTTP integration, cross-tenant isolation).
 
 ### Try it: scan and block a leaked secret

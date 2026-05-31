@@ -24,6 +24,7 @@ import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { WebhookDomainAllowlistEditor } from "../../../components/WebhookDomainAllowlistEditor";
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
+import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
@@ -437,6 +438,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <RetentionEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <ResidencyEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

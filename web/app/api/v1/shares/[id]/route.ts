@@ -16,6 +16,7 @@ import {
 } from "../../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../../lib/ip-allowlist-enforce";
+import { enforceWorkspaceResidencyForKey } from "../../../../../lib/residency-enforce";
 import { loadShare } from "../../../../../lib/share";
 import { logUsage } from "../../../../../lib/usage";
 
@@ -60,6 +61,8 @@ export async function GET(
   if (blocked) return blocked;
   const keyBlocked = await enforceKeyAllowlist(req, key);
   if (keyBlocked) return keyBlocked;
+  const residencyBlocked = await enforceWorkspaceResidencyForKey(req, key);
+  if (residencyBlocked) return residencyBlocked;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;

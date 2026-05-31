@@ -165,6 +165,105 @@ export interface WorkspaceRecord {
     placedBy: string;
     caseRef?: string | null;
   } | null;
+  /**
+   * Owner-configured data residency policy. Enterprise buyers in regulated
+   * sectors (EU healthcare, APAC finance, US-only public sector) require a
+   * contractual guarantee that workspace data is processed only in named
+   * regions. When `enforced` is true, every API call whose serving region
+   * (CODECLONE_REGION env, default "global") does not match the workspace
+   * `region` is refused with HTTP 451 and an audit entry tagged
+   * `workspace.residency_block`. When `enforced` is false the policy acts as
+   * a documentation hint surfaced in the dashboard and audit metadata but
+   * does not block traffic, which lets ops migrate workloads region by
+   * region before flipping enforcement.
+   */
+  residency?: {
+    region: ResidencyRegion;
+    enforced: boolean;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
+}
+
+export type ResidencyRegion = "us" | "eu" | "apac" | "global";
+
+export const RESIDENCY_REGIONS: readonly ResidencyRegion[] = [
+  "us",
+  "eu",
+  "apac",
+  "global",
+] as const;
+
+export const RESIDENCY_REGION_LABELS: Record<ResidencyRegion, string> = {
+  us: "United States",
+  eu: "European Union",
+  apac: "Asia Pacific",
+  global: "Global (no restriction)",
+};
+
+export function isResidencyRegion(v: unknown): v is ResidencyRegion {
+  return typeof v === "string" && (RESIDENCY_REGIONS as readonly string[]).includes(v);
+}
+
+export function sanitizeResidency(
+  input: { region?: unknown; enforced?: unknown } | null | undefined,
+): { region: ResidencyRegion; enforced: boolean } | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  if (!isResidencyRegion(o.region)) return null;
+  return { region: o.region, enforced: Boolean(o.enforced) };
+}
+
+/**
+ * Replace the workspace residency policy. Pass null to clear. The caller
+ * must enforce owner permission and write the audit entry; this helper is
+ * intentionally a thin persistence wrapper so the audit diff is computed
+ * against the on-disk record by the route handler.
+ */
+export async function setResidency(
+  ws: WorkspaceRecord,
+  policy: { region: ResidencyRegion; enforced: boolean } | null,
+  updatedBy: string,
+): Promise<WorkspaceRecord> {
+  if (!policy) {
+    ws.residency = null;
+  } else {
+    ws.residency = {
+      region: policy.region,
+      enforced: policy.enforced,
+      updatedAt: Date.now(),
+      updatedBy,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Region the current process is serving. Set by ops at deploy time. The
+ * default "global" means "no claim about residency"; enforced workspaces
+ * pinned to a specific region will refuse to be served by a global node.
+ */
+export function currentServingRegion(): ResidencyRegion {
+  const v = (process.env.CODECLONE_REGION ?? "global").trim().toLowerCase();
+  return isResidencyRegion(v) ? v : "global";
+}
+
+/**
+ * Decide whether a workspace residency policy permits the current serving
+ * region. "global" workspace region always allows. Otherwise the serving
+ * region must equal the pinned region. When `enforced` is false the call
+ * is allowed regardless and the caller should still log the mismatch as a
+ * warning so ops can see drift before flipping enforcement.
+ */
+export function residencyDecision(
+  ws: WorkspaceRecord | null | undefined,
+  serving: ResidencyRegion = currentServingRegion(),
+): { allowed: boolean; enforced: boolean; pinned: ResidencyRegion; serving: ResidencyRegion; match: boolean } {
+  const pinned: ResidencyRegion = ws?.residency?.region ?? "global";
+  const enforced = !!ws?.residency?.enforced;
+  const match = pinned === "global" || pinned === serving;
+  return { allowed: match || !enforced, enforced, pinned, serving, match };
 }
 
 export interface LegalHoldInput {
