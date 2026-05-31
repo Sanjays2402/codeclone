@@ -97,3 +97,5 @@ tmp/
 .scratch/
 uv.lock
 shares/
+api-keys/
+webhooks/
