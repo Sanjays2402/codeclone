@@ -10,6 +10,38 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Rotate webhook signing secrets with zero dropped deliveries. Workspace editors and owners open a registered webhook under `/webhooks` and click Rotate to issue a fresh `whsec_...` secret. The plaintext is shown exactly once, only its SHA-256 hash is persisted, and the existing secret stays primary so nothing breaks. For the next 24 hours (configurable per call, 1m to 30d) every delivery is signed with BOTH secrets: the existing one in `X-CodeClone-Signature` / `X-CodeClone-Hash`, and the new one in `X-CodeClone-Signature-Next` / `X-CodeClone-Hash-Next`. Receivers verify with whichever secret they already have, deploy a verifier that accepts the new secret, then the operator clicks Finalize to promote the pending secret to primary and stop dual-signing. Cancel discards the pending secret without touching primary. Every initiate/finalize/cancel writes an immutable audit entry (`webhook.secret.rotate_initiate|finalize|cancel`) with the rotating prefixes in the diff, the same call flows through `audit.recorded` for SIEM streaming, and viewers are denied at the API layer. Cross-workspace callers see a 404 because rotation is workspace-scoped end to end. Pinned by `web/tests/webhooks-rotate.test.ts` (plaintext-once, dual-sign header verification with HMAC re-derivation, finalize promotion, cancel no-op on primary, cross-tenant isolation).
+
+### Try it: rotate a webhook signing secret
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# 1. Sign in, create or open a webhook at http://localhost:3000/webhooks,
+#    expand the row, and click Rotate. The new secret is shown once.
+#
+# 2. Or rotate from the CLI (editor/owner cookie required). A 24h grace
+#    window is the default; override with graceMs in the body.
+WH=wh_xxxxxxxx        # webhook id
+WS=ws_yyyyyyyyyyy     # workspace id
+curl -s -X POST "http://localhost:3000/api/webhooks/$WH/rotate?workspaceId=$WS" \
+  -H 'content-type: application/json' \
+  -b "$COOKIE" -d '{"graceMs": 86400000}' | jq
+# { "record": { "pendingSecretPrefix": "whsec_abcd", "pendingExpiresAt": 1717282800000, ... },
+#   "secret": "whsec_...",  # shown ONCE, store it
+#   "expiresAt": 1717282800000 }
+
+# 3. Every delivery during the grace window now carries dual signatures:
+#    X-CodeClone-Signature:      t=...,v1=<hmac-with-old-secret>
+#    X-CodeClone-Signature-Next: t=...,v1=<hmac-with-new-secret>
+#    X-CodeClone-Hash, X-CodeClone-Hash-Next
+
+# 4. Once receivers accept the new secret, finalize:
+curl -s -X PUT "http://localhost:3000/api/webhooks/$WH/rotate?workspaceId=$WS" -b "$COOKIE" | jq
+# Or cancel and keep the old secret:
+curl -s -X DELETE "http://localhost:3000/api/webhooks/$WH/rotate?workspaceId=$WS" -b "$COOKIE" | jq
+```
+
 - Brute-force protection on the sign-in endpoint with per-email and per-IP fixed-window counters. Magic link issuance at `POST /api/auth/request` evaluates both scopes before doing any work, returns a structured 429 with `Retry-After` and `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` / `X-RateLimit-Policy` headers when either ceiling is exceeded, and records `auth.magic_link_throttled_email` or `auth.magic_link_throttled_ip` audit entries (which flow through the same SIEM webhook pipeline as every other security event). Tripping the limit promotes the source to a lockout for the remainder of the window so an attacker cannot enumerate accounts or bomb a user's inbox. Defaults are 5 attempts per email and 20 per IP in 15 minutes, all overridable via `CODECLONE_AUTH_THROTTLE_EMAIL_MAX`, `CODECLONE_AUTH_THROTTLE_IP_MAX`, `CODECLONE_AUTH_THROTTLE_WINDOW_SEC`, and `CODECLONE_AUTH_THROTTLE_LOCKOUT_SEC`; setting any maximum to 0 disables that scope. Workspace owners get a console at `/settings/security/lockouts` that shows active blocks as opaque hashes (so the UI itself never leaks raw emails or IPs) with countdowns until they clear, and `GET /api/security/lockouts` returns the same data for automation. Cross-scope independence, lockout semantics, header shape, and active-lockout enumeration are pinned by `web/tests/auth-throttle.test.ts`.
 
 ### Try it: trip and inspect a sign-in lockout

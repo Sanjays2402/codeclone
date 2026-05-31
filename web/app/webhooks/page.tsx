@@ -17,6 +17,8 @@ import {
   CaretDown,
   CaretRight,
   Buildings,
+  Key,
+  ArrowsClockwise,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -29,6 +31,9 @@ interface WebhookSummary {
   url: string;
   events: string[];
   secretPrefix: string;
+  pendingSecretPrefix?: string;
+  pendingCreatedAt?: number;
+  pendingExpiresAt?: number;
   createdAt: number;
   updatedAt?: number;
   disabled?: boolean;
@@ -98,8 +103,9 @@ export default function WebhooksPage() {
   const [selectedEvents, setSelectedEvents] = useState<string[]>(["compare.completed"]);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState("");
-  const [revealed, setRevealed] = useState<{ id: string; secret: string } | null>(null);
+  const [revealed, setRevealed] = useState<{ id: string; secret: string; kind: "create" | "rotate"; expiresAt?: number } | null>(null);
   const [busy, setBusy] = useState("");
+  const [rotateErr, setRotateErr] = useState("");
   const [open, setOpen] = useState<string>("");
   const [deliveries, setDeliveries] = useState<Record<string, DeliveryRecord[]>>({});
   const [delivStatus, setDelivStatus] = useState<Record<string, Status>>({});
@@ -198,7 +204,7 @@ export default function WebhooksPage() {
         if (!res.ok || !j.record || !j.secret) {
           throw new Error(j.error ?? `Request failed (${res.status}).`);
         }
-        setRevealed({ id: j.record.id, secret: j.secret });
+        setRevealed({ id: j.record.id, secret: j.secret, kind: "create" });
         setLabel("");
         setUrl("");
         setSelectedEvents(["compare.completed"]);
@@ -243,6 +249,101 @@ export default function WebhooksPage() {
       }
     },
     [refresh, activeWs],
+  );
+
+  const rotate = useCallback(
+    async (id: string) => {
+      if (
+        !confirm(
+          "Issue a new signing secret? Both the current and new secret will sign every delivery for 24 hours so you can roll receivers forward without dropped events.",
+        )
+      )
+        return;
+      setBusy(id);
+      setRotateErr("");
+      try {
+        const res = await fetch(
+          `/api/webhooks/${id}/rotate?workspaceId=${encodeURIComponent(activeWs)}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" },
+        );
+        const j = (await res.json().catch(() => ({}))) as {
+          secret?: string;
+          record?: WebhookSummary;
+          expiresAt?: number;
+          error?: { message?: string } | string;
+        };
+        if (!res.ok || !j.secret || !j.record) {
+          const msg =
+            typeof j.error === "string"
+              ? j.error
+              : j.error?.message ?? `Rotation failed (${res.status}).`;
+          throw new Error(msg);
+        }
+        setRevealed({ id: j.record.id, secret: j.secret, kind: "rotate", expiresAt: j.expiresAt });
+        await refresh();
+      } catch (e) {
+        setRotateErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [activeWs, refresh],
+  );
+
+  const finalize = useCallback(
+    async (id: string) => {
+      if (!confirm("Finalize rotation now? The old signing secret will stop working immediately.")) return;
+      setBusy(id);
+      setRotateErr("");
+      try {
+        const res = await fetch(
+          `/api/webhooks/${id}/rotate?workspaceId=${encodeURIComponent(activeWs)}`,
+          { method: "PUT" },
+        );
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
+          const msg =
+            typeof j.error === "string"
+              ? j.error
+              : j.error?.message ?? `Finalize failed (${res.status}).`;
+          throw new Error(msg);
+        }
+        await refresh();
+      } catch (e) {
+        setRotateErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [activeWs, refresh],
+  );
+
+  const cancelRotate = useCallback(
+    async (id: string) => {
+      if (!confirm("Cancel the in-flight rotation? The pending secret will be discarded.")) return;
+      setBusy(id);
+      setRotateErr("");
+      try {
+        const res = await fetch(
+          `/api/webhooks/${id}/rotate?workspaceId=${encodeURIComponent(activeWs)}`,
+          { method: "DELETE" },
+        );
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
+          const msg =
+            typeof j.error === "string"
+              ? j.error
+              : j.error?.message ?? `Cancel failed (${res.status}).`;
+          throw new Error(msg);
+        }
+        await refresh();
+      } catch (e) {
+        setRotateErr(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [activeWs, refresh],
   );
 
   const loadDeliveries = useCallback(
@@ -425,7 +526,7 @@ export default function WebhooksPage() {
         {revealed && (
           <div className="mt-4 ruled rounded-sm p-3 bg-[var(--color-accent-soft)] border-[color:var(--color-accent)]">
             <div className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-accent-ink)] mb-1.5 flex items-center gap-1.5">
-              <Warning size={12} weight="duotone" /> signing secret shown once
+              <Warning size={12} weight="duotone" /> {revealed.kind === "rotate" ? "new signing secret shown once" : "signing secret shown once"}
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <code className="mono text-[12px] bg-[var(--color-paper)] px-2 py-1 rounded-sm border border-[var(--color-rule)] break-all">
@@ -438,6 +539,14 @@ export default function WebhooksPage() {
               hash is also sent on every delivery via
               <code className="mono px-1">X-CodeClone-Hash</code> so your
               server can verify origin.
+              {revealed.kind === "rotate" && (
+                <>
+                  {" "}During the grace window every delivery is also
+                  signed with this new secret via
+                  <code className="mono px-1">X-CodeClone-Signature-Next</code>.
+                  Roll your verifier forward, then finalize to retire the old secret.
+                </>
+              )}
             </p>
           </div>
         )}
@@ -512,6 +621,16 @@ export default function WebhooksPage() {
                   <button
                     type="button"
                     disabled={busy === w.id || !canWrite}
+                    onClick={() => void rotate(w.id)}
+                    aria-label="Rotate signing secret"
+                    title={!canWrite ? "Viewers cannot rotate webhook secrets." : "Issue a new signing secret with a 24h dual-sign window."}
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50"
+                  >
+                    <ArrowsClockwise size={11} weight="duotone" /> rotate
+                  </button>
+                  <button
+                    type="button"
+                    disabled={busy === w.id || !canWrite}
                     onClick={() => void remove(w.id)}
                     aria-label="Delete webhook"
                     title={!canWrite ? "Viewers cannot delete webhooks." : undefined}
@@ -530,6 +649,35 @@ export default function WebhooksPage() {
                         <span className="text-[var(--color-neg)]">last error: {w.lastError}</span>
                       )}
                     </div>
+                    {w.pendingSecretPrefix && (
+                      <div className="mb-3 ruled rounded-sm bg-[var(--color-paper)] p-3 flex flex-wrap items-center gap-3">
+                        <Key size={14} weight="duotone" className="text-[var(--color-ink-2)]" />
+                        <span className="mono text-[11.5px] text-[var(--color-ink-2)]">
+                          rotation in progress: dual-signing with <span className="text-[var(--color-ink-1)]">{w.pendingSecretPrefix}…</span>
+                          {w.pendingExpiresAt ? <> until {fmtTs(w.pendingExpiresAt)}</> : null}
+                        </span>
+                        <span className="flex-1" />
+                        <button
+                          type="button"
+                          disabled={busy === w.id || !canWrite}
+                          onClick={() => void finalize(w.id)}
+                          className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50"
+                        >
+                          finalize now
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy === w.id || !canWrite}
+                          onClick={() => void cancelRotate(w.id)}
+                          className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-neg-soft)] text-[var(--color-neg)] disabled:opacity-50"
+                        >
+                          cancel
+                        </button>
+                      </div>
+                    )}
+                    {rotateErr && open === w.id && (
+                      <div className="mb-3 mono text-[11.5px] text-[var(--color-neg)]">{rotateErr}</div>
+                    )}
                     <div className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] mb-1.5">recent deliveries</div>
                     {delivStatus[w.id] === "loading" && <LoadingRow rows={3} />}
                     {delivStatus[w.id] === "error" && <ErrorBlock message="Could not load delivery log." />}

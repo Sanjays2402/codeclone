@@ -58,6 +58,21 @@ export interface WebhookRecord {
   events: WebhookEvent[];
   secretHash: string; // sha-256 of plaintext secret, hex
   secretPrefix: string; // first 10 chars of plaintext, for display
+  /**
+   * In-flight signing secret rotation. While `pendingSecretHash` is set
+   * AND `pendingExpiresAt` is in the future, every delivery is signed
+   * with BOTH the primary and pending secrets (headers `X-CodeClone-
+   * Signature` and `X-CodeClone-Signature-Next`), giving receivers a
+   * grace window to migrate. On `finalizeRotation` (or auto-finalize
+   * once `pendingExpiresAt` elapses) the pending secret is promoted to
+   * primary and the pending fields are cleared. `cancelRotation` drops
+   * the pending secret without promoting it. The plaintext is shown to
+   * the caller exactly once (at rotate time), matching create-time.
+   */
+  pendingSecretHash?: string;
+  pendingSecretPrefix?: string;
+  pendingCreatedAt?: number;
+  pendingExpiresAt?: number;
   createdAt: number;
   updatedAt?: number;
   disabled?: boolean;
@@ -75,6 +90,9 @@ export interface WebhookSummary {
   url: string;
   events: WebhookEvent[];
   secretPrefix: string;
+  pendingSecretPrefix?: string;
+  pendingCreatedAt?: number;
+  pendingExpiresAt?: number;
   createdAt: number;
   updatedAt?: number;
   disabled?: boolean;
@@ -349,6 +367,9 @@ export function summarize(rec: WebhookRecord): WebhookSummary {
     url: rec.url,
     events: rec.events,
     secretPrefix: rec.secretPrefix,
+    pendingSecretPrefix: rec.pendingSecretPrefix,
+    pendingCreatedAt: rec.pendingCreatedAt,
+    pendingExpiresAt: rec.pendingExpiresAt,
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
     disabled: rec.disabled,
@@ -552,6 +573,101 @@ export async function setDisabled(
   return true;
 }
 
+// Bounds for rotation grace window. Receivers need enough time to deploy
+// a verifier that accepts the new secret; we cap at 30d so a forgotten
+// rotation eventually finalizes on its own.
+export const ROTATION_MIN_MS = 60 * 1000; // 1 minute (tests + emergencies)
+export const ROTATION_DEFAULT_MS = 24 * 60 * 60 * 1000; // 24h
+export const ROTATION_MAX_MS = 30 * 24 * 60 * 60 * 1000; // 30d
+
+export interface RotatedWebhook {
+  record: WebhookSummary;
+  secret: string; // plaintext of the NEW pending secret, returned once
+  expiresAt: number;
+}
+
+/**
+ * Begin a signing-secret rotation. Generates a fresh secret, stores
+ * only its hash as `pendingSecretHash`, and returns the plaintext to
+ * the caller exactly once. During the grace window every delivery is
+ * signed with BOTH the primary and pending secrets so receivers can
+ * roll forward without dropping events. Calling this while a rotation
+ * is already pending replaces the pending secret (does NOT touch the
+ * primary), so an operator can extend or restart a botched rollout.
+ */
+export async function rotateSecret(
+  id: string,
+  workspaceId: string | null,
+  graceMs: number = ROTATION_DEFAULT_MS,
+): Promise<RotatedWebhook | null> {
+  const rec = await loadWebhook(id);
+  if (!rec) return null;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return null;
+    if (!webhookBelongsTo(rec, workspaceId)) return null;
+  }
+  let grace = Number.isFinite(graceMs) ? Math.floor(graceMs) : ROTATION_DEFAULT_MS;
+  if (grace < ROTATION_MIN_MS) grace = ROTATION_MIN_MS;
+  if (grace > ROTATION_MAX_MS) grace = ROTATION_MAX_MS;
+  const secret = `${SECRET_PREFIX}${crypto.randomBytes(SECRET_BYTES).toString("base64url")}`;
+  const now = Date.now();
+  rec.pendingSecretHash = hashSecret(secret);
+  rec.pendingSecretPrefix = secret.slice(0, 10);
+  rec.pendingCreatedAt = now;
+  rec.pendingExpiresAt = now + grace;
+  rec.updatedAt = now;
+  await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  return { record: summarize(rec), secret, expiresAt: rec.pendingExpiresAt };
+}
+
+/**
+ * Promote the pending secret to primary and clear pending state.
+ * Returns null if there is no pending secret or the webhook is not
+ * visible to the workspace.
+ */
+export async function finalizeRotation(
+  id: string,
+  workspaceId: string | null,
+): Promise<WebhookSummary | null> {
+  const rec = await loadWebhook(id);
+  if (!rec) return null;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return null;
+    if (!webhookBelongsTo(rec, workspaceId)) return null;
+  }
+  if (!rec.pendingSecretHash || !rec.pendingSecretPrefix) return null;
+  rec.secretHash = rec.pendingSecretHash;
+  rec.secretPrefix = rec.pendingSecretPrefix;
+  rec.pendingSecretHash = undefined;
+  rec.pendingSecretPrefix = undefined;
+  rec.pendingCreatedAt = undefined;
+  rec.pendingExpiresAt = undefined;
+  rec.updatedAt = Date.now();
+  await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  return summarize(rec);
+}
+
+/** Drop the pending secret without promoting it. */
+export async function cancelRotation(
+  id: string,
+  workspaceId: string | null,
+): Promise<WebhookSummary | null> {
+  const rec = await loadWebhook(id);
+  if (!rec) return null;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return null;
+    if (!webhookBelongsTo(rec, workspaceId)) return null;
+  }
+  if (!rec.pendingSecretHash) return summarize(rec);
+  rec.pendingSecretHash = undefined;
+  rec.pendingSecretPrefix = undefined;
+  rec.pendingCreatedAt = undefined;
+  rec.pendingExpiresAt = undefined;
+  rec.updatedAt = Date.now();
+  await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  return summarize(rec);
+}
+
 /**
  * Workspace-scoped delivery list. If `workspaceId` is supplied, returns
  * an empty list when the webhook either does not exist or belongs to a
@@ -730,6 +846,20 @@ async function deliverOnce(
   // delivery via the X-CodeClone-Hash header so receivers can validate
   // origin without us re-storing the plaintext).
   const signature = signPayload(rec.secretHash, ts, body);
+  // Dual-sign during an in-flight rotation so receivers can verify with
+  // either secret. Once `pendingExpiresAt` elapses the next mutation
+  // (rotate/finalize/cancel) will clean it up; until then we send both
+  // signatures on every delivery in this grace window.
+  const rotating =
+    !!rec.pendingSecretHash &&
+    !!rec.pendingExpiresAt &&
+    rec.pendingExpiresAt > Date.now();
+  const nextSignature = rotating
+    ? signPayload(rec.pendingSecretHash as string, ts, body)
+    : undefined;
+  const nextHashHeader = rotating
+    ? (rec.pendingSecretHash as string).slice(0, 16)
+    : undefined;
   const startedAt = Date.now();
   let lastErr: string | undefined;
   let lastStatus = 0;
@@ -780,6 +910,12 @@ async function deliverOnce(
             "X-CodeClone-Delivery": deliveryId,
             "X-CodeClone-Signature": signature,
             "X-CodeClone-Hash": rec.secretHash.slice(0, 16),
+            ...(nextSignature
+              ? {
+                  "X-CodeClone-Signature-Next": nextSignature,
+                  "X-CodeClone-Hash-Next": nextHashHeader as string,
+                }
+              : {}),
           },
           body,
           signal: ctrl.signal,
