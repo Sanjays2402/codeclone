@@ -88,8 +88,15 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
     setError(null);
     try {
       const r = await fetch(`/api/workspaces/${id}`, { cache: "no-store" });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (r.status === 403 && j?.error?.type === "ip_not_allowed") {
+          throw new Error(
+            `IP not on workspace allowlist (your IP: ${j.error.ip ?? "unknown"}). Ask an owner to add it, or connect from an approved network.`,
+          );
+        }
+        throw new Error(`HTTP ${r.status}`);
+      }
       setWs(j.workspace);
       // Invites are visible to owner/editor only.
       if (j.workspace.myRole === "owner" || j.workspace.myRole === "editor") {

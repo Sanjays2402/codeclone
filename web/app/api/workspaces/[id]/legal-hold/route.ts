@@ -24,6 +24,7 @@ import {
 } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import { requireStepUp } from "../../../../../lib/mfa";
+import { enforceWorkspaceAllowlistForSession } from "../../../../../lib/dashboard-allowlist-enforce";
 import {
   getWorkspace,
   getActiveMember,
@@ -54,6 +55,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/legal-hold" });
+  if (__ipBlock) return __ipBlock;
   if (!getActiveMember(ws, user.id)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
@@ -91,6 +94,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
   const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/legal-hold" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.legal_hold_place",
@@ -150,6 +155,8 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
   const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/legal-hold" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.legal_hold_release",

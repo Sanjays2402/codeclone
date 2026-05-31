@@ -4,6 +4,7 @@ import { tryRecordAudit } from "../../../../lib/audit";
 import { requireStepUp } from "../../../../lib/mfa";
 import { revokeAllSessions } from "../../../../lib/sessions";
 import { listKeys, revokeKey } from "../../../../lib/api-keys";
+import { enforceWorkspaceAllowlistForSession } from "../../../../lib/dashboard-allowlist-enforce";
 import {
   getWorkspace,
   getActiveMember,
@@ -49,6 +50,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces" });
+  if (__ipBlock) return __ipBlock;
   if (!getActiveMember(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   return NextResponse.json({ workspace: publicWorkspace(ws, user.id) });
 }
@@ -76,6 +79,8 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.update",
@@ -221,6 +226,8 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces" });
+  if (__ipBlock) return __ipBlock;
   const url = new URL(req.url);
   const targetUserId = url.searchParams.get("userId");
 

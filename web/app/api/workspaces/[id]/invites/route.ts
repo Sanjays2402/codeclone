@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader, normalizeEmail } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
+import { enforceWorkspaceAllowlistForSession } from "../../../../../lib/dashboard-allowlist-enforce";
 import {
   getWorkspace,
   canInvite,
@@ -18,6 +19,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/invites" });
+  if (__ipBlock) return __ipBlock;
   if (!canInvite(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const items = (await listInvitesForWorkspace(id)).map(publicInvite);
   return NextResponse.json({ items });
@@ -34,6 +37,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/invites" });
+  if (__ipBlock) return __ipBlock;
   if (!canInvite(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.invite_create",

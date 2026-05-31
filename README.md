@@ -10,6 +10,29 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Dashboard IP allowlist enforcement. The per-workspace CIDR allowlist previously only gated API key traffic, leaving the cookie-authenticated dashboard and the session-backed `/api/workspaces/:id/**` admin endpoints open to anyone with valid credentials from any network. This release closes the gap: every workspace management route runs through `enforceWorkspaceAllowlistForSession` in `web/lib/dashboard-allowlist-enforce.ts`, which evaluates the request IP against `workspace.ipAllowlist` and returns `403 ip_not_allowed` with the blocked IP echoed back so the user can ask an owner to add it. Blocks write a `workspace.ip_block` audit entry tagged `channel:"dashboard"` with the surface name (members, sso, retention, etc.) so owners can tell dashboard blocks apart from API key blocks. Lockout safety is built in: the allowlist edit endpoint itself opts out of enforcement, so an owner who pins themselves to the wrong CIDR can still rewrite the list from wherever they are (with the recovery edit also recorded to the audit log). The workspace detail page surfaces the friendly message inline instead of a generic `HTTP 403`. Pinned by `web/tests/dashboard-allowlist-enforce.test.ts` (open allowlist, off-list block with structured payload, on-list allow, bypass lockout safety, cross-tenant isolation, audit entry shape). Covers the standard procurement ask (SOC 2 CC6.6, ISO 27001 A.13.1): "administrative access to tenant data is restricted to approved networks."
+
+### Try it: pin a workspace dashboard to your office CIDR
+
+```sh
+cd web && pnpm dev   # http://localhost:3000
+
+# Owner pins the allowlist. The allowlist edit endpoint itself is never
+# gated, so the owner cannot get permanently locked out.
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/allowlist \
+  -H 'cookie: cc_session=...' \
+  -H 'content-type: application/json' \
+  -d '{"entries": ["203.0.113.0/24"]}'
+
+# A request from an off-list IP now sees the dashboard route refuse:
+curl -si http://localhost:3000/api/workspaces/$WS_ID \
+  -H 'cookie: cc_session=...' \
+  -H 'x-forwarded-for: 198.51.100.7'
+# HTTP/1.1 403 Forbidden
+# {"error":{"type":"ip_not_allowed","ip":"198.51.100.7",
+#   "message":"Your current IP is not on this workspace's allowlist..."}}
+```
+
 - Workspace MFA enrollment policy. Owners flip on a workspace-wide requirement that every active member enroll TOTP before they can create API keys, webhooks, or snippets, with a configurable grace window (0 to 90 days) measured from policy enablement or member join time, whichever is later. After the deadline, sensitive mutating endpoints refuse the user's requests with HTTP 403 `mfa_enrollment_required` and an audit row, while read-only endpoints stay open so users can self-remediate at /settings/security. The dashboard polls `/api/auth/mfa/required` to render a banner long before requests start being blocked. Cross-workspace scoping is strict: a policy in workspace A only constrains its own active members, never users who only belong to workspace B. Owner-only configuration via PUT /api/workspaces/:id/mfa-policy with a before/after audit diff; runtime decision in `lib/mfa-policy-decide.ts` and the NextResponse wrapper in `lib/mfa-enforce.ts`. Pinned by `web/tests/workspaces-mfa-policy.test.ts` (sanitize/clamp, persist/clear, cross-tenant isolation, the four-way required/enrolled/grace/block matrix). Covers the standard procurement ask (SOC 2 CC6.1, NIST 800-53 IA-2(1)): "multifactor authentication is required for all privileged users."
 
 ### Try it: require TOTP for everyone in a workspace

@@ -20,6 +20,7 @@ import {
 } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import { requireStepUp } from "../../../../../lib/mfa";
+import { enforceWorkspaceAllowlistForSession } from "../../../../../lib/dashboard-allowlist-enforce";
 import {
   getWorkspace,
   getActiveMember,
@@ -41,6 +42,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/wipe" });
+  if (__ipBlock) return __ipBlock;
 
   const member = getActiveMember(ws, user.id);
   if (!member || member.role !== "owner") {

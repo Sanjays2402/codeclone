@@ -27,6 +27,7 @@ import {
   setWebhookDomainAllowlist,
 } from "../../../../../lib/workspaces";
 import { sanitizeWebhookDomainList } from "../../../../../lib/webhooks";
+import { enforceWorkspaceAllowlistForSession } from "../../../../../lib/dashboard-allowlist-enforce";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/webhook-domains" });
+  if (__ipBlock) return __ipBlock;
   if (!getActiveMember(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   return NextResponse.json({
     entries: Array.isArray(ws.webhookDomainAllowlist) ? ws.webhookDomainAllowlist : [],
@@ -50,6 +53,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/webhook-domains" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.webhook_domains_update",

@@ -20,6 +20,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
+import { enforceWorkspaceAllowlistForSession } from "../../../../../lib/dashboard-allowlist-enforce";
 import {
   getWorkspace,
   getActiveMember,
@@ -52,6 +53,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/session-policy" });
+  if (__ipBlock) return __ipBlock;
   if (!getActiveMember(ws, user.id)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
@@ -70,6 +73,8 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/session-policy" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.session_policy_update",
@@ -111,6 +116,8 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
+  const __ipBlock = await enforceWorkspaceAllowlistForSession(req, ws, { id: user.id, email: user.email }, { surface: "workspaces/session-policy" });
+  if (__ipBlock) return __ipBlock;
   if (!canManage(ws, user.id)) {
     await tryRecordAudit(req, {
       action: "workspace.session_policy_update",
