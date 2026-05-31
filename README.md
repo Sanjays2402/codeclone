@@ -21,6 +21,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Next.js 15 dashboard: pairs list with search + lang filter, pair detail with shiki diff viewer, datasets browse, models/adapters registry, eval grid with Recharts sparklines, serve health probe
 - Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, a line-level alignment heatmap that flags exact and moved blocks, and an automatic clone-type verdict (Type-1 exact / Type-2 renamed / Type-3 near-miss / Type-4 semantic candidate) with rationale
 - One-click `/demo` landing page: three preloaded sample pairs (rename, restyle, distinct) that hit the live `/api/compare` route on mount and render verdict, confidence, latency, scores, and diff in under a second so a first-time visitor sees the model work without typing anything
+- Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack
@@ -179,6 +180,7 @@ Web (`web/package.json`): `dev`, `build`, `start`, `lint`, `typecheck`, `seed` (
 cd web && npm run dev
 open http://127.0.0.1:3000/demo     # zero-typing landing, runs samples automatically
 open http://127.0.0.1:3000/compare  # bring your own snippets
+open http://127.0.0.1:3000/batch    # pairwise similarity matrix across many snippets
 ```
 
 The `/demo` page auto-runs the first of three preloaded sample pairs (renamed variables, partial overlap, distinct) against the live `/api/compare` route and renders verdict, confidence, latency, scores, shared identifiers, and a diff. Click another sample to switch. The `/compare` page is the same scoring backend behind a paste-your-own editor. For a scripted call:
@@ -190,6 +192,17 @@ curl -sS -X POST http://127.0.0.1:3000/api/compare \
 ```
 
 Response includes the three Jaccard-family scores, shared identifiers, and a `alignment` block with per-line best matches plus moved-block flags. The same payload powers the heatmap above the diff viewer.
+
+The `/batch` page accepts up to twelve snippets and returns an NxN matrix plus the upper-triangular pair details. Cells are click-to-inspect: selecting one reveals the clone-type verdict, raw scores, and a side-by-side diff for that pair. For a scripted call:
+
+```
+curl -sS -X POST http://127.0.0.1:3000/api/batch \
+  -H 'content-type: application/json' \
+  -d '{"snippets":[\
+    {"id":"a","label":"two_sum","code":"def two_sum(nums,t):\\n cache={}\\n for i,n in enumerate(nums):\\n  if t-n in cache: return [cache[t-n],i]\\n  cache[n]=i"},\
+    {"id":"b","label":"find_pair","code":"def find_pair(vs,g):\\n c={}\\n for i,v in enumerate(vs):\\n  if g-v in c: return [c[g-v],i]\\n  c[v]=i"},\
+    {"id":"c","label":"reverse","code":"def reverse(s): return s[::-1]"}],"language":"python"}'
+```
 
 ### Serve (FastAPI, `services/serve/codeclone_serve/app.py`)
 
