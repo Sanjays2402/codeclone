@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Plugs,
   Plus,
@@ -15,6 +16,7 @@ import {
   ArrowClockwise,
   CaretDown,
   CaretRight,
+  Buildings,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -22,6 +24,7 @@ import { fmtInt, fmtTs } from "../../lib/format";
 
 interface WebhookSummary {
   id: string;
+  workspaceId?: string;
   label: string;
   url: string;
   events: string[];
@@ -75,7 +78,18 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+interface WorkspaceOption {
+  id: string;
+  name: string;
+  slug: string;
+  myRole: "owner" | "editor" | "viewer" | null;
+}
+
 export default function WebhooksPage() {
+  const [workspaces, setWorkspaces] = useState<WorkspaceOption[]>([]);
+  const [wsStatus, setWsStatus] = useState<Status>("loading");
+  const [wsError, setWsError] = useState("");
+  const [activeWs, setActiveWs] = useState<string>("");
   const [items, setItems] = useState<WebhookSummary[]>([]);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState("");
@@ -91,12 +105,60 @@ export default function WebhooksPage() {
   const [redelivering, setRedelivering] = useState<string>("");
   const [redeliverErr, setRedeliverErr] = useState<string>("");
 
-  const refresh = useCallback(async () => {
+  const myRole = useMemo(
+    () => workspaces.find((w) => w.id === activeWs)?.myRole ?? null,
+    [workspaces, activeWs],
+  );
+  const canWrite = myRole === "owner" || myRole === "editor";
+
+  const loadWorkspaces = useCallback(async () => {
+    setWsStatus("loading");
+    setWsError("");
     try {
-      const res = await fetch("/api/webhooks", { cache: "no-store" });
+      const res = await fetch("/api/workspaces", { cache: "no-store" });
       if (!res.ok) {
+        if (res.status === 401) {
+          setWsError("Sign in to manage webhooks.");
+          setWsStatus("error");
+          return;
+        }
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error ?? `Request failed (${res.status}).`);
+      }
+      const j = (await res.json()) as { items: WorkspaceOption[] };
+      setWorkspaces(j.items ?? []);
+      setWsStatus("ready");
+      if (j.items && j.items.length > 0) {
+        setActiveWs((prev) => (prev && j.items.some((w) => w.id === prev) ? prev : j.items[0].id));
+      }
+    } catch (e) {
+      setWsError(e instanceof Error ? e.message : String(e));
+      setWsStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadWorkspaces();
+  }, [loadWorkspaces]);
+
+  const refresh = useCallback(async () => {
+    if (!activeWs) {
+      setStatus("ready");
+      setItems([]);
+      return;
+    }
+    setStatus("loading");
+    try {
+      const res = await fetch(`/api/webhooks?workspaceId=${encodeURIComponent(activeWs)}`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
+        const msg =
+          typeof j.error === "string"
+            ? j.error
+            : j.error?.message ?? `Request failed (${res.status}).`;
+        throw new Error(msg);
       }
       const j = (await res.json()) as { items: WebhookSummary[] };
       setItems(j.items ?? []);
@@ -105,7 +167,7 @@ export default function WebhooksPage() {
       setError(e instanceof Error ? e.message : String(e));
       setStatus("error");
     }
-  }, []);
+  }, [activeWs]);
 
   useEffect(() => {
     void refresh();
@@ -124,6 +186,7 @@ export default function WebhooksPage() {
             label: label.trim() || "Untitled webhook",
             url: url.trim(),
             events: ["compare.completed"],
+            workspaceId: activeWs,
           }),
         });
         const j = (await res.json().catch(() => ({}))) as {
@@ -144,14 +207,14 @@ export default function WebhooksPage() {
         setCreating(false);
       }
     },
-    [label, url, refresh],
+    [label, url, refresh, activeWs],
   );
 
   const toggle = useCallback(
     async (id: string, disabled: boolean) => {
       setBusy(id);
       try {
-        await fetch(`/api/webhooks/${id}`, {
+        await fetch(`/api/webhooks/${id}?workspaceId=${encodeURIComponent(activeWs)}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ disabled }),
@@ -161,7 +224,7 @@ export default function WebhooksPage() {
         setBusy("");
       }
     },
-    [refresh],
+    [refresh, activeWs],
   );
 
   const remove = useCallback(
@@ -169,26 +232,34 @@ export default function WebhooksPage() {
       if (!confirm("Delete this webhook? Delivery history will be removed.")) return;
       setBusy(id);
       try {
-        await fetch(`/api/webhooks/${id}`, { method: "DELETE" });
+        await fetch(`/api/webhooks/${id}?workspaceId=${encodeURIComponent(activeWs)}`, {
+          method: "DELETE",
+        });
         await refresh();
       } finally {
         setBusy("");
       }
     },
-    [refresh],
+    [refresh, activeWs],
   );
 
-  const loadDeliveries = useCallback(async (id: string) => {
-    setDelivStatus((s) => ({ ...s, [id]: "loading" }));
-    try {
-      const res = await fetch(`/api/webhooks/${id}/deliveries`, { cache: "no-store" });
-      const j = (await res.json()) as { items?: DeliveryRecord[] };
-      setDeliveries((d) => ({ ...d, [id]: j.items ?? [] }));
-      setDelivStatus((s) => ({ ...s, [id]: "ready" }));
-    } catch {
-      setDelivStatus((s) => ({ ...s, [id]: "error" }));
-    }
-  }, []);
+  const loadDeliveries = useCallback(
+    async (id: string) => {
+      setDelivStatus((s) => ({ ...s, [id]: "loading" }));
+      try {
+        const res = await fetch(
+          `/api/webhooks/${id}/deliveries?workspaceId=${encodeURIComponent(activeWs)}`,
+          { cache: "no-store" },
+        );
+        const j = (await res.json()) as { items?: DeliveryRecord[] };
+        setDeliveries((d) => ({ ...d, [id]: j.items ?? [] }));
+        setDelivStatus((s) => ({ ...s, [id]: "ready" }));
+      } catch {
+        setDelivStatus((s) => ({ ...s, [id]: "error" }));
+      }
+    },
+    [activeWs],
+  );
 
   const redeliver = useCallback(
     async (webhookId: string, deliveryId: string) => {
@@ -196,12 +267,16 @@ export default function WebhooksPage() {
       setRedelivering(deliveryId);
       try {
         const res = await fetch(
-          `/api/webhooks/${webhookId}/deliveries/${deliveryId}/redeliver`,
+          `/api/webhooks/${webhookId}/deliveries/${deliveryId}/redeliver?workspaceId=${encodeURIComponent(activeWs)}`,
           { method: "POST" },
         );
         if (!res.ok) {
-          const j = (await res.json().catch(() => ({}))) as { error?: string };
-          throw new Error(j.error ?? `Redelivery failed (${res.status}).`);
+          const j = (await res.json().catch(() => ({}))) as { error?: { message?: string } | string };
+          const msg =
+            typeof j.error === "string"
+              ? j.error
+              : j.error?.message ?? `Redelivery failed (${res.status}).`;
+          throw new Error(msg);
         }
         await loadDeliveries(webhookId);
         await refresh();
@@ -211,7 +286,7 @@ export default function WebhooksPage() {
         setRedelivering("");
       }
     },
-    [loadDeliveries, refresh],
+    [loadDeliveries, refresh, activeWs],
   );
 
   const toggleOpen = useCallback(
@@ -226,11 +301,52 @@ export default function WebhooksPage() {
   return (
     <main className="mx-auto max-w-[1100px] px-7 py-10">
       <H1 eyebrow="settings">webhooks</H1>
-      <p className="text-[14px] text-[var(--color-ink-2)] max-w-[640px] -mt-3 mb-8">
+      <p className="text-[14px] text-[var(--color-ink-2)] max-w-[640px] -mt-3 mb-6">
         Get a real-time POST to your URL every time a customer compares
         code through your API key. Each delivery is signed, retried up to
         three times on failure, and logged here for the last 50 events.
+        Webhooks are scoped to a single workspace and never visible to other
+        tenants.
       </p>
+
+      <section className="ruled rounded-md p-4 mb-8 flex flex-wrap items-center gap-3">
+        <Buildings size={16} weight="duotone" className="text-[var(--color-ink-3)]" />
+        <label htmlFor="ws-picker" className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">
+          workspace
+        </label>
+        {wsStatus === "loading" && (
+          <span className="mono text-[11.5px] text-[var(--color-ink-3)]">Loading workspaces...</span>
+        )}
+        {wsStatus === "error" && (
+          <span className="mono text-[11.5px] text-[var(--color-neg)]">{wsError}</span>
+        )}
+        {wsStatus === "ready" && workspaces.length === 0 && (
+          <span className="mono text-[11.5px] text-[var(--color-ink-3)]">
+            You are not a member of any workspace yet. Create one from <Link className="underline" href="/workspaces">Workspaces</Link>.
+          </span>
+        )}
+        {wsStatus === "ready" && workspaces.length > 0 && (
+          <>
+            <select
+              id="ws-picker"
+              value={activeWs}
+              onChange={(e) => setActiveWs(e.target.value)}
+              className="bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm px-2 py-1 text-[12.5px] outline-none focus:border-[var(--color-ink-3)]"
+            >
+              {workspaces.map((w) => (
+                <option key={w.id} value={w.id}>
+                  {w.name} ({w.myRole ?? "member"})
+                </option>
+              ))}
+            </select>
+            {myRole === "viewer" && (
+              <span className="mono text-[10.5px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)]">
+                read only
+              </span>
+            )}
+          </>
+        )}
+      </section>
 
       <section className="ruled rounded-md p-5 mb-10">
         <H2 eyebrow="register">add an endpoint</H2>
@@ -262,8 +378,9 @@ export default function WebhooksPage() {
             <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-transparent select-none">submit</span>
             <button
               type="submit"
-              disabled={creating || !url.trim()}
+              disabled={creating || !url.trim() || !activeWs || !canWrite}
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper-2)] hover:bg-[var(--color-paper-3)] disabled:opacity-50"
+              title={!canWrite && activeWs ? "Viewers cannot create webhooks." : undefined}
             >
               <Plus size={12} weight="bold" />
               {creating ? "Creating" : "Create webhook"}
@@ -310,8 +427,12 @@ export default function WebhooksPage() {
       {status === "error" && <ErrorBlock message={error} />}
       {status === "ready" && items.length === 0 && (
         <Empty
-          title="No webhooks yet."
-          hint="Register a URL above to start receiving compare.completed events."
+          title={activeWs ? "No webhooks yet." : "Select a workspace."}
+          hint={
+            activeWs
+              ? "Register a URL above to start receiving compare.completed events."
+              : "Pick a workspace above to view its webhook endpoints."
+          }
         />
       )}
       {status === "ready" && items.length > 0 && (
@@ -349,9 +470,10 @@ export default function WebhooksPage() {
                   <span className="mono text-[10.5px] text-[var(--color-ink-3)]">{fmtTs(w.lastDeliveryAt ?? w.createdAt)}</span>
                   <button
                     type="button"
-                    disabled={busy === w.id}
+                    disabled={busy === w.id || !canWrite}
                     onClick={() => void toggle(w.id, !w.disabled)}
                     aria-label={w.disabled ? "Resume" : "Pause"}
+                    title={!canWrite ? "Viewers cannot modify webhooks." : undefined}
                     className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50"
                   >
                     {w.disabled ? <Play size={11} weight="duotone" /> : <Pause size={11} weight="duotone" />}
@@ -359,9 +481,10 @@ export default function WebhooksPage() {
                   </button>
                   <button
                     type="button"
-                    disabled={busy === w.id}
+                    disabled={busy === w.id || !canWrite}
                     onClick={() => void remove(w.id)}
                     aria-label="Delete webhook"
+                    title={!canWrite ? "Viewers cannot delete webhooks." : undefined}
                     className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-neg-soft)] text-[var(--color-neg)] disabled:opacity-50"
                   >
                     <Trash size={11} weight="duotone" /> delete
@@ -414,10 +537,10 @@ export default function WebhooksPage() {
                             <button
                               type="button"
                               onClick={() => void redeliver(w.id, d.id)}
-                              disabled={redelivering === d.id}
+                              disabled={redelivering === d.id || !canWrite}
+                              title={!canWrite ? "Viewers cannot redeliver webhooks." : "Resend this exact payload to the endpoint. Useful for testing receiver fixes."}
                               className="ml-auto inline-flex items-center gap-1.5 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50 disabled:cursor-not-allowed"
                               aria-label="Redeliver this webhook payload"
-                              title="Resend this exact payload to the endpoint. Useful for testing receiver fixes."
                             >
                               <ArrowClockwise size={12} weight="duotone" />
                               {redelivering === d.id ? "Sending" : "Redeliver"}

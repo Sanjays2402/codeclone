@@ -37,6 +37,14 @@ export type WebhookEvent = (typeof SUPPORTED_EVENTS)[number];
 export interface WebhookRecord {
   v: 1;
   id: string;
+  /**
+   * Owning workspace. Required for all webhooks created on or after
+   * the multi-tenant webhook migration. Legacy records that predate this
+   * field are treated as orphaned (not visible to any workspace, not
+   * dispatched to). Set CODECLONE_WEBHOOKS_ALLOW_LEGACY=1 to also surface
+   * them in dispatch and listing for backwards compatibility in dev.
+   */
+  workspaceId?: string;
   label: string;
   url: string;
   events: WebhookEvent[];
@@ -54,6 +62,7 @@ export interface WebhookRecord {
 
 export interface WebhookSummary {
   id: string;
+  workspaceId?: string;
   label: string;
   url: string;
   events: WebhookEvent[];
@@ -66,6 +75,28 @@ export interface WebhookSummary {
   lastDeliveryAt?: number;
   lastStatus?: number;
   lastError?: string;
+}
+
+const WORKSPACE_ID_RE = /^ws_[A-Za-z0-9_-]{6,32}$/;
+
+function allowLegacy(): boolean {
+  return process.env.CODECLONE_WEBHOOKS_ALLOW_LEGACY === "1";
+}
+
+export function validateWorkspaceId(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  return WORKSPACE_ID_RE.test(raw) ? raw : null;
+}
+
+/**
+ * True when this webhook record is visible to / owned by the given
+ * workspace. Legacy records without a workspaceId are hidden from every
+ * workspace unless CODECLONE_WEBHOOKS_ALLOW_LEGACY=1 (dev-only escape).
+ */
+export function webhookBelongsTo(rec: WebhookRecord, workspaceId: string | null | undefined): boolean {
+  if (!workspaceId) return false;
+  if (rec.workspaceId) return rec.workspaceId === workspaceId;
+  return allowLegacy();
 }
 
 export interface DeliveryRecord {
@@ -208,6 +239,7 @@ function hashSecret(plain: string): string {
 export function summarize(rec: WebhookRecord): WebhookSummary {
   return {
     id: rec.id,
+    workspaceId: rec.workspaceId,
     label: rec.label,
     url: rec.url,
     events: rec.events,
@@ -232,10 +264,15 @@ export interface CreateWebhookInput {
   label?: unknown;
   url?: unknown;
   events?: unknown;
+  workspaceId?: unknown;
 }
 
 export async function createWebhook(input: CreateWebhookInput): Promise<CreatedWebhook> {
   await ensureDir();
+  const workspaceId = validateWorkspaceId(input.workspaceId);
+  if (!workspaceId) {
+    throw new Error("workspaceId is required");
+  }
   const url = validateUrl(input.url);
   if (!url.ok) throw new Error(url.error);
   const events = sanitizeEvents(input.events);
@@ -251,6 +288,7 @@ export async function createWebhook(input: CreateWebhookInput): Promise<CreatedW
     const rec: WebhookRecord = {
       v: 1,
       id,
+      workspaceId,
       label: sanitizeLabel(input.label),
       url: url.url,
       events,
@@ -278,7 +316,13 @@ export async function loadWebhook(id: string): Promise<WebhookRecord | null> {
   }
 }
 
-export async function listWebhooks(): Promise<WebhookSummary[]> {
+/**
+ * Internal: list every webhook record regardless of workspace. Callers in
+ * the public API MUST filter by workspace via `listWebhooksForWorkspace`
+ * to prevent cross-tenant leakage. Exposed for migration/admin tooling
+ * only.
+ */
+export async function listAllWebhooks(): Promise<WebhookSummary[]> {
   await ensureDir();
   let names: string[];
   try {
@@ -300,8 +344,62 @@ export async function listWebhooks(): Promise<WebhookSummary[]> {
   return out;
 }
 
-export async function deleteWebhook(id: string): Promise<boolean> {
+/**
+ * Workspace-scoped list. Returns only webhooks owned by the given
+ * workspace. Legacy records without a workspaceId are excluded unless
+ * CODECLONE_WEBHOOKS_ALLOW_LEGACY=1 is set.
+ */
+export async function listWebhooksForWorkspace(workspaceId: string): Promise<WebhookSummary[]> {
+  if (!validateWorkspaceId(workspaceId)) return [];
+  const all = await listAllWebhooks();
+  return all.filter((w) => {
+    if (w.workspaceId) return w.workspaceId === workspaceId;
+    return allowLegacy();
+  });
+}
+
+/**
+ * Back-compat alias. New code MUST use `listWebhooksForWorkspace`. Kept
+ * because settings.ts (per-user export) and dispatchEvent both want a
+ * cross-cutting view; we now route those through workspace-aware helpers
+ * instead.
+ */
+export async function listWebhooks(): Promise<WebhookSummary[]> {
+  return listAllWebhooks();
+}
+
+/**
+ * Workspace-scoped load. Returns null if the webhook does not exist OR
+ * does not belong to the given workspace. Use this in every request
+ * handler that resolves a webhook id from path params.
+ */
+export async function loadWebhookForWorkspace(
+  id: string,
+  workspaceId: string,
+): Promise<WebhookRecord | null> {
+  const rec = await loadWebhook(id);
+  if (!rec) return null;
+  if (!webhookBelongsTo(rec, workspaceId)) return null;
+  return rec;
+}
+
+/**
+ * Hard-delete a webhook. Workspace-scoped: if `workspaceId` is provided
+ * and the webhook does not belong to it, the delete is refused (returns
+ * false) and nothing on disk is touched. Pass `null` only from admin
+ * tooling that has its own authorisation check.
+ */
+export async function deleteWebhook(
+  id: string,
+  workspaceId: string | null,
+): Promise<boolean> {
   if (!isId(id)) return false;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return false;
+    const rec = await loadWebhook(id);
+    if (!rec) return false;
+    if (!webhookBelongsTo(rec, workspaceId)) return false;
+  }
   let removed = false;
   try {
     await fs.unlink(file(id));
@@ -317,13 +415,36 @@ export async function deleteWebhook(id: string): Promise<boolean> {
   return removed;
 }
 
-export async function setDisabled(id: string, disabled: boolean): Promise<boolean> {
+export async function setDisabled(
+  id: string,
+  disabled: boolean,
+  workspaceId: string | null,
+): Promise<boolean> {
   const rec = await loadWebhook(id);
   if (!rec) return false;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return false;
+    if (!webhookBelongsTo(rec, workspaceId)) return false;
+  }
   rec.disabled = disabled || undefined;
   rec.updatedAt = Date.now();
   await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
   return true;
+}
+
+/**
+ * Workspace-scoped delivery list. If `workspaceId` is supplied, returns
+ * an empty list when the webhook either does not exist or belongs to a
+ * different workspace (no leakage of "this id exists somewhere").
+ */
+export async function listDeliveriesForWorkspace(
+  id: string,
+  workspaceId: string,
+): Promise<DeliveryRecord[]> {
+  if (!validateWorkspaceId(workspaceId)) return [];
+  const rec = await loadWebhook(id);
+  if (!rec || !webhookBelongsTo(rec, workspaceId)) return [];
+  return listDeliveries(id);
 }
 
 export async function listDeliveries(id: string): Promise<DeliveryRecord[]> {
@@ -373,6 +494,13 @@ export function signPayload(secret: string, ts: number, body: string): string {
 export interface DispatchOptions {
   event: WebhookEvent;
   payload: unknown;
+  /**
+   * REQUIRED. Only webhooks owned by this workspace receive the event.
+   * Passing null/undefined dispatches to no one (safe default). Legacy
+   * webhooks without a workspaceId are included only when
+   * CODECLONE_WEBHOOKS_ALLOW_LEGACY=1 is set, matching the listing rule.
+   */
+  workspaceId: string | null | undefined;
   // Inject deps for tests.
   fetchImpl?: typeof fetch;
   secretOverride?: string; // when caller already has plaintext (rare)
@@ -389,7 +517,9 @@ export interface DispatchOptions {
  * receiver can verify by re-hashing with the documented algorithm.
  */
 export async function dispatchEvent(opts: DispatchOptions): Promise<DeliveryRecord[]> {
-  const hooks = (await listWebhooks()).filter(
+  const wsId = validateWorkspaceId(opts.workspaceId);
+  if (!wsId) return [];
+  const hooks = (await listWebhooksForWorkspace(wsId)).filter(
     (h) => !h.disabled && h.events.includes(opts.event),
   );
   if (!hooks.length) return [];
@@ -433,10 +563,15 @@ export async function dispatchEvent(opts: DispatchOptions): Promise<DeliveryReco
 export async function redeliverDelivery(
   webhookId: string,
   deliveryId: string,
+  workspaceId: string | null,
   fetchImpl?: typeof fetch,
 ): Promise<DeliveryRecord | null> {
   const rec = await loadWebhook(webhookId);
   if (!rec) return null;
+  if (workspaceId !== null) {
+    if (!validateWorkspaceId(workspaceId)) return null;
+    if (!webhookBelongsTo(rec, workspaceId)) return null;
+  }
   if (typeof deliveryId !== "string" || !/^[A-Za-z0-9_-]{6,32}$/.test(deliveryId)) {
     return null;
   }

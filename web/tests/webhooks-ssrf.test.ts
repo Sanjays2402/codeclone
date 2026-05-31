@@ -93,6 +93,7 @@ test("dispatchEvent refuses delivery to a private URL even if the record was for
     label: "trusted",
     url: "https://example.com/hook",
     events: ["compare.completed"],
+    workspaceId: "ws_ssrf_test",
   });
   assert.ok(secret.startsWith("whsec_"));
   const file = path.join(tmp, `${record.id}.json`);
@@ -104,6 +105,7 @@ test("dispatchEvent refuses delivery to a private URL even if the record was for
   await dispatchEvent({
     event: "compare.completed",
     payload: { ok: true },
+    workspaceId: "ws_ssrf_test",
     fetchImpl: (async () => {
       called = true;
       return new Response("nope", { status: 200 });

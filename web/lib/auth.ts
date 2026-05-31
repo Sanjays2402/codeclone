@@ -269,6 +269,7 @@ export interface SessionContext {
  * this.
  */
 import { isRevoked as _isRevoked, getSession as _getSession } from "./sessions.ts";
+import { effectiveSessionPolicyForUser } from "./workspaces.ts";
 
 export async function currentSessionFromCookieHeader(
   cookieHeader: string | null | undefined,
@@ -278,12 +279,26 @@ export async function currentSessionFromCookieHeader(
   if (!m) return null;
   const payload = verifySession(decodeURIComponent(m[1]));
   if (!payload) return null;
+  let sessionRec: Awaited<ReturnType<typeof _getSession>> = null;
   if (payload.jti) {
     if (await _isRevoked(payload.jti)) return null;
-    const rec = await _getSession(payload.uid, payload.jti);
-    if (rec && rec.revokedAt) return null;
+    sessionRec = await _getSession(payload.uid, payload.jti);
+    if (sessionRec && sessionRec.revokedAt) return null;
   }
   const user = await getUser(payload.uid);
   if (!user) return null;
+  // Workspace-enforced session policy. Strictest non-zero value across all
+  // workspaces the user belongs to. Owners can ratchet down session lifetimes
+  // for everyone on the team without rotating cookies.
+  const policy = await effectiveSessionPolicyForUser(user.id);
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (policy.maxLifetimeSec > 0) {
+    const createdAtSec = sessionRec ? Math.floor(sessionRec.createdAt / 1000) : payload.iat;
+    if (nowSec - createdAtSec > policy.maxLifetimeSec) return null;
+  }
+  if (policy.idleTimeoutSec > 0) {
+    const lastSeenSec = sessionRec ? Math.floor(sessionRec.lastSeenAt / 1000) : payload.iat;
+    if (nowSec - lastSeenSec > policy.idleTimeoutSec) return null;
+  }
   return { user, jti: payload.jti ?? null, payload };
 }

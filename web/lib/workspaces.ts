@@ -80,6 +80,28 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Optional session policy enforced on every authenticated request made by
+   * any member of this workspace. Owner-only configuration.
+   *
+   *   maxLifetimeSec  hard cap on absolute session age in seconds. When
+   *                   the session's createdAt is older than this the
+   *                   session is rejected even if the cookie's own exp
+   *                   has not been reached.
+   *   idleTimeoutSec  max time between user activity (lastSeenAt). When
+   *                   exceeded the session is rejected.
+   *
+   * When a member belongs to multiple workspaces with policies, the
+   * strictest non-zero value applies. A value of 0 means "no limit from
+   * this workspace". Legacy cookies without a jti cannot be idle-tracked
+   * so the idle window is enforced against the cookie's iat instead.
+   */
+  sessionPolicy?: {
+    maxLifetimeSec: number;
+    idleTimeoutSec: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export interface InviteRecord {
@@ -266,6 +288,80 @@ export async function setSsoConfig(
   ws.sso = cfg ?? null;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+// Bounds for workspace session policy values. 0 means "unlimited / no
+// restriction from this workspace".
+export const SESSION_POLICY_BOUNDS = {
+  maxLifetime: { min: 5 * 60, max: 60 * 60 * 24 * 90 },
+  idleTimeout: { min: 60, max: 60 * 60 * 24 * 30 },
+} as const;
+
+export function sanitizeSessionPolicy(
+  input: { maxLifetimeSec?: unknown; idleTimeoutSec?: unknown } | null | undefined,
+): { maxLifetimeSec: number; idleTimeoutSec: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const max = Number((input as Record<string, unknown>).maxLifetimeSec);
+  const idle = Number((input as Record<string, unknown>).idleTimeoutSec);
+  if (!Number.isFinite(max) || !Number.isFinite(idle)) return null;
+  const mi = max === 0
+    ? 0
+    : Math.min(
+        SESSION_POLICY_BOUNDS.maxLifetime.max,
+        Math.max(SESSION_POLICY_BOUNDS.maxLifetime.min, Math.floor(max)),
+      );
+  const id = idle === 0
+    ? 0
+    : Math.min(
+        SESSION_POLICY_BOUNDS.idleTimeout.max,
+        Math.max(SESSION_POLICY_BOUNDS.idleTimeout.min, Math.floor(idle)),
+      );
+  return { maxLifetimeSec: mi, idleTimeoutSec: id };
+}
+
+// Replace the workspace session policy. Pass null (or both values 0) to
+// clear. Caller must enforce owner permission and write the audit entry.
+export async function setSessionPolicy(
+  ws: WorkspaceRecord,
+  policy: { maxLifetimeSec: number; idleTimeoutSec: number } | null,
+  actor: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || (policy.maxLifetimeSec === 0 && policy.idleTimeoutSec === 0)) {
+    ws.sessionPolicy = null;
+  } else {
+    ws.sessionPolicy = {
+      maxLifetimeSec: policy.maxLifetimeSec,
+      idleTimeoutSec: policy.idleTimeoutSec,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+// Resolve the effective session policy for a user across every workspace
+// they belong to. Strictest non-zero wins; 0 means no limit.
+export async function effectiveSessionPolicyForUser(
+  userId: string,
+): Promise<{ maxLifetimeSec: number; idleTimeoutSec: number; sourceWorkspaceId: string | null }> {
+  const workspaces = await listWorkspacesForUser(userId);
+  let max = 0;
+  let idle = 0;
+  let source: string | null = null;
+  for (const w of workspaces) {
+    const p = w.sessionPolicy;
+    if (!p) continue;
+    if (p.maxLifetimeSec > 0 && (max === 0 || p.maxLifetimeSec < max)) {
+      max = p.maxLifetimeSec;
+      source = w.id;
+    }
+    if (p.idleTimeoutSec > 0 && (idle === 0 || p.idleTimeoutSec < idle)) {
+      idle = p.idleTimeoutSec;
+      source = source ?? w.id;
+    }
+  }
+  return { maxLifetimeSec: max, idleTimeoutSec: idle, sourceWorkspaceId: source };
 }
 
 /**

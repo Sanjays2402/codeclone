@@ -206,20 +206,42 @@ export function Toaster(): React.ReactElement {
     };
   }, []);
 
-  // Poll for webhook failures while the tab is visible.
+  // Poll for webhook failures while the tab is visible. Workspace-scoped:
+  // we discover the user's workspaces once and poll each one. Silent on 401
+  // (logged-out) and on transport errors.
   const firstPollRef = useRef(true);
+  const workspaceIdsRef = useRef<string[]>([]);
   useEffect(() => {
     let cancelled = false;
+    async function loadWorkspaces() {
+      try {
+        const res = await fetch("/api/workspaces", { cache: "no-store" });
+        if (!res.ok) return;
+        const j = (await res.json()) as { items?: Array<{ id: string }> };
+        if (cancelled) return;
+        workspaceIdsRef.current = (j.items ?? []).map((w) => w.id);
+      } catch { /* ignore */ }
+    }
     async function poll() {
       if (!prefsRef.current.notifyOnWebhookFailure) return;
       if (typeof document !== "undefined" && document.hidden) return;
+      if (workspaceIdsRef.current.length === 0) await loadWorkspaces();
+      const all: RecentFailure[] = [];
+      for (const wsId of workspaceIdsRef.current) {
+        try {
+          const res = await fetch(
+            `/api/webhooks/recent-failures?limit=25&workspaceId=${encodeURIComponent(wsId)}`,
+            { cache: "no-store" },
+          );
+          if (!res.ok) continue;
+          const j = (await res.json()) as { items?: RecentFailure[] };
+          for (const f of j.items ?? []) all.push(f);
+        } catch { /* ignore */ }
+      }
       try {
-        const res = await fetch("/api/webhooks/recent-failures?limit=25", { cache: "no-store" });
-        if (!res.ok) return;
-        const j = (await res.json()) as { items: RecentFailure[] };
         if (cancelled) return;
         const fresh: RecentFailure[] = [];
-        for (const f of j.items ?? []) {
+        for (const f of all) {
           const key = `${f.webhookId}:${f.attemptedAt}`;
           if (!seenRef.current.has(key)) {
             seenRef.current.add(key);
@@ -227,6 +249,7 @@ export function Toaster(): React.ReactElement {
           }
         }
         if (fresh.length > 0) saveSeen(seenRef.current);
+        all.length = 0;
         // On the very first poll, mark existing failures as seen without
         // toasting (so reloading the page doesn't spam old errors).
         if (!firstPollRef.current) {

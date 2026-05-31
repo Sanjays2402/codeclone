@@ -4,7 +4,7 @@
  * Pure-ish module: takes the webhook list + per-hook delivery loader so it
  * can be tested without spinning up a Next.js route.
  */
-import { listWebhooks, listDeliveries, type WebhookSummary, type DeliveryRecord } from "./webhooks.ts";
+import { listWebhooks, listWebhooksForWorkspace, listDeliveries, type WebhookSummary, type DeliveryRecord } from "./webhooks.ts";
 
 export interface RecentFailure {
   webhookId: string;
@@ -20,6 +20,12 @@ export interface RecentFailure {
 export interface CollectOptions {
   limit?: number;
   since?: number;
+  /**
+   * REQUIRED in the API path. When provided, only failures from webhooks
+   * owned by this workspace are returned. Tests may omit this and use
+   * `listWebhooksImpl` to inject a custom set.
+   */
+  workspaceId?: string | null;
   // Injection seams for tests.
   listWebhooksImpl?: () => Promise<WebhookSummary[]>;
   listDeliveriesImpl?: (id: string) => Promise<DeliveryRecord[]>;
@@ -38,7 +44,10 @@ export function clampSince(raw: number | null | undefined): number {
 export async function collectRecentFailures(opts: CollectOptions = {}): Promise<RecentFailure[]> {
   const limit = clampLimit(opts.limit);
   const since = clampSince(opts.since);
-  const hooksFn = opts.listWebhooksImpl ?? listWebhooks;
+  const hooksFn = opts.listWebhooksImpl
+    ?? (opts.workspaceId
+      ? () => listWebhooksForWorkspace(opts.workspaceId as string)
+      : listWebhooks);
   const deliveriesFn = opts.listDeliveriesImpl ?? listDeliveries;
 
   const hooks = await hooksFn();

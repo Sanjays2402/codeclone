@@ -250,6 +250,7 @@ export async function POST(req: Request) {
   // per-delivery and never block the API response.
   void dispatchEvent({
     event: "compare.completed",
+    workspaceId: key.workspaceId ?? null,
     payload: {
       key_id: key.id,
       language,

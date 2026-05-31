@@ -204,6 +204,7 @@ export async function POST(req: Request) {
 
   void dispatchEvent({
     event: "batch.completed",
+    workspaceId: key.workspaceId ?? null,
     payload: {
       key_id: key.id,
       language: result.language,

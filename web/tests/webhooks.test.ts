@@ -14,14 +14,20 @@ import path from "node:path";
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "codeclone-hooks-"));
 process.env.CODECLONE_WEBHOOKS_DIR = tmp;
 
+const WS = "ws_test_aaaaaa";
+const WS_OTHER = "ws_test_bbbbbb";
+
 const {
   createWebhook,
   listWebhooks,
+  listWebhooksForWorkspace,
   loadWebhook,
+  loadWebhookForWorkspace,
   deleteWebhook,
   setDisabled,
   dispatchEvent,
   listDeliveries,
+  listDeliveriesForWorkspace,
   signPayload,
   validateUrl,
   redeliverDelivery,
@@ -35,12 +41,25 @@ test("webhooks: validateUrl rejects non-http and empty", () => {
   assert.equal(ok.ok, true);
 });
 
+test("webhooks: create requires a workspaceId", async () => {
+  await assert.rejects(
+    () => createWebhook({ label: "no ws", url: "https://example.com/hook" }),
+    /workspaceId is required/,
+  );
+  await assert.rejects(
+    () => createWebhook({ label: "bad ws", url: "https://example.com/hook", workspaceId: "not-a-ws" }),
+    /workspaceId is required/,
+  );
+});
+
 test("webhooks: create returns secret once and persists only hash", async () => {
   const { record, secret } = await createWebhook({
     label: "test hook",
     url: "https://example.com/hook",
+    workspaceId: WS,
   });
   assert.equal(record.label, "test hook");
+  assert.equal(record.workspaceId, WS);
   assert.ok(secret.startsWith("whsec_"));
   assert.equal(record.secretPrefix, secret.slice(0, 10));
 
@@ -48,25 +67,39 @@ test("webhooks: create returns secret once and persists only hash", async () => 
     fs.readFileSync(path.join(tmp, `${record.id}.json`), "utf-8"),
   );
   assert.equal(onDisk.secretHash.length, 64);
+  assert.equal(onDisk.workspaceId, WS);
   assert.ok(!JSON.stringify(onDisk).includes(secret));
 });
 
-test("webhooks: list + delete + pause", async () => {
-  const before = await listWebhooks();
+test("webhooks: list + delete + pause are workspace-scoped", async () => {
+  const before = await listWebhooksForWorkspace(WS);
   const { record } = await createWebhook({
     label: "doomed",
     url: "https://example.com/d",
+    workspaceId: WS,
   });
-  const after = await listWebhooks();
+  const after = await listWebhooksForWorkspace(WS);
   assert.equal(after.length, before.length + 1);
 
-  await setDisabled(record.id, true);
-  const r = await loadWebhook(record.id);
+  await setDisabled(record.id, true, WS);
+  const r = await loadWebhookForWorkspace(record.id, WS);
   assert.equal(r!.disabled, true);
 
-  const ok = await deleteWebhook(record.id);
+  // Cross-tenant: another workspace cannot toggle or load this hook.
+  const denied = await setDisabled(record.id, false, WS_OTHER);
+  assert.equal(denied, false);
+  const stillDisabled = await loadWebhook(record.id);
+  assert.equal(stillDisabled!.disabled, true);
+  assert.equal(await loadWebhookForWorkspace(record.id, WS_OTHER), null);
+
+  const cantDelete = await deleteWebhook(record.id, WS_OTHER);
+  assert.equal(cantDelete, false);
+  // File is still there.
+  assert.ok(fs.existsSync(path.join(tmp, `${record.id}.json`)));
+
+  const ok = await deleteWebhook(record.id, WS);
   assert.equal(ok, true);
-  const post = await listWebhooks();
+  const post = await listWebhooksForWorkspace(WS);
   assert.equal(post.length, before.length);
 });
 
@@ -75,6 +108,7 @@ test("webhooks: dispatchEvent posts to enabled hooks and logs success", async ()
     label: "live",
     url: "https://example.com/live",
     events: ["compare.completed"],
+    workspaceId: WS,
   });
   const calls: Array<{ url: string; init: RequestInit }> = [];
   const fakeFetch = (async (url: string, init: RequestInit) => {
@@ -85,6 +119,7 @@ test("webhooks: dispatchEvent posts to enabled hooks and logs success", async ()
   const results = await dispatchEvent({
     event: "compare.completed",
     payload: { key_id: "abc", language: "python" },
+    workspaceId: WS,
     fetchImpl: fakeFetch,
   });
   const mine = results.filter((r) => r.webhookId === record.id);
@@ -106,7 +141,7 @@ test("webhooks: dispatchEvent posts to enabled hooks and logs success", async ()
   assert.equal(body.event, "compare.completed");
   assert.equal(body.data.key_id, "abc");
 
-  const log = await listDeliveries(record.id);
+  const log = await listDeliveriesForWorkspace(record.id, WS);
   assert.equal(log.length, 1);
   assert.equal(log[0].ok, true);
 
@@ -115,10 +150,46 @@ test("webhooks: dispatchEvent posts to enabled hooks and logs success", async ()
   assert.equal(reloaded!.failureCount, 0);
 });
 
+test("webhooks: dispatchEvent does NOT fan out across tenants", async () => {
+  // Hook for tenant A, dispatch as tenant B: must not be called.
+  const { record } = await createWebhook({
+    label: "tenantA only",
+    url: "https://example.com/tenantA",
+    events: ["compare.completed"],
+    workspaceId: WS,
+  });
+  let called = 0;
+  const fakeFetch = (async (url: string) => {
+    if (url === "https://example.com/tenantA") called += 1;
+    return new Response("ok", { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const results = await dispatchEvent({
+    event: "compare.completed",
+    payload: { key_id: "x" },
+    workspaceId: WS_OTHER,
+    fetchImpl: fakeFetch,
+  });
+  for (const r of results) {
+    assert.notEqual(r.webhookId, record.id);
+  }
+  assert.equal(called, 0);
+
+  // Empty/missing workspaceId dispatches to nobody.
+  const noneResults = await dispatchEvent({
+    event: "compare.completed",
+    payload: {},
+    workspaceId: null,
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(noneResults.length, 0);
+});
+
 test("webhooks: dispatchEvent retries on 500 then records failure", async () => {
   const { record } = await createWebhook({
     label: "flaky",
     url: "https://example.com/flaky",
+    workspaceId: WS,
   });
   let attempts = 0;
   const fakeFetch = (async (url: string) => {
@@ -129,6 +200,7 @@ test("webhooks: dispatchEvent retries on 500 then records failure", async () => 
   const results = await dispatchEvent({
     event: "compare.completed",
     payload: { key_id: "x" },
+    workspaceId: WS,
     fetchImpl: fakeFetch,
   });
   const mine = results.filter((r) => r.webhookId === record.id);
@@ -146,25 +218,24 @@ test("webhooks: disabled hooks are skipped", async () => {
   const { record } = await createWebhook({
     label: "paused",
     url: "https://example.com/paused",
+    workspaceId: WS,
   });
-  await setDisabled(record.id, true);
+  await setDisabled(record.id, true, WS);
   let called = false;
   const fakeFetch = (async () => {
     called = true;
     return new Response("ok", { status: 200 });
   }) as unknown as typeof fetch;
 
-  // Other hooks from earlier tests may still be active; just ensure the
-  // paused one was not delivered.
   const results = await dispatchEvent({
     event: "compare.completed",
     payload: {},
+    workspaceId: WS,
     fetchImpl: fakeFetch,
   });
   for (const r of results) {
     assert.notEqual(r.webhookId, record.id);
   }
-  // Note: `called` may still be true for unrelated hooks created above.
   void called;
 });
 
@@ -182,20 +253,20 @@ test("webhooks: redeliverDelivery replays the original payload and logs a new de
     label: "replay-target",
     url: "https://example.com/replay",
     events: ["compare.completed"],
+    workspaceId: WS,
   });
 
-  // First delivery: fail so we have something worth replaying.
   const failFetch = (async () => new Response("oops", { status: 503 })) as unknown as typeof fetch;
   const first = await dispatchEvent({
     event: "compare.completed",
     payload: { hello: "world", n: 1 },
+    workspaceId: WS,
     fetchImpl: failFetch,
   });
   const target = first.find((d) => d.webhookId === record.id);
   assert.ok(target, "original delivery for our webhook exists");
   assert.equal(target!.ok, false);
 
-  // Now replay with a fetch that succeeds and capture what was sent.
   let sentBody = "";
   let sentUrl = "";
   let sentEventHeader = "";
@@ -207,7 +278,11 @@ test("webhooks: redeliverDelivery replays the original payload and logs a new de
     return new Response("ok", { status: 200 });
   }) as unknown as typeof fetch;
 
-  const replay = await redeliverDelivery(record.id, target!.id, okFetch);
+  // Cross-tenant replay is refused.
+  const blocked = await redeliverDelivery(record.id, target!.id, WS_OTHER, okFetch);
+  assert.equal(blocked, null);
+
+  const replay = await redeliverDelivery(record.id, target!.id, WS, okFetch);
   assert.ok(replay, "redelivery returned a record");
   assert.equal(replay!.ok, true);
   assert.equal(replay!.status, 200);
@@ -216,26 +291,53 @@ test("webhooks: redeliverDelivery replays the original payload and logs a new de
   assert.equal(replay!.event, "compare.completed");
   assert.equal(sentUrl, "https://example.com/replay");
   assert.equal(sentEventHeader, "compare.completed");
-  // The replay must reuse the original request body byte-for-byte.
   assert.equal(sentBody, target!.requestBodyPreview);
 
-  // The new delivery is appended to the persistent log.
-  const log = await listDeliveries(record.id);
+  const log = await listDeliveriesForWorkspace(record.id, WS);
   assert.ok(log.some((d) => d.id === replay!.id && d.redeliveredFrom === target!.id));
 
-  // Webhook counters reflect the successful replay.
   const after = await loadWebhook(record.id);
   assert.ok(after);
   assert.ok((after!.successCount ?? 0) >= 1);
 });
 
 test("webhooks: redeliverDelivery returns null for unknown ids", async () => {
-  const none1 = await redeliverDelivery("nope1234", "missingid1");
+  const none1 = await redeliverDelivery("nope1234", "missingid1", WS);
   assert.equal(none1, null);
   const { record } = await createWebhook({
     label: "hook for 404",
     url: "https://example.com/h",
+    workspaceId: WS,
   });
-  const none2 = await redeliverDelivery(record.id, "deadbeef99");
+  const none2 = await redeliverDelivery(record.id, "deadbeef99", WS);
   assert.equal(none2, null);
+});
+
+test("webhooks: legacy records without workspaceId are hidden by default", async () => {
+  // Simulate a pre-migration record on disk.
+  const id = "legacy0001";
+  const legacy = {
+    v: 1,
+    id,
+    label: "legacy",
+    url: "https://example.com/legacy",
+    events: ["compare.completed"],
+    secretHash: "0".repeat(64),
+    secretPrefix: "whsec_xxxx",
+    createdAt: Date.now(),
+    successCount: 0,
+    failureCount: 0,
+  };
+  fs.writeFileSync(path.join(tmp, `${id}.json`), JSON.stringify(legacy), "utf-8");
+
+  const lA = await listWebhooksForWorkspace(WS);
+  assert.ok(!lA.some((w) => w.id === id), "legacy record must not appear in any workspace listing");
+  const lB = await listWebhooksForWorkspace(WS_OTHER);
+  assert.ok(!lB.some((w) => w.id === id));
+  // Cross-tenant load also denied.
+  assert.equal(await loadWebhookForWorkspace(id, WS), null);
+
+  // But the raw record exists when admin tooling asks via listWebhooks().
+  const everything = await listWebhooks();
+  assert.ok(everything.some((w) => w.id === id));
 });
