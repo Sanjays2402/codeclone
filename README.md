@@ -28,6 +28,26 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Outbound webhooks via `/webhooks`: register a URL, receive a real signed POST every time `/v1/compare` finishes. Each delivery retries up to three times with backoff, includes an HMAC-SHA256 signature (`X-CodeClone-Signature: t=<ts>,v1=<mac>`), and lands in a per-endpoint delivery log (last 50) you can browse from the dashboard. Pause, resume, or delete endpoints inline. Override the on-disk location with `CODECLONE_WEBHOOKS_DIR`.
 - Per-key usage and quota on `/usage`: every authenticated `/v1/compare` call is logged with timestamp, key id, byte count, and latency. The page shows month-to-date calls against a free-tier cap (default 1000, override with `CODECLONE_FREE_TIER_MONTHLY`), a daily bar chart for 7/30/90 day windows, and a per-key breakdown. When the cap is hit the API returns HTTP 429 with `Retry-After` and a structured `quota_exceeded` error, and every 200 response carries `x-codeclone-quota-limit` and `x-codeclone-quota-remaining` headers so clients can rate-limit themselves.
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
+- Snippets library at `/snippets`: save the code you keep comparing against (canonical implementations, suspected sources, internal templates) as titled, tagged, language-typed snippets. One click loads any snippet into the left or right pane of `/compare`, so returning users skip the copy-paste step. Backed by a per-user JSON store at `CODECLONE_SNIPPETS_DIR` (defaults to `../snippets`) with full CRUD, search across title, body, and tags, and a 64KB-per-snippet cap.
+
+### Try it: build a reusable snippet library
+
+1. `cd web && npm install && npm run dev`, then visit [http://localhost:3000/signin](http://localhost:3000/signin) and sign in (any email works in dev).
+2. Open [http://localhost:3000/snippets](http://localhost:3000/snippets), click **New snippet**, paste a canonical implementation, set a language, tag it `baseline`, and save.
+3. From the snippet card, click **Left** or **Right** to load it into `/compare` and run a similarity check against fresh code.
+4. Or hit the API directly:
+
+```bash
+curl -X POST http://localhost:3000/api/snippets \
+  -H "Content-Type: application/json" \
+  -H "Cookie: cc_session=<your session cookie>" \
+  -d '{
+    "title": "Canonical quicksort",
+    "language": "python",
+    "body": "def qs(a):\n    if len(a) <= 1: return a\n    p = a[0]\n    return qs([x for x in a[1:] if x < p]) + [p] + qs([x for x in a[1:] if x >= p])\n",
+    "tags": ["baseline", "sorting"]
+  }'
+```
 - Email magic-link sign-in at `/signin`: stateless HMAC session cookies, one-shot tokens with 15-minute expiry, and a user menu in the nav. Dev mode shows the link inline so you can complete the loop locally without an SMTP provider; production swaps in a real mailer. Users persist on disk under `CODECLONE_USERS_DIR` (defaults to `../users`), keyed by a deterministic id derived from the lowercased email. Set `CODECLONE_AUTH_SECRET` in production. Routes: `POST /api/auth/request`, `GET /api/auth/verify`, `GET /api/auth/me`, `POST /api/auth/signout`.
 - First-run `/welcome`: a 3-step onboarding flow (create API key, run a comparison, save to history) with a live progress bar and a thin banner that sits under the nav on every page until you finish or dismiss. Step completion is derived from real state on disk (active API keys, a saved share, a `compared` event), so the checklist cannot lie. Override the persisted dismiss/finished state with `CODECLONE_ONBOARDING_FILE` (defaults to `../.onboarding.json`).
 - Persistent notifications inbox at `/notifications`: per-user activity log for share creations and batch completions, with a bell badge in the top bar that polls unread count every 30 seconds. Filter all/unread, mark read or unread, dismiss, mark-all-read, clear. Stored as one JSON-lines file per user under `CODECLONE_NOTIFICATIONS_DIR` (defaults to `../runs/notifications`), capped at 200 records per user. Routes: `GET /api/notifications`, `POST /api/notifications` (`mark-all-read`/`clear`), `PATCH /api/notifications/<id>`, `DELETE /api/notifications/<id>`. Emission is best-effort, so an inbox write failure never breaks the originating action.

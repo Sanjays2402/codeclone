@@ -12,6 +12,7 @@ const items = [
   { href: "/demo",     label: "demo" },
   { href: "/compare",  label: "compare" },
   { href: "/history",  label: "history" },
+  { href: "/snippets", label: "snippets" },
   { href: "/batch",    label: "batch" },
   { href: "/pairs",    label: "pairs" },
   { href: "/eval",     label: "eval" },
