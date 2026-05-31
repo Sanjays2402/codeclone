@@ -8,6 +8,8 @@ import {
   FloppyDisk,
   Bell,
   Sliders,
+  ShieldCheck,
+  ArrowUpRight,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { ErrorBlock } from "../../components/States";
@@ -231,6 +233,26 @@ export default function SettingsPage() {
             >
               <DownloadSimple weight="duotone" size={14} />
               download export
+            </a>
+          </div>
+
+          <H2 eyebrow="security">
+            <span className="inline-flex items-center gap-2">
+              <ShieldCheck weight="duotone" size={16} /> active sessions
+            </span>
+          </H2>
+          <div className="ruled rounded-md p-5">
+            <p className="text-[13px] text-[var(--color-ink-2)] mb-3">
+              See every device signed in to your account, set how long sign-ins
+              stay valid, or force a sign-out everywhere.
+            </p>
+            <a
+              href="/settings/sessions"
+              className="h-9 px-3 mono text-[12px] inline-flex items-center gap-2 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-2)] hover:bg-[var(--color-paper-3)]"
+            >
+              <ShieldCheck weight="duotone" size={14} />
+              manage sessions
+              <ArrowUpRight weight="duotone" size={12} />
             </a>
           </div>
 

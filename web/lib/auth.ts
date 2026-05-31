@@ -268,16 +268,7 @@ export interface SessionContext {
  * the current session (signout) or pass it through audit logs should use
  * this.
  */
-let ctxHeaders: Headers | null = null;
-
-/** Optional: callers that have a Request can pass headers so touch() captures IP/UA. */
-export function withRequestHeaders<T>(headers: Headers, fn: () => Promise<T>): Promise<T> {
-  const prev = ctxHeaders;
-  ctxHeaders = headers;
-  return fn().finally(() => {
-    ctxHeaders = prev;
-  });
-}
+import { isRevoked as _isRevoked, getSession as _getSession } from "./sessions.ts";
 
 export async function currentSessionFromCookieHeader(
   cookieHeader: string | null | undefined,
@@ -288,17 +279,9 @@ export async function currentSessionFromCookieHeader(
   const payload = verifySession(decodeURIComponent(m[1]));
   if (!payload) return null;
   if (payload.jti) {
-    // Lazy require to avoid a circular import at module init.
-    const { isRevoked, getSession, touchSession, clientIpFromHeaders } = await import("./sessions");
-    if (await isRevoked(payload.jti)) return null;
-    const rec = await getSession(payload.uid, payload.jti);
+    if (await _isRevoked(payload.jti)) return null;
+    const rec = await _getSession(payload.uid, payload.jti);
     if (rec && rec.revokedAt) return null;
-    // best-effort touch using cookie-header's request when possible
-    if (rec) {
-      const ip = ctxHeaders ? clientIpFromHeaders(ctxHeaders) : null;
-      const ua = ctxHeaders?.get("user-agent") ?? null;
-      void touchSession(payload.uid, payload.jti, ip, ua);
-    }
   }
   const user = await getUser(payload.uid);
   if (!user) return null;

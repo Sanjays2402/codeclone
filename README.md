@@ -10,6 +10,8 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Active sessions & force logout at `/settings/sessions`: every sign-in now creates a server-side session record (signed cookie carries a `jti`), so users can see every device that has authenticated to their account with IP, user agent, signed-in time, last-seen time, and expiry. Revoke a single session, sign out every other device while staying logged in here, or sign out everywhere in one click — the revoked `jti` is checked on every authenticated request, so a stolen cookie stops working before its TTL expires. Session lifetime is configurable per user (1 hour to 90 days) and applied to new sign-ins. Every event writes a structured audit entry (`auth.signin`, `auth.signout`, `auth.session_revoke`, `auth.session_revoke_others`, `auth.session_revoke_all`, `auth.session_ttl_update`) so workspace owners can answer the procurement question "who signed in from where, and when did we cut them off?" Tracked sessions live on disk under `CODECLONE_SESSIONS_DIR` (defaults to `../sessions`). Legacy cookies issued before this feature stay valid until they expire.
+
 - Commit exporter with author-email filtering, license mode (`strict | permissive_only | off`), and per-language tagging
 - Preprocess pipeline: normalize, length/lang filter, exact + MinHash dedupe, train/val/test split, JSON report
 - Two LoRA backends behind one `TrainBackend` protocol: `mlx` (mlx-lm) and `peft` (transformers + peft), plus mock fallback
@@ -37,6 +39,25 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Enterprise audit log at `/audit`: every mutating action across snippets, collections, API keys, webhooks, workspaces, shares, settings, notifications, onboarding, sign-in/out, public `/v1/compare` and `/v1/batch` API calls, and the internal `/api/compare` and `/api/batch` runs is recorded with actor id, actor email, IP, request id, user agent, optional workspace id, and a trimmed before/after diff. Storage is append-only JSONL by UTC day under `CODECLONE_AUDIT_DIR` (defaults to `../audit`); the app never updates or deletes entries. The page filters by action prefix, actor, workspace, and status (ok/denied/error), and a single click streams a CSV export. Denied permission checks (for example a non-owner trying to rename a workspace) are recorded alongside successes so security review can prove enforcement, not just intent. Reading and exporting the log are themselves audited.
 - Observability for ops teams at `/status`: every API request goes through a Next.js middleware that assigns a 16-char `X-Request-Id` (or reuses the one a load balancer already set), echoes it on the response, and threads it into the audit log so a customer can hand support one id and get back the full request trail. A `/api/metrics` endpoint emits Prometheus text format 0.0.4 (counters for `codeclone_http_requests_total{method,route,status}`, an in-flight gauge, and an `codeclone_http_request_duration_ms` histogram with 11 buckets from 5ms to 10s), `/api/healthz` is a dependency-free liveness probe, and `/api/readyz` returns 200 with a structured `checks` array only when the on-disk stores (runs, audit, users) are writable; the inference backend is reported but does not hard-fail readiness so the dashboard can still serve auth/docs when serve is down. The `/status` page renders the same numbers as a live tile grid plus a sortable by-route latency table (count, avg, p50, p95) that refreshes every 5 seconds. Route labels are normalized so ids never blow up Prometheus cardinality. Structured one-line JSON logs (level, ts, route, method, status, duration_ms, request_id) are emitted for every instrumented handler so they pipe straight into Datadog, Loki, or CloudWatch without a parser.
 - Interactive API reference at `/docs`: every public `/v1` endpoint (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) is documented in-product with method, path, required scope, parameter table, copy-paste curl example, and a sample JSON response. The page also includes a **Try it** panel that posts the request straight from the browser using your pasted API key, shows the HTTP status, round-trip latency, and pretty-printed response body, and warns you when none of your saved keys carry the scope an endpoint requires. The spec is driven from a single typed module (`web/lib/api-spec.ts`) that the test suite validates against the real route files, so the docs cannot drift from the implementation.
+
+### Try it: list active sessions and force a logout
+
+Sign in once (visit `/signin` and open the magic link in the dev mailbox under `runs/magic-links/`), then with the resulting `cc_session` cookie:
+
+```bash
+cd web && npm run dev
+# in another terminal, after signing in at http://localhost:3000/signin
+curl -s http://localhost:3000/api/sessions \
+  -H "cookie: cc_session=$CC_SESSION" | jq
+
+# Sign every other device out but stay logged in here
+curl -s -X POST http://localhost:3000/api/sessions/revoke-all \
+  -H "cookie: cc_session=$CC_SESSION" \
+  -H "content-type: application/json" \
+  -d '{"includeCurrent":false}'
+```
+
+Open `http://localhost:3000/settings/sessions` for the UI version with per-device revoke, session-lifetime presets, and a one-click "sign out everywhere" that ends every cookie immediately.
 
 ### Try it: scrape Prometheus metrics and check liveness
 
