@@ -200,6 +200,26 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Owner-configured MFA enrollment policy. When `requireEnrollment` is
+   * true, every active member of this workspace must have a confirmed
+   * TOTP enrollment (see lib/mfa.ts) before mutating workspace data.
+   * `gracePeriodDays` gives existing members a window after the policy
+   * is enabled (or after they join) to enroll before they are blocked;
+   * 0 means enforce immediately. Enforcement happens at sensitive
+   * mutation endpoints via lib/mfa-enforce.ts and is surfaced to users
+   * via /api/auth/mfa/required so the UI can show a clear remediation
+   * banner instead of an opaque 403.
+   *
+   * Common procurement requirement (SOC 2 CC6.1, NIST 800-53 IA-2(1)):
+   * "Multifactor authentication is required for all privileged users."
+   */
+  mfaPolicy?: {
+    requireEnrollment: boolean;
+    gracePeriodDays: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export type ResidencyRegion = "us" | "eu" | "apac" | "global";
@@ -720,6 +740,105 @@ export function apiKeyPolicyDeadline(
   const days = ws?.apiKeyPolicy?.maxAgeDays;
   if (!days || days <= 0) return null;
   return createdAtMs + days * 24 * 60 * 60 * 1000;
+}
+
+// ---- MFA enrollment policy ---------------------------------------------
+
+export const MFA_POLICY_BOUNDS = {
+  gracePeriodDays: { min: 0, max: 90 },
+} as const;
+
+export function sanitizeMfaPolicy(
+  input: { requireEnrollment?: unknown; gracePeriodDays?: unknown } | null | undefined,
+): { requireEnrollment: boolean; gracePeriodDays: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const obj = input as Record<string, unknown>;
+  const requireEnrollment = Boolean(obj.requireEnrollment);
+  const raw = obj.gracePeriodDays;
+  const n = typeof raw === "number" ? raw : Number(raw ?? 0);
+  const grace = Number.isFinite(n)
+    ? Math.min(
+        MFA_POLICY_BOUNDS.gracePeriodDays.max,
+        Math.max(MFA_POLICY_BOUNDS.gracePeriodDays.min, Math.floor(n)),
+      )
+    : 0;
+  return { requireEnrollment, gracePeriodDays: grace };
+}
+
+/**
+ * Replace the workspace MFA enrollment policy. Pass null or
+ * `requireEnrollment=false` to clear. Caller enforces owner-only and
+ * writes the audit entry.
+ */
+export async function setMfaPolicy(
+  ws: WorkspaceRecord,
+  policy: { requireEnrollment: boolean; gracePeriodDays: number } | null,
+  actor: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || !policy.requireEnrollment) {
+    ws.mfaPolicy = null;
+  } else {
+    ws.mfaPolicy = {
+      requireEnrollment: true,
+      gracePeriodDays: policy.gracePeriodDays,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Resolve whether a user is past the MFA enrollment grace window of any
+ * workspace they belong to. Returns the strictest (earliest) workspace
+ * whose policy is in force, or null if no workspace requires enrollment
+ * yet. Callers combine this with `isEnrolled(mfa)` to decide whether to
+ * block a mutating request.
+ *
+ * The deadline for a member is `max(policy.updatedAt, member.joinedAt) +
+ * gracePeriodDays * 1d`, so existing members get the full grace window
+ * when an owner enables the policy, and new joiners get a fresh window
+ * from their join time.
+ */
+export async function effectiveMfaPolicyForUser(
+  userId: string,
+  now: number = Date.now(),
+): Promise<{
+  required: boolean;
+  workspaceId: string | null;
+  workspaceName: string | null;
+  gracePeriodDays: number;
+  deadline: number | null;
+  pastDeadline: boolean;
+}> {
+  const workspaces = await listWorkspacesForUser(userId);
+  let strictestDeadline: number | null = null;
+  let strictestWs: WorkspaceRecord | null = null;
+  let strictestGrace = 0;
+  let anyRequired = false;
+  for (const w of workspaces) {
+    const p = w.mfaPolicy;
+    if (!p || !p.requireEnrollment) continue;
+    const m = getActiveMember(w, userId);
+    if (!m) continue;
+    anyRequired = true;
+    const base = Math.max(p.updatedAt, m.joinedAt);
+    const deadline = base + p.gracePeriodDays * 24 * 60 * 60 * 1000;
+    if (strictestDeadline === null || deadline < strictestDeadline) {
+      strictestDeadline = deadline;
+      strictestWs = w;
+      strictestGrace = p.gracePeriodDays;
+    }
+  }
+  return {
+    required: anyRequired,
+    workspaceId: strictestWs?.id ?? null,
+    workspaceName: strictestWs?.name ?? null,
+    gracePeriodDays: strictestGrace,
+    deadline: strictestDeadline,
+    pastDeadline: strictestDeadline !== null && now >= strictestDeadline,
+  };
 }
 
 // Resolve the effective session policy for a user across every workspace

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { tryRecordAudit } from "../../../lib/audit";
+import { enforceMfaEnrollment } from "../../../lib/mfa-enforce";
 import {
   enforceSession,
   tooManyRequestsResponse,
@@ -39,6 +40,8 @@ export async function POST(req: Request) {
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
+  const mfaBlocked = await enforceMfaEnrollment(req, user, "snippet.create");
+  if (mfaBlocked) return mfaBlocked;
   const limit = await enforceSession(req, user.id, "snippets-write");
   if (!limit.decision.allowed) {
     await tryRecordAudit(req, {

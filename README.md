@@ -10,6 +10,25 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace MFA enrollment policy. Owners flip on a workspace-wide requirement that every active member enroll TOTP before they can create API keys, webhooks, or snippets, with a configurable grace window (0 to 90 days) measured from policy enablement or member join time, whichever is later. After the deadline, sensitive mutating endpoints refuse the user's requests with HTTP 403 `mfa_enrollment_required` and an audit row, while read-only endpoints stay open so users can self-remediate at /settings/security. The dashboard polls `/api/auth/mfa/required` to render a banner long before requests start being blocked. Cross-workspace scoping is strict: a policy in workspace A only constrains its own active members, never users who only belong to workspace B. Owner-only configuration via PUT /api/workspaces/:id/mfa-policy with a before/after audit diff; runtime decision in `lib/mfa-policy-decide.ts` and the NextResponse wrapper in `lib/mfa-enforce.ts`. Pinned by `web/tests/workspaces-mfa-policy.test.ts` (sanitize/clamp, persist/clear, cross-tenant isolation, the four-way required/enrolled/grace/block matrix). Covers the standard procurement ask (SOC 2 CC6.1, NIST 800-53 IA-2(1)): "multifactor authentication is required for all privileged users."
+
+### Try it: require TOTP for everyone in a workspace
+
+```sh
+cd web && pnpm dev   # http://localhost:3000
+
+# Owner enables the policy with a 7-day grace window.
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/mfa-policy \
+  -H 'cookie: cc_session=...' \
+  -H 'content-type: application/json' \
+  -d '{"requireEnrollment": true, "gracePeriodDays": 7}'
+
+# Any member can see their own status (banner data source).
+curl -si http://localhost:3000/api/auth/mfa/required -H 'cookie: cc_session=...'
+# {"required":true,"blocked":false,"enrolled":false,"workspaceId":"ws_...",
+#  "gracePeriodDays":7,"deadline":1717000000000,"secondsRemaining":604800}
+```
+
 - Idempotency keys on POST `/v1/chat/completions` and `/v1/completions`. Clients pass `Idempotency-Key: <opaque>` and any retry within 24h that sends the same body replays the original response verbatim with `Idempotency-Replayed: true`, so flaky network retries no longer double-charge tokens or duplicate inference work. Reuse of the same key with a different body returns `409 Conflict` (`{error:{type:"idempotency_conflict"}}`) instead of silently serving stale data. The cache is partitioned by `(tenant, key)` so the same opaque string from two tenants stays isolated, replays and conflicts both stream to the audit log as `idempotency.replay` / `idempotency.conflict`, and streaming requests are accepted but not cached because byte-replay of SSE bodies is unsafe. Configured via `CODECLONE_IDEMPOTENCY_ENABLED` / `_STATE_PATH` / `_TTL_SECONDS` in `packages/config/codeclone_config/settings.py` and pinned by `services/serve/tests/test_idempotency.py` (key shape, fingerprint stability, store-level tenant isolation, end-to-end replay, conflict, cross-tenant non-leak, audit emission). Covers the standard Stripe-style procurement ask: “non-idempotent paid POSTs must be safely retryable.”
 
 ### Try it: replay a chat completion safely on retry

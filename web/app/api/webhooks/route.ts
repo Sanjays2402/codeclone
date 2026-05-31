@@ -6,6 +6,7 @@ import {
 } from "../../../lib/webhooks";
 import { tryRecordAudit } from "../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { enforceMfaEnrollment } from "../../../lib/mfa-enforce";
 import { getWorkspace, getActiveMember } from "../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -67,10 +68,12 @@ export async function POST(req: Request) {
   };
   const r = await resolveWorkspaceForUser(req, b.workspaceId);
   if ("error" in r) return r.error;
-  // Only owners/editors may create webhooks; viewers are read-only.
+    // Only owners/editors may create webhooks; viewers are read-only.
   if (r.member.role === "viewer") {
     return forbidden("Viewers cannot create webhooks.");
   }
+  const mfaBlocked = await enforceMfaEnrollment(req, r.user, "webhook.create");
+  if (mfaBlocked) return mfaBlocked;
   try {
     const created = await createWebhook({
       label: b.label,

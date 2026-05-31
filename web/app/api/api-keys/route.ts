@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createKey, listKeys } from "../../../lib/api-keys";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { tryRecordAudit } from "../../../lib/audit";
+import { enforceMfaEnrollment } from "../../../lib/mfa-enforce";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,6 +38,8 @@ interface CreateBody {
 export async function POST(req: Request) {
   const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   if (!user) return unauthorized();
+  const mfaBlocked = await enforceMfaEnrollment(req, user, "api_key.create");
+  if (mfaBlocked) return mfaBlocked;
   let body: CreateBody = {};
   try {
     body = (await req.json()) as CreateBody;
