@@ -18,6 +18,7 @@ import {
 import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
+import { SsoEditor } from "../../../components/SsoEditor";
 import { fmtTs } from "../../../lib/format";
 
 type Role = "owner" | "editor" | "viewer";
@@ -299,6 +300,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <AllowlistEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <SsoEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && ws.myRole !== "owner" && (

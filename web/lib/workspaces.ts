@@ -45,6 +45,24 @@ export interface WorkspaceRecord {
    * `setIpAllowlist`; enforced by `lib/ip-allowlist.ts`.
    */
   ipAllowlist?: string[];
+  /**
+   * Optional OIDC SSO configuration. When `enforced` is true, magic-link
+   * sign-in is blocked for any email address whose domain matches
+   * `allowedDomain` (or any member already in this workspace) and that
+   * user must complete the OIDC flow at /api/auth/sso/<workspaceId>/start.
+   * Managed by lib/sso.ts; persisted inline so a workspace fetch returns
+   * the policy in one read.
+   */
+  sso?: {
+    provider: "oidc";
+    issuer: string;
+    clientId: string;
+    clientSecret: string;
+    allowedDomain: string;
+    enforced: boolean;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export interface InviteRecord {
@@ -222,6 +240,26 @@ export async function setIpAllowlist(
   ws.ipAllowlist = Array.isArray(entries) ? entries.slice(0, 64) : [];
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+export async function setSsoConfig(
+  ws: WorkspaceRecord,
+  cfg: WorkspaceRecord["sso"],
+): Promise<WorkspaceRecord> {
+  ws.sso = cfg ?? null;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+export async function listWorkspaces(): Promise<WorkspaceRecord[]> {
+  const files = await listFiles(WORKSPACES_DIR);
+  const out: WorkspaceRecord[] = [];
+  for (const f of files) {
+    if (!f.endsWith(".json") || f.startsWith("_")) continue;
+    const w = await readJson<WorkspaceRecord>(path.join(WORKSPACES_DIR, f));
+    if (w) out.push(w);
+  }
+  return out;
 }
 
 export async function renameWorkspace(ws: WorkspaceRecord, name: string): Promise<WorkspaceRecord> {

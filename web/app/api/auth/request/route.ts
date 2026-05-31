@@ -12,6 +12,7 @@ import {
   issueMagicLink,
   isProdSecret,
 } from "../../../../lib/auth";
+import { findEnforcedSsoForEmail } from "../../../../lib/sso";
 import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
@@ -41,6 +42,35 @@ export async function POST(req: Request) {
       : undefined;
 
   const origin = new URL(req.url).origin;
+
+  // SSO enforcement: if any workspace has enforced OIDC for this email
+  // domain, the user must complete the SSO flow instead of receiving a
+  // magic link. We tell the client where to go so the UI can redirect.
+  const enforced = await findEnforcedSsoForEmail(email);
+  if (enforced) {
+    const start = new URL(`/api/auth/sso/${enforced.id}/start`, origin);
+    if (redirect) start.searchParams.set("redirect", redirect);
+    await tryRecordAudit(req, {
+      action: "auth.magic_link_blocked_sso",
+      actorEmail: email,
+      workspaceId: enforced.id,
+      target: { type: "workspace", id: enforced.id, label: enforced.name },
+      status: "denied",
+      meta: { reason: "sso_enforced" },
+    });
+    return NextResponse.json(
+      {
+        error: {
+          type: "sso_required",
+          message: "Your organization requires single sign-on.",
+        },
+        ssoStartUrl: start.toString(),
+        workspaceName: enforced.name,
+      },
+      { status: 403 },
+    );
+  }
+
   const link = await issueMagicLink(email, origin, redirect);
 
   // Surface the link in dev / test logs. Production should swap this for SMTP.

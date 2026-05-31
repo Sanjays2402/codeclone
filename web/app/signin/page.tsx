@@ -1,13 +1,23 @@
 "use client";
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
-import { EnvelopeSimple, ArrowRight, CheckCircle, Warning } from "@phosphor-icons/react/dist/ssr";
+import { EnvelopeSimple, ArrowRight, CheckCircle, Warning, ShieldCheck } from "@phosphor-icons/react/dist/ssr";
 
 function errorCopy(code: string | null): string | null {
   if (!code) return null;
   if (code === "invalid_or_expired") {
     return "That link expired or was already used. Send a fresh one below.";
   }
+  if (code === "sso_not_configured") return "Single sign-on is not configured for that workspace.";
+  if (code === "sso_unavailable") return "Could not reach the SSO provider. Try again in a moment.";
+  if (code === "sso_state_mismatch" || code === "sso_state_invalid" || code === "sso_invalid")
+    return "Your sign-on session expired. Start again.";
+  if (code === "sso_token_exchange_failed" || code === "sso_no_id_token" || code === "sso_idtoken_invalid")
+    return "Single sign-on token was rejected. Try again or contact your admin.";
+  if (code === "sso_domain_mismatch" || code === "sso_hd_mismatch")
+    return "That account is not allowed for this workspace.";
+  if (code === "sso_email_unverified") return "Your provider has not verified that email.";
+  if (code === "sso_denied") return "Single sign-on was cancelled.";
   return "Something went wrong. Try again.";
 }
 
@@ -20,10 +30,37 @@ function SignInInner() {
   const [state, setState] = useState<"idle" | "loading" | "sent" | "error">("idle");
   const [message, setMessage] = useState<string | null>(initialError);
   const [devLink, setDevLink] = useState<string | null>(null);
+  const [ssoHint, setSsoHint] = useState<{ startUrl: string; workspaceName?: string; enforced: boolean } | null>(null);
 
   useEffect(() => {
     if (initialError) setState("error");
   }, [initialError]);
+
+  // Debounced SSO lookup as the user types their email.
+  useEffect(() => {
+    const e = email.trim();
+    if (!e.includes("@") || e.length < 5) { setSsoHint(null); return; }
+    let abort = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/auth/sso/lookup", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: e }),
+        });
+        const data = await res.json();
+        if (abort) return;
+        if (data && data.ok && data.startUrl) {
+          const u = new URL(data.startUrl, window.location.origin);
+          if (redirect && redirect !== "/") u.searchParams.set("redirect", redirect);
+          setSsoHint({ startUrl: u.toString(), workspaceName: data.workspaceName, enforced: !!data.enforced });
+        } else {
+          setSsoHint(null);
+        }
+      } catch { /* ignore */ }
+    }, 350);
+    return () => { abort = true; clearTimeout(t); };
+  }, [email, redirect]);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -38,6 +75,13 @@ function SignInInner() {
       });
       const data = await res.json();
       if (!res.ok) {
+        // SSO enforcement: server tells us to redirect to the provider.
+        if (data?.error?.type === "sso_required" && data?.ssoStartUrl) {
+          const u = new URL(data.ssoStartUrl, window.location.origin);
+          if (redirect && redirect !== "/") u.searchParams.set("redirect", redirect);
+          window.location.assign(u.toString());
+          return;
+        }
         setState("error");
         setMessage(data?.error?.message ?? "Could not send link.");
         return;
@@ -88,6 +132,21 @@ function SignInInner() {
               />
             </div>
           </label>
+
+          {ssoHint ? (
+            <a
+              href={ssoHint.startUrl}
+              className="w-full h-11 inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-rule)] bg-[var(--color-paper)] text-[13.5px] font-medium text-[var(--color-ink)] hover:bg-[var(--color-paper-3)] transition-colors"
+            >
+              <ShieldCheck size={16} weight="duotone" className="text-[var(--color-ink-2)]" />
+              <span>
+                {ssoHint.enforced && ssoHint.workspaceName
+                  ? `Continue with ${ssoHint.workspaceName} SSO`
+                  : "Continue with single sign-on"}
+              </span>
+              <ArrowRight size={14} weight="bold" />
+            </a>
+          ) : null}
 
           <button
             type="submit"
