@@ -30,6 +30,8 @@ import {
   sanitizeRetention,
   retentionCutoffMs,
   RETENTION_BOUNDS,
+  LegalHoldError,
+  isOnLegalHold,
 } from "../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -87,7 +89,27 @@ export async function PUT(req: Request, ctx: { params: Promise<{ id: string }> }
     return NextResponse.json({ error: "invalid_policy" }, { status: 400 });
   }
   const before = { auditDays: ws.retention?.auditDays ?? 0 };
-  const updated = await setRetention(ws, sanitized, user.id);
+  let updated;
+  try {
+    updated = await setRetention(ws, sanitized, user.id);
+  } catch (err) {
+    if (err instanceof LegalHoldError) {
+      await tryRecordAudit(req, {
+        action: "workspace.retention_update",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "workspace", id: ws.id, label: ws.name },
+        status: "denied",
+        meta: { reason: "legal_hold" },
+      });
+      return NextResponse.json(
+        { error: "legal_hold", message: "Workspace is on legal hold; retention cannot be shortened or cleared." },
+        { status: 409 },
+      );
+    }
+    throw err;
+  }
   await tryRecordAudit(req, {
     action: "workspace.retention_update",
     actorId: user.id,
@@ -115,6 +137,21 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
       status: "denied",
     });
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  if (isOnLegalHold(ws)) {
+    await tryRecordAudit(req, {
+      action: "workspace.retention_update",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      status: "denied",
+      meta: { reason: "legal_hold" },
+    });
+    return NextResponse.json(
+      { error: "legal_hold", message: "Workspace is on legal hold; retention policy cannot be cleared." },
+      { status: 409 },
+    );
   }
   const before = { auditDays: ws.retention?.auditDays ?? 0 };
   const updated = await setRetention(ws, null, user.id);

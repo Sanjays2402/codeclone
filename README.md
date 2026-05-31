@@ -69,6 +69,33 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Observability for ops teams at `/status`: every API request goes through a Next.js middleware that assigns a 16-char `X-Request-Id` (or reuses the one a load balancer already set), echoes it on the response, and threads it into the audit log so a customer can hand support one id and get back the full request trail. A `/api/metrics` endpoint emits Prometheus text format 0.0.4 (counters for `codeclone_http_requests_total{method,route,status}`, an in-flight gauge, and an `codeclone_http_request_duration_ms` histogram with 11 buckets from 5ms to 10s), `/api/healthz` is a dependency-free liveness probe, and `/api/readyz` returns 200 with a structured `checks` array only when the on-disk stores (runs, audit, users) are writable; the inference backend is reported but does not hard-fail readiness so the dashboard can still serve auth/docs when serve is down. The `/status` page renders the same numbers as a live tile grid plus a sortable by-route latency table (count, avg, p50, p95) that refreshes every 5 seconds. Route labels are normalized so ids never blow up Prometheus cardinality. Structured one-line JSON logs (level, ts, route, method, status, duration_ms, request_id) are emitted for every instrumented handler so they pipe straight into Datadog, Loki, or CloudWatch without a parser.
 - Interactive API reference at `/docs`: every public `/v1` endpoint (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) is documented in-product with method, path, required scope, parameter table, copy-paste curl example, and a sample JSON response. The page also includes a **Try it** panel that posts the request straight from the browser using your pasted API key, shows the HTTP status, round-trip latency, and pretty-printed response body, and warns you when none of your saved keys carry the scope an endpoint requires. The spec is driven from a single typed module (`web/lib/api-spec.ts`) that the test suite validates against the real route files, so the docs cannot drift from the implementation.
 
+- Workspace legal hold on `/workspaces/<id>`: owners can place a named legal hold (with required reason and optional case reference) on any workspace they own. While the hold is active, every destructive workspace operation refuses with HTTP 409 and a structured `legal_hold` error: the wipe endpoint (including its dry-run preview), the retention policy endpoint when an owner tries to shorten or clear the audit window, and the retention `DELETE`. Both placing and releasing the hold require owner role plus an MFA step-up; release additionally requires typing the workspace slug as confirmation. Every placement, release, and blocked destructive attempt is written to the tamper-evident audit chain with actor, IP, and case reference, so a workspace produces a defensible preservation timeline for litigation, regulator, or DPA review. There is no force override. Cross-tenant safe: a hold on workspace A never gates operations on workspace B.
+
+### Try it: place a legal hold on a workspace
+
+Sign in as the owner of a workspace, open `/workspaces/<id>`, scroll to the Legal hold card, enter a reason (and optional case reference such as `LIT-2026-001`), and confirm. Verify the hold from the API and observe that wipe and retention shortening are now refused:
+
+```bash
+cd web && npm run dev
+
+# Read the current hold (any member).
+curl -s http://localhost:3000/api/workspaces/WS_ID/legal-hold -b cookies.txt
+
+# Place the hold (owner + MFA step-up required).
+curl -s -X POST http://localhost:3000/api/workspaces/WS_ID/legal-hold \
+  -H 'Content-Type: application/json' -b cookies.txt \
+  -d '{"reason":"pending litigation","caseRef":"LIT-2026-001"}'
+
+# Destructive ops now return 409 legal_hold:
+curl -s -X POST http://localhost:3000/api/workspaces/WS_ID/wipe \
+  -H 'Content-Type: application/json' -b cookies.txt -d '{"confirm":"WS_SLUG"}'
+
+# Release requires the slug as confirmation.
+curl -s -X DELETE http://localhost:3000/api/workspaces/WS_ID/legal-hold \
+  -H 'Content-Type: application/json' -b cookies.txt \
+  -d '{"confirm":"WS_SLUG"}'
+```
+
 - Workspace IP allowlist on `/workspaces/<id>`: workspace owners can paste a list of corporate egress CIDRs (IPv4 and IPv6, bare IPs treated as `/32` and `/128`) to gate every public `/v1` API call made with a key bound to that workspace. Empty list means open; loopback is always permitted so on-host health probes do not lock the owner out. Every `PUT` writes a structured audit entry with the full before/after CIDR set; every blocked call writes a `workspace.ip_block` audit entry with the offending IP, the api-key id, and the rule count, so security teams can prove enforcement during procurement review. Enforced uniformly across `POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, and `GET /v1/shares/{id}`; the dashboard editor validates and dedupes CIDRs client-side and surfaces server-side rejects.
 
 ### Try it: lock a workspace down to your office IP

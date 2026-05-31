@@ -116,6 +116,71 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Owner-configured legal hold. When active, every destructive workspace
+   * operation (workspace.wipe, retention purge, retention shortening,
+   * snippet hard-delete bound to this workspace) is refused with a
+   * structured `legal_hold` error so the data remains discoverable for
+   * litigation or compliance review. Owners may release the hold at any
+   * time; both placement and release are recorded in the tamper-evident
+   * audit chain. There is no "force" override: by design, releasing the
+   * hold is the only path to destructive action.
+   */
+  legalHold?: {
+    active: true;
+    reason: string;
+    placedAt: number;
+    placedBy: string;
+    caseRef?: string | null;
+  } | null;
+}
+
+export interface LegalHoldInput {
+  reason: string;
+  caseRef?: string | null;
+}
+
+export function sanitizeLegalHold(input: unknown): LegalHoldInput | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  const reason = typeof o.reason === "string" ? o.reason.trim() : "";
+  if (reason.length < 3 || reason.length > 500) return null;
+  let caseRef: string | null = null;
+  if (typeof o.caseRef === "string") {
+    const t = o.caseRef.trim();
+    if (t.length > 0 && t.length <= 120 && /^[A-Za-z0-9 _\-./#:]+$/.test(t)) {
+      caseRef = t;
+    } else if (t.length > 0) {
+      return null;
+    }
+  }
+  return { reason, caseRef };
+}
+
+export function isOnLegalHold(ws: WorkspaceRecord | null | undefined): boolean {
+  return !!(ws && ws.legalHold && ws.legalHold.active === true);
+}
+
+export async function placeLegalHold(
+  ws: WorkspaceRecord,
+  input: LegalHoldInput,
+  placedBy: string,
+): Promise<WorkspaceRecord> {
+  ws.legalHold = {
+    active: true,
+    reason: input.reason,
+    placedAt: Date.now(),
+    placedBy,
+    caseRef: input.caseRef ?? null,
+  };
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+export async function releaseLegalHold(ws: WorkspaceRecord): Promise<WorkspaceRecord> {
+  ws.legalHold = null;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
 }
 
 export interface InviteRecord {
@@ -323,11 +388,28 @@ export function sanitizeRetention(
   return { auditDays: Math.min(Math.max(n, min), max) };
 }
 
+export class LegalHoldError extends Error {
+  status = 409 as const;
+  op: string;
+  constructor(op: string) {
+    super(`legal_hold:${op}`);
+    this.op = op;
+  }
+}
+
 export async function setRetention(
   ws: WorkspaceRecord,
   policy: { auditDays: number } | null,
   updatedBy: string,
 ): Promise<WorkspaceRecord> {
+  // While on legal hold, retention cannot be tightened or cleared in a way
+  // that would hide historical audit data. We allow lengthening or no-op.
+  if (isOnLegalHold(ws)) {
+    const before = ws.retention?.auditDays ?? 0;
+    const after = policy?.auditDays ?? 0;
+    const weakening = after !== before && (after === 0 || (before > 0 && after < before));
+    if (weakening) throw new LegalHoldError("retention_weaken");
+  }
   if (!policy || policy.auditDays === 0) {
     ws.retention = null;
   } else {

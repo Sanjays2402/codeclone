@@ -21,6 +21,7 @@ import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
+import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
 import { ScimEditor } from "../../../components/ScimEditor";
@@ -345,6 +346,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <RetentionEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <LegalHoldEditor workspaceId={ws.id} workspaceSlug={ws.slug} />
       )}
 
       {ws.myRole && (

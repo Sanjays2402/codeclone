@@ -24,6 +24,7 @@ import {
   getWorkspace,
   getMember,
   deleteWorkspace,
+  isOnLegalHold,
 } from "../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -75,6 +76,29 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         message: `Send {"confirm": "${ws.slug}"} to proceed.`,
       },
       { status: 400 },
+    );
+  }
+
+  // Legal hold blocks all destructive paths, including dry-run, so reviewers
+  // can immediately see the workspace is preserved for litigation/audit.
+  if (isOnLegalHold(ws)) {
+    await tryRecordAudit(req, {
+      action: "workspace.wipe",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      status: "denied",
+      meta: { reason: "legal_hold", caseRef: ws.legalHold?.caseRef ?? null },
+    });
+    return NextResponse.json(
+      {
+        error: "legal_hold",
+        message: "Workspace is on legal hold. Release the hold before wiping.",
+        caseRef: ws.legalHold?.caseRef ?? null,
+        placedAt: ws.legalHold?.placedAt ?? null,
+      },
+      { status: 409 },
     );
   }
 
