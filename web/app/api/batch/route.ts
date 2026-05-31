@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { parseBatch, runBatch, type BatchInput, type MatrixCell } from "../../../lib/batch";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { emitNotification } from "../../../lib/notifications";
+import { tryRecordAudit } from "../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,6 +20,13 @@ export async function POST(req: Request) {
   if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
   const result = runBatch(parsed.snippets, parsed.language);
   const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "batch.run",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "batch" },
+    meta: { snippets: parsed.snippets.length, language: parsed.language },
+  });
   if (user) {
     const cells = Array.isArray((result as { cells?: unknown[] }).cells)
       ? (result as { cells: unknown[] }).cells.length

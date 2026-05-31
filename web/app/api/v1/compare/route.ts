@@ -8,6 +8,7 @@ import { extractBearer, findByPlaintext, hasScope, recordUse } from "../../../..
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
+import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -120,6 +121,19 @@ export async function POST(req: Request) {
 
   // Fire-and-forget usage recording; the response should not block on it.
   void recordUse(key.id);
+  void tryRecordAudit(req, {
+    action: "v1.compare",
+    actorId: key.userId ?? null,
+    target: { type: "api_key", id: key.id, label: key.label },
+    meta: {
+      language,
+      bytes_a: Buffer.byteLength(a, "utf-8"),
+      bytes_b: Buffer.byteLength(b, "utf-8"),
+      jaccard: scores.tokenJaccard,
+      clone_type: clone.type,
+      latency_ms: Number(latencyMs.toFixed(3)),
+    },
+  });
   void logUsage({
     ts: Date.now(),
     keyId: key.id,

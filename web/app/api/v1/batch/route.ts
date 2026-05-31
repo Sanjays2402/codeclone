@@ -16,6 +16,7 @@ import {
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
+import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -100,6 +101,12 @@ export async function POST(req: Request) {
   const result = runBatch(parsed.snippets, parsed.language);
 
   void recordUse(key.id);
+  void tryRecordAudit(req, {
+    action: "v1.batch",
+    actorId: key.userId ?? null,
+    target: { type: "api_key", id: key.id, label: key.label },
+    meta: { snippets: parsed.snippets.length, language: parsed.language },
+  });
   void logUsage({
     ts: Date.now(),
     keyId: key.id,

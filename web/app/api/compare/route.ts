@@ -55,7 +55,7 @@ export async function POST(req: Request) {
       language: parsed.language,
       bytes_a: Buffer.byteLength(parsed.a, "utf-8"),
       bytes_b: Buffer.byteLength(parsed.b, "utf-8"),
-      jaccard: scores.jaccard,
+      jaccard: scores.tokenJaccard,
       clone_type: clone.type,
     },
   });
