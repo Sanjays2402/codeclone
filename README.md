@@ -10,6 +10,33 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Inbound prompt redaction for PII and secrets. Every request that hits `/v1/chat/completions` or `/v1/completions` is scanned before it reaches the model and rewritten in place using deterministic placeholders (`[REDACTED_AWS_ACCESS_KEY_ID]`, `[REDACTED_GITHUB_TOKEN]`, `[REDACTED_JWT]`, `[REDACTED_PRIVATE_KEY]`, `[REDACTED_EMAIL]`, `[REDACTED_IPV4]`, ...). Operators set the default policy with `CODECLONE_REDACT_POLICY=off|redact|block` and override per tenant with `CODECLONE_REDACT_OVERRIDES=acme=block,beta=redact`. In `redact` mode the rewritten prompt is sent to the model and the response carries `X-Codeclone-Redactions: N` plus an `X-Codeclone-Redaction-Categories` breakdown; in `block` mode the request is rejected with HTTP 422 and a structured `{error:{type:"redaction_blocked", findings}}` body so a leaking client cannot silently retry around the policy. Every scan emits a `redaction.scan` audit entry (request id, tenant, route, mode, blocked flag, per-category counts) so security teams can prove DLP enforcement after the fact. Detectors cover AWS access keys + secret keys, GitHub PAT/fine-grained tokens, OpenAI/Anthropic/Slack prefixed keys, JWTs, `Authorization: Bearer ...` headers, PEM private key blocks, emails, and IPv4 literals. Tenant overrides are isolated end to end: a key bound to `@acme` with policy `block` cannot leak the same secret that another tenant with policy `off` is allowed to send through. Pinned by `services/serve/tests/test_redaction.py` (17 cases: per-detector accuracy, policy parser shape, three-mode HTTP integration, cross-tenant isolation).
+
+### Try it: scan and block a leaked secret
+
+```sh
+export CODECLONE_API_KEY=sk-test
+export CODECLONE_REDACT_POLICY=block
+uv run uvicorn codeclone_serve.app:create_app --factory --port 8000
+
+curl -si -X POST http://localhost:8000/v1/completions \
+  -H 'Authorization: Bearer sk-test' \
+  -H 'content-type: application/json' \
+  -d '{"model":"codeclone","prompt":"deploy with aws_secret=AKIAIOSFODNN7EXAMPLE","max_tokens":8}'
+# HTTP/1.1 422 Unprocessable Entity
+# X-Codeclone-Redactions: 1
+# X-Codeclone-Redaction-Categories: aws_access_key_id=1
+# {"error":{"type":"redaction_blocked","findings":{"aws_access_key_id":1},"total":1}}
+
+# Switch to redact mode and the same call succeeds with the secret rewritten:
+CODECLONE_REDACT_POLICY=redact uv run uvicorn codeclone_serve.app:create_app --factory --port 8000
+curl -si -X POST http://localhost:8000/v1/completions \
+  -H 'Authorization: Bearer sk-test' -H 'content-type: application/json' \
+  -d '{"model":"codeclone","prompt":"aws_secret=AKIAIOSFODNN7EXAMPLE","max_tokens":8}' \
+  | grep -i codeclone-redactions
+# X-Codeclone-Redactions: 1
+```
+
 - Per-user session rate limits on browser-driven endpoints. The public `/v1/*` API already enforces per-API-key ceilings, but the cookie-session routes the dashboard calls (`/api/compare`, `/api/snippets`) had no per-tenant cap, so a single signed-in user could DOS the comparator from a tight loop in the UI. A new sliding-window limiter (`web/lib/session-rate-limit.ts`) buckets each authenticated user into named pools (default: 60 rpm for compare, 30 rpm for snippet writes) and falls back to a per-IP bucket for anonymous callers, so unauthenticated probes cannot bypass the ceiling. Counters are filesystem-backed under `$CODECLONE_SESSION_RATELIMIT_DIR`, separate from the API-key limiter, so ops can tune the two surfaces independently with `CODECLONE_SESSION_RATELIMIT_COMPARE_RPM` / `CODECLONE_SESSION_RATELIMIT_SNIPPETS_RPM`. Every response carries the standard `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and `X-RateLimit-Policy` headers; over-limit calls return HTTP 429 with `Retry-After`, a structured `{error:{type:"rate_limited", bucket, limit, retry_after_seconds}}` body, and an immutable audit entry (`compare.rate_limited` / `snippet.rate_limited`) so SOC reviewers can see when a tenant was throttled. Settings -> Security renders a live card showing the buckets in effect, and a new introspection endpoint `/api/session-rate-limits` returns the same data for programmatic clients. Pinned by `web/tests/session-rate-limit.test.ts` (5 cases: env override, per-user isolation, 429 headers, bucket independence, anonymous IP fallback).
 
 ### Try it: hit the per-user compare ceiling

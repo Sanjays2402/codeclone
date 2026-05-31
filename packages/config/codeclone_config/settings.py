@@ -197,6 +197,52 @@ class Settings(BaseSettings):
             raise ValueError(f"audit_log_backup_count must be >= 0, got {v}")
         return v
 
+    # ---- Inbound PII / secret redaction ----
+    # Enterprise DLP requirement: scan prompts for secrets (AWS keys, GitHub
+    # tokens, JWTs, private keys) and PII (emails, IPv4 addresses) before they
+    # are sent to the model. ``redact_policy`` is the default for every
+    # tenant; ``redact_overrides`` is a CSV of ``tenant=mode`` overrides.
+    # Modes: ``off`` (no scan), ``redact`` (rewrite with placeholders),
+    # ``block`` (return 422). Default ``off`` preserves legacy behaviour.
+    redact_policy: str = Field(default="off", alias="CODECLONE_REDACT_POLICY")
+    redact_overrides: str = Field(default="", alias="CODECLONE_REDACT_OVERRIDES")
+
+    @field_validator("redact_policy")
+    @classmethod
+    def _redact_policy_valid(cls, v: str) -> str:
+        v = (v or "off").strip().lower()
+        if v not in ("off", "redact", "block"):
+            raise ValueError(
+                f"redact_policy must be one of off|redact|block, got {v!r}"
+            )
+        return v
+
+    @field_validator("redact_overrides")
+    @classmethod
+    def _redact_overrides_shape(cls, v: str) -> str:
+        for entry in (v or "").split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            if "=" not in entry:
+                raise ValueError(
+                    f"redact_overrides entry missing '=': {entry!r}; "
+                    "use 'tenant=off|redact|block'"
+                )
+            tenant, _, mode = entry.partition("=")
+            tenant = tenant.strip()
+            mode = mode.strip().lower()
+            if not tenant or not mode:
+                raise ValueError(
+                    f"redact_overrides entry has empty tenant or mode: {entry!r}"
+                )
+            if mode not in ("off", "redact", "block"):
+                raise ValueError(
+                    f"redact_overrides tenant {tenant!r} has invalid mode "
+                    f"{mode!r}; must be off|redact|block"
+                )
+        return v
+
     # ---- Per-tenant IP allowlist ----
     # CSV of ``tenant=cidr1+cidr2`` entries. When a tenant has at least one
     # CIDR configured, requests authenticated as that tenant whose client IP

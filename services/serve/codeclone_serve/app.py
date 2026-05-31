@@ -23,11 +23,18 @@ from sse_starlette.sse import EventSourceResponse
 
 from .audit import AuditMiddleware, build_sink_from_env
 from .auth import (
+    Principal,
     require_scope,
     verify_api_key,  # noqa: F401  (re-exported for back-compat)
 )
 from .data_lifecycle import register as register_data_lifecycle
 from .ip_allowlist import IpAllowlistMiddleware, parse_policy
+from .redaction import (
+    EnforcementOutcome,
+    RedactionPolicy,
+    enforce as redact_enforce,
+    parse_overrides as parse_redact_overrides,
+)
 from .model_handle import ModelHandle, load_handle
 from .quota import QuotaMiddleware, QuotaStore, parse_overrides
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
@@ -134,6 +141,26 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         )
     else:
         log.info("cors.disabled", reason="CODECLONE_CORS_ALLOW_ORIGINS is empty")
+
+    # ---- Inbound prompt redaction policy (PII + secrets) ----
+    # Resolved once at startup; per-request enforcement is invoked from the
+    # /v1/chat/completions and /v1/completions handlers so we can rewrite the
+    # parsed body before it reaches the model.
+    try:
+        _redact_overrides = parse_redact_overrides(settings.redact_overrides)
+    except ValueError as exc:
+        log.error("redact.invalid_overrides", error=str(exc))
+        raise
+    app.state.redaction_policy = RedactionPolicy(
+        default_mode=settings.redact_policy,
+        overrides=_redact_overrides,
+    )
+    if app.state.redaction_policy.enabled:
+        log.info(
+            "redaction.enabled",
+            default_mode=settings.redact_policy,
+            overrides=_redact_overrides,
+        )
 
     # ---- Audit log (who/what/when, persisted JSONL) ----
     if settings.audit_log_enabled:
@@ -360,14 +387,32 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
     # ---------------- /v1/chat/completions ----------------
 
     @app.post("/v1/chat/completions", dependencies=[Depends(require_scope("infer"))])
-    async def chat_completions(req: ChatCompletionRequest):
+    async def chat_completions(
+        req: ChatCompletionRequest,
+        request: Request,
+        principal: Principal = Depends(verify_api_key),
+    ):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")
+        # ---- inbound redaction ----
+        outcome = _apply_redaction(
+            app,
+            principal,
+            request,
+            [m.content or "" for m in req.messages],
+            route="/v1/chat/completions",
+        )
+        if outcome.blocked:
+            return _redaction_blocked_response(outcome)
+        for m, new_text in zip(req.messages, outcome.rewritten):
+            m.content = new_text
         prompt = _render_messages(req.messages)
         stop_list = [req.stop] if isinstance(req.stop, str) else (req.stop or None)
         cid = f"chatcmpl-{uuid.uuid4().hex[:24]}"
         if req.stream:
-            return _sse_chat_stream(handle, cid, req, prompt, stop_list)
+            resp = _sse_chat_stream(handle, cid, req, prompt, stop_list)
+            _attach_redaction_header(resp, outcome)
+            return resp
         text = handle.generate(
             prompt,
             max_tokens=min(req.max_tokens, get_settings().max_tokens),
@@ -376,7 +421,7 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         )
         prompt_tokens = handle.token_count(prompt)
         completion_tokens = handle.token_count(text)
-        return ChatCompletionResponse(
+        body = ChatCompletionResponse(
             id=cid,
             model=req.model or handle.name,
             choices=[
@@ -392,24 +437,67 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
                 total_tokens=prompt_tokens + completion_tokens,
             ),
         )
+        json_resp = JSONResponse(content=body.model_dump())
+        _attach_redaction_header(json_resp, outcome)
+        return json_resp
 
     # ---------------- /v1/completions ----------------
 
     @app.post("/v1/completions", dependencies=[Depends(require_scope("infer"))])
-    async def completions(req: CompletionRequest):
+    async def completions(
+        req: CompletionRequest,
+        request: Request,
+        principal: Principal = Depends(verify_api_key),
+    ):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")
         if isinstance(req.prompt, list):
-            prompt = "\n".join(req.prompt)
+            prompt_parts = list(req.prompt)
         else:
-            prompt = req.prompt
+            prompt_parts = [req.prompt]
+        fim_prefix = req.fim_prefix
+        fim_suffix = req.fim_suffix
+        # Apply redaction across every prompt fragment + FIM segments so a
+        # secret hiding in the suffix isn't smuggled through.
+        scan_inputs = list(prompt_parts)
+        if fim_prefix is not None:
+            scan_inputs.append(fim_prefix)
+        if fim_suffix is not None:
+            scan_inputs.append(fim_suffix)
+        outcome = _apply_redaction(
+            app,
+            principal,
+            request,
+            scan_inputs,
+            route="/v1/completions",
+        )
+        if outcome.blocked:
+            return _redaction_blocked_response(outcome)
+        # Pull rewritten values back into their original slots.
+        rewritten = list(outcome.rewritten)
+        prompt_parts = rewritten[: len(prompt_parts)]
+        idx = len(prompt_parts)
+        if fim_prefix is not None:
+            fim_prefix = rewritten[idx]
+            idx += 1
+        if fim_suffix is not None:
+            fim_suffix = rewritten[idx]
+            idx += 1
+        if isinstance(req.prompt, list):
+            req.prompt = prompt_parts
+            prompt = "\n".join(prompt_parts)
+        else:
+            req.prompt = prompt_parts[0]
+            prompt = prompt_parts[0]
         # FIM glue for Continue.dev tab autocomplete.
-        if req.fim_prefix is not None or req.fim_suffix is not None:
-            prompt = (req.fim_prefix or "") + "<|fim_hole|>" + (req.fim_suffix or "")
+        if fim_prefix is not None or fim_suffix is not None:
+            prompt = (fim_prefix or "") + "<|fim_hole|>" + (fim_suffix or "")
         stop_list = [req.stop] if isinstance(req.stop, str) else (req.stop or None)
         cid = f"cmpl-{uuid.uuid4().hex[:24]}"
         if req.stream:
-            return _sse_text_stream(handle, cid, req, prompt, stop_list)
+            resp = _sse_text_stream(handle, cid, req, prompt, stop_list)
+            _attach_redaction_header(resp, outcome)
+            return resp
         text = handle.generate(
             prompt,
             max_tokens=min(req.max_tokens, get_settings().max_tokens),
@@ -420,7 +508,7 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             text = prompt + text
         prompt_tokens = handle.token_count(prompt)
         completion_tokens = handle.token_count(text)
-        return CompletionResponse(
+        body = CompletionResponse(
             id=cid,
             model=req.model or handle.name,
             choices=[CompletionChoice(text=text, index=0, finish_reason="stop")],
@@ -430,8 +518,91 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
                 total_tokens=prompt_tokens + completion_tokens,
             ),
         )
+        json_resp = JSONResponse(content=body.model_dump())
+        _attach_redaction_header(json_resp, outcome)
+        return json_resp
 
     return app
+
+
+# ---------------- redaction helpers ----------------
+
+
+def _apply_redaction(
+    app: FastAPI,
+    principal: Principal,
+    request: Request,
+    texts: list[str],
+    *,
+    route: str,
+) -> EnforcementOutcome:
+    """Run the configured policy and side-effect an audit record.
+
+    The audit entry is written even when no findings are detected (count of
+    0) when the policy is active, so security teams can prove the scan ran
+    on every request, not just on hits.
+    """
+    policy: RedactionPolicy | None = getattr(app.state, "redaction_policy", None)
+    mode = "off"
+    if policy is not None:
+        mode = policy.mode_for(principal.tenant)
+    outcome = redact_enforce(texts, mode)
+    if mode != "off":
+        sink = getattr(app.state, "audit_sink", None)
+        if sink is not None:
+            sink.write(
+                {
+                    "event": "redaction.scan",
+                    "request_id": getattr(request.state, "request_id", None),
+                    "actor": principal.fingerprint,
+                    "tenant": principal.tenant,
+                    "route": route,
+                    "mode": mode,
+                    "blocked": outcome.blocked,
+                    "findings": outcome.summary,
+                    "total_findings": sum(outcome.summary.values()),
+                }
+            )
+    return outcome
+
+
+def _attach_redaction_header(resp, outcome: EnforcementOutcome) -> None:
+    if not outcome.findings:
+        return
+    total = sum(outcome.summary.values())
+    try:
+        resp.headers["X-Codeclone-Redactions"] = str(total)
+        # Compact category breakdown, e.g. ``email=2,aws_access_key_id=1``.
+        resp.headers["X-Codeclone-Redaction-Categories"] = ",".join(
+            f"{k}={v}" for k, v in sorted(outcome.summary.items())
+        )
+    except Exception:
+        # Header surface may be immutable on some streaming response
+        # subclasses; silently skip rather than fail the request.
+        pass
+
+
+def _redaction_blocked_response(outcome: EnforcementOutcome) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "type": "redaction_blocked",
+                "message": (
+                    "request rejected by the workspace data loss prevention "
+                    "policy; remove the flagged secret or personal data and retry"
+                ),
+                "findings": outcome.summary,
+                "total": sum(outcome.summary.values()),
+            }
+        },
+        headers={
+            "X-Codeclone-Redactions": str(sum(outcome.summary.values())),
+            "X-Codeclone-Redaction-Categories": ",".join(
+                f"{k}={v}" for k, v in sorted(outcome.summary.items())
+            ),
+        },
+    )
 
 
 def _find_quota_middleware(app: FastAPI):
