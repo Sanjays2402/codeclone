@@ -29,9 +29,10 @@ export async function GET(req: Request) {
   const q = url.searchParams.get("q") ?? undefined;
   const tag = url.searchParams.get("tag") ?? undefined;
   const language = url.searchParams.get("language") ?? undefined;
+  const classification = url.searchParams.get("classification") ?? undefined;
   const limit = Number(url.searchParams.get("limit") ?? 200);
   const offset = Number(url.searchParams.get("offset") ?? 0);
-  const items = await listSnippets(user.id, { q, tag, language, limit, offset });
+  const items = await listSnippets(user.id, { q, tag, language, classification, limit, offset });
   return NextResponse.json({ items, count: items.length });
 }
 
@@ -70,13 +71,22 @@ export async function POST(req: Request) {
       language: typeof b.language === "string" ? b.language : "",
       body: typeof b.body === "string" ? b.body : "",
       tags: Array.isArray(b.tags) ? (b.tags as unknown[]) as string[] : [],
+      classification:
+        typeof b.classification === "string" ? b.classification : undefined,
     });
     await tryRecordAudit(req, {
       action: "snippet.create",
       actorId: user.id,
       actorEmail: user.email,
       target: { type: "snippet", id: rec.id, label: rec.title },
-      diff: { after: { title: rec.title, language: rec.language, tags: rec.tags } },
+      diff: {
+        after: {
+          title: rec.title,
+          language: rec.language,
+          tags: rec.tags,
+          classification: rec.classification,
+        },
+      },
     });
     return NextResponse.json({ snippet: rec }, { status: 201, headers: limit.headers });
   } catch (err) {

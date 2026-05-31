@@ -28,6 +28,7 @@ import { PayloadPolicyEditor } from "../../../components/PayloadPolicyEditor";
 import { DpaEditor } from "../../../components/DpaEditor";
 import { SecretScanPolicyEditor } from "../../../components/SecretScanPolicyEditor";
 import { MfaPolicyEditor } from "../../../components/MfaPolicyEditor";
+import { SnippetSharePolicyEditor } from "../../../components/SnippetSharePolicyEditor";
 import { DualControlEditor } from "../../../components/DualControlEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { ResidencyEditor } from "../../../components/ResidencyEditor";
@@ -475,6 +476,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SecretScanPolicyEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <SnippetSharePolicyEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole === "owner" && (

@@ -27,6 +27,62 @@ export const MAX_TAG_LEN = 32;
 export const MAX_LANG_LEN = 32;
 export const MAX_SNIPPETS_PER_USER = 500;
 
+/**
+ * Enterprise data classification label. Buyers in regulated industries
+ * (finance, healthcare, gov) require every stored artifact to carry a
+ * sensitivity tag so DLP and share-egress controls can act on it. We
+ * use the standard four-level taxonomy:
+ *
+ *   public        - publishable externally with no restriction
+ *   internal      - default; visible inside the workspace only
+ *   confidential  - sensitive; sharing requires explicit policy allowance
+ *   restricted    - highest sensitivity; egress generally blocked
+ *
+ * The workspace's `snippetMaxShareClassification` policy gates which
+ * labels can be turned into outbound shares; see `lib/workspaces.ts`.
+ */
+export type SnippetClassification =
+  | "public"
+  | "internal"
+  | "confidential"
+  | "restricted";
+
+export const SNIPPET_CLASSIFICATIONS: readonly SnippetClassification[] = [
+  "public",
+  "internal",
+  "confidential",
+  "restricted",
+] as const;
+
+export const DEFAULT_SNIPPET_CLASSIFICATION: SnippetClassification = "internal";
+
+/**
+ * Ordinal severity for comparison. Higher = more sensitive.
+ */
+export function classificationRank(c: SnippetClassification): number {
+  switch (c) {
+    case "public":
+      return 0;
+    case "internal":
+      return 1;
+    case "confidential":
+      return 2;
+    case "restricted":
+      return 3;
+  }
+}
+
+function normalizeClassification(
+  input: unknown,
+  fallback: SnippetClassification = DEFAULT_SNIPPET_CLASSIFICATION,
+): SnippetClassification {
+  if (typeof input !== "string") return fallback;
+  const v = input.trim().toLowerCase();
+  return (SNIPPET_CLASSIFICATIONS as readonly string[]).includes(v)
+    ? (v as SnippetClassification)
+    : fallback;
+}
+
 export interface SnippetRecord {
   v: 1;
   id: string;
@@ -35,6 +91,8 @@ export interface SnippetRecord {
   language: string;
   body: string;
   tags: string[];
+  /** Data classification label. Defaults to "internal" for legacy records. */
+  classification: SnippetClassification;
   createdAt: number;
   updatedAt: number;
 }
@@ -44,6 +102,7 @@ export interface CreateSnippetInput {
   language: string;
   body: string;
   tags?: string[];
+  classification?: SnippetClassification | string;
 }
 
 export interface UpdateSnippetInput {
@@ -51,6 +110,7 @@ export interface UpdateSnippetInput {
   language?: string;
   body?: string;
   tags?: string[];
+  classification?: SnippetClassification | string;
 }
 
 function newId(): string {
@@ -132,6 +192,7 @@ export async function createSnippet(
   const language = normalizeLanguage(input.language);
   const body = normalizeBody(input.body);
   const tags = normalizeTags(input.tags);
+  const classification = normalizeClassification(input.classification);
   if (!title) throw new SnippetError(400, "title required");
   if (!language) throw new SnippetError(400, "language required");
   if (!body.trim()) throw new SnippetError(400, "body required");
@@ -151,6 +212,7 @@ export async function createSnippet(
     language,
     body,
     tags,
+    classification,
     createdAt: now,
     updatedAt: now,
   };
@@ -166,7 +228,11 @@ export async function loadSnippet(
   try {
     const buf = await fs.readFile(recordPath(userId, id), "utf8");
     const rec = JSON.parse(buf) as SnippetRecord;
-    if (rec && rec.v === 1 && rec.userId === userId) return rec;
+    if (rec && rec.v === 1 && rec.userId === userId) {
+      // Backfill classification on legacy records read from disk.
+      if (!rec.classification) rec.classification = DEFAULT_SNIPPET_CLASSIFICATION;
+      return rec;
+    }
     return null;
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -199,6 +265,12 @@ export async function updateSnippet(
   if (patch.tags !== undefined) {
     rec.tags = normalizeTags(patch.tags);
   }
+  if (patch.classification !== undefined) {
+    rec.classification = normalizeClassification(
+      patch.classification,
+      rec.classification ?? DEFAULT_SNIPPET_CLASSIFICATION,
+    );
+  }
   rec.updatedAt = Date.now();
   await fs.writeFile(recordPath(userId, id), JSON.stringify(rec), "utf8");
   return rec;
@@ -222,6 +294,7 @@ export interface ListOptions {
   q?: string;
   tag?: string;
   language?: string;
+  classification?: SnippetClassification | string;
   limit?: number;
   offset?: number;
 }
@@ -245,7 +318,10 @@ export async function listSnippets(
     try {
       const buf = await fs.readFile(path.join(dir, f), "utf8");
       const rec = JSON.parse(buf) as SnippetRecord;
-      if (rec && rec.v === 1 && rec.userId === userId) records.push(rec);
+      if (rec && rec.v === 1 && rec.userId === userId) {
+        if (!rec.classification) rec.classification = DEFAULT_SNIPPET_CLASSIFICATION;
+        records.push(rec);
+      }
     } catch {
       // skip corrupt records silently
     }
@@ -267,6 +343,17 @@ export async function listSnippets(
   if (opts.language) {
     const l = normalizeLanguage(opts.language);
     if (l) out = out.filter((r) => r.language === l);
+  }
+  if (opts.classification) {
+    const c = normalizeClassification(opts.classification, "internal");
+    if (
+      typeof opts.classification === "string" &&
+      (SNIPPET_CLASSIFICATIONS as readonly string[]).includes(
+        opts.classification.toLowerCase(),
+      )
+    ) {
+      out = out.filter((r) => r.classification === c);
+    }
   }
   const offset = Math.max(0, opts.offset ?? 0);
   const limit = Math.max(1, Math.min(500, opts.limit ?? 200));

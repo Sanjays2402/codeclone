@@ -25,8 +25,31 @@ interface Snippet {
   language: string;
   body: string;
   tags: string[];
+  classification: "public" | "internal" | "confidential" | "restricted";
   createdAt: number;
   updatedAt: number;
+}
+
+type Classification = Snippet["classification"];
+
+const CLASSIFICATIONS: Classification[] = [
+  "public",
+  "internal",
+  "confidential",
+  "restricted",
+];
+
+function classChipStyle(c: Classification): string {
+  switch (c) {
+    case "public":
+      return "text-emerald-700 border-emerald-300 bg-emerald-50";
+    case "internal":
+      return "text-[var(--color-ink-3)] border-[var(--color-rule)] bg-[var(--color-paper-2)]";
+    case "confidential":
+      return "text-amber-800 border-amber-300 bg-amber-50";
+    case "restricted":
+      return "text-red-700 border-red-300 bg-red-50";
+  }
 }
 
 type Status = "loading" | "ready" | "error" | "unauthorized";
@@ -44,6 +67,13 @@ export default function SnippetsPage() {
   const [q, setQ] = useState("");
   const [editing, setEditing] = useState<Snippet | null>(null);
   const [creating, setCreating] = useState(false);
+  const [policy, setPolicy] = useState<{
+    allowed: boolean;
+    reason: string;
+    classification: Classification;
+    ceiling: Classification;
+  } | null>(null);
+  const [policyFor, setPolicyFor] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setStatus("loading");
@@ -92,6 +122,39 @@ export default function SnippetsPage() {
       // ignore
     }
     window.location.href = `/compare?from=snippet&slot=${slot}`;
+  }, []);
+
+  const checkSharePolicy = useCallback(async (s: Snippet) => {
+    setPolicyFor(s.id);
+    setPolicy(null);
+    try {
+      const res = await fetch(`/api/snippets/${s.id}/share-policy`, {
+        cache: "no-store",
+      });
+      if (!res.ok) {
+        setPolicy({
+          allowed: false,
+          reason: `Could not load share policy (${res.status}).`,
+          classification: s.classification,
+          ceiling: "internal",
+        });
+        return;
+      }
+      const json = await res.json();
+      setPolicy({
+        allowed: !!json.allowed,
+        reason: json.reason,
+        classification: json.classification,
+        ceiling: json.ceiling,
+      });
+    } catch (e: unknown) {
+      setPolicy({
+        allowed: false,
+        reason: (e as Error).message,
+        classification: s.classification,
+        ceiling: "internal",
+      });
+    }
   }, []);
 
   const tags = useMemo(() => {
@@ -180,7 +243,7 @@ export default function SnippetsPage() {
                 <header className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <h3 className="text-[14px] font-medium truncate">{s.title}</h3>
-                    <div className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-4)] mt-0.5 flex items-center gap-2">
+                    <div className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-4)] mt-0.5 flex items-center gap-2 flex-wrap">
                       <span className="inline-flex items-center gap-1">
                         <Code size={10} weight="duotone" />
                         {s.language}
@@ -189,6 +252,14 @@ export default function SnippetsPage() {
                       <span>{fmtTs(s.updatedAt)}</span>
                     </div>
                   </div>
+                  <span
+                    className={`mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px border rounded-sm shrink-0 ${classChipStyle(
+                      s.classification ?? "internal",
+                    )}`}
+                    title={`Data classification: ${s.classification ?? "internal"}`}
+                  >
+                    {s.classification ?? "internal"}
+                  </span>
                 </header>
                 <pre className="mono text-[11px] leading-snug bg-[var(--color-paper-2)] rounded-sm p-2 overflow-hidden max-h-24 text-[var(--color-ink-2)]">
                   {s.body.split("\n").slice(0, 6).join("\n")}
@@ -226,6 +297,14 @@ export default function SnippetsPage() {
                   </button>
                   <button
                     type="button"
+                    onClick={() => checkSharePolicy(s)}
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-3)]"
+                    title="Check workspace share policy"
+                  >
+                    Share check
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => {
                       setEditing(s);
                       setCreating(false);
@@ -243,6 +322,22 @@ export default function SnippetsPage() {
                     <Trash size={11} weight="duotone" />
                   </button>
                 </div>
+                {policyFor === s.id && policy && (
+                  <div
+                    role="status"
+                    aria-live="polite"
+                    className={`mt-1 text-[11.5px] rounded-sm px-2 py-1.5 border ${
+                      policy.allowed
+                        ? "text-emerald-800 border-emerald-300 bg-emerald-50"
+                        : "text-red-800 border-red-300 bg-red-50"
+                    }`}
+                  >
+                    <span className="mono uppercase text-[10px] tracking-[0.14em] mr-1">
+                      {policy.allowed ? "share allowed" : "share blocked"}
+                    </span>
+                    {policy.reason}
+                  </div>
+                )}
               </li>
             ))}
           </ul>
@@ -280,6 +375,9 @@ function SnippetEditor({
   const [language, setLanguage] = useState(initial?.language ?? "python");
   const [body, setBody] = useState(initial?.body ?? "");
   const [tags, setTags] = useState((initial?.tags ?? []).join(", "));
+  const [classification, setClassification] = useState<Classification>(
+    (initial?.classification as Classification) ?? "internal",
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -291,6 +389,7 @@ function SnippetEditor({
       language,
       body,
       tags: tags.split(",").map((t) => t.trim()).filter(Boolean),
+      classification,
     };
     try {
       const url = initial ? `/api/snippets/${initial.id}` : "/api/snippets";
@@ -381,6 +480,23 @@ function SnippetEditor({
               placeholder="canonical, baseline"
               className="ruled rounded-sm px-3 py-2 bg-[var(--color-paper)] text-[13px] mono outline-none focus:border-[var(--color-ink)]"
             />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="eyebrow">Data classification</span>
+            <select
+              value={classification}
+              onChange={(e) => setClassification(e.target.value as Classification)}
+              className="ruled rounded-sm px-3 py-2 bg-[var(--color-paper)] text-[14px] outline-none focus:border-[var(--color-ink)]"
+            >
+              {CLASSIFICATIONS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+            <span className="text-[11.5px] text-[var(--color-ink-4)]">
+              Controls whether this snippet may be turned into an outbound share. Your workspace owner sets the ceiling in workspace settings.
+            </span>
           </label>
           {err && <ErrorBlock message={err} />}
           <div className="flex items-center justify-end gap-2 mt-2">

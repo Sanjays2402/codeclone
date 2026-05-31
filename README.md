@@ -10,6 +10,29 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Snippet data classification with a workspace share ceiling. Every saved snippet now carries a standard four-level sensitivity tag (public, internal, confidential, restricted) and defaults to internal. The workspace owner sets the most permissive label that members may turn into an outbound share at `/workspaces/<id>`; the default ceiling is internal so confidential and restricted snippets are blocked until policy is loosened. The decision is centralised in `web/lib/snippets-policy.ts` and consumed by both the snippets UI (a share-check button surfaces allowed/blocked plus the reason) and the `GET /api/snippets/:id/share-policy` endpoint that future PDF or share paths must call. Owner mutations write `workspace.snippet_share_policy_update` to the tamper-evident audit log with a before/after diff; snippet create and update audit rows now include the classification too. Cross-tenant: a user belonging to multiple workspaces gets the most permissive ceiling among them, and a restricted snippet is still blocked when no workspace allows it, proved in `web/tests/snippet-classification.test.ts`. Maps to the standard SOC 2 CC6.7 / ISO 27001 A.5.12 / NIST 800-53 MP-3 procurement ask: "every stored artifact must carry a classification label and egress must be gated against that label."
+
+### Try it: tag a snippet and check the workspace share ceiling
+
+```bash
+# Create a snippet labelled "restricted":
+curl -s -X POST http://localhost:3000/api/snippets \
+  -H 'content-type: application/json' \
+  -H "cookie: $COOKIE" \
+  -d '{"title":"prod key sample","language":"python","body":"AWS=\"...\"","classification":"restricted"}' | jq
+
+# Ask the policy whether it can leave the workspace as a share:
+curl -s http://localhost:3000/api/snippets/$ID/share-policy -H "cookie: $COOKIE" | jq
+# => { "allowed": false, "classification": "restricted", "ceiling": "internal",
+#      "reason": "Workspace policy blocks sharing of restricted snippets..." }
+
+# Owner relaxes the ceiling for ws_acme:
+curl -s -X PUT http://localhost:3000/api/workspaces/$WS_ID/snippet-share-policy \
+  -H 'content-type: application/json' \
+  -H "cookie: $COOKIE" \
+  -d '{"level":"restricted"}' | jq
+```
+
 - Enforce SSO at sign-in. A workspace owner who flips `sso.enforced = true` now blocks magic-link sign-in two ways: at issue time (the existing domain-claim check) and, critically, at consume time. The verify route re-evaluates membership before minting a session, so a contractor invited from a non-corporate address (`contractor@gmail.com` joined to an SSO-enforced `globex.io` workspace) cannot bypass SSO by requesting a link from a personal inbox, and a magic link that was already on its way when an admin tightened policy is refused on click with a 303 back to `/signin?error=sso_required` plus the workspace-specific IdP start URL. The dashboard surfaces the redirect as a one-click `Continue with single sign-on` button so the user is funneled into the configured OIDC provider with no support ticket. Every block writes `auth.magic_link_blocked_sso` to the tamper-evident audit log with actor, workspace, IP, and `stage: "verify"` so a SOC 2 reviewer can prove no out-of-band auth path existed even during the race window. Cross-tenant isolation is structural: an unrelated user with no membership and no domain match is never funneled into another tenant's SSO, proved in `web/tests/sso.test.ts`. Maps to the standard procurement ask: "customer must be able to force every user, including contractors and existing members, through the corporate IdP with no fallback."
 
 ### Try it: block a magic-link bypass on an SSO-enforced workspace

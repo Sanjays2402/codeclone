@@ -51,6 +51,8 @@ export async function PATCH(
       language: typeof b.language === "string" ? b.language : undefined,
       body: typeof b.body === "string" ? b.body : undefined,
       tags: Array.isArray(b.tags) ? (b.tags as string[]) : undefined,
+      classification:
+        typeof b.classification === "string" ? b.classification : undefined,
     });
     if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
     await tryRecordAudit(req, {
@@ -59,8 +61,20 @@ export async function PATCH(
       actorEmail: user.email,
       target: { type: "snippet", id: rec.id, label: rec.title },
       diff: {
-        before: before ? { title: before.title, language: before.language, tags: before.tags } : null,
-        after: { title: rec.title, language: rec.language, tags: rec.tags },
+        before: before
+          ? {
+              title: before.title,
+              language: before.language,
+              tags: before.tags,
+              classification: before.classification,
+            }
+          : null,
+        after: {
+          title: rec.title,
+          language: rec.language,
+          tags: rec.tags,
+          classification: rec.classification,
+        },
       },
     });
     return NextResponse.json({ snippet: rec });

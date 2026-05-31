@@ -134,6 +134,20 @@ export interface WorkspaceRecord {
    */
   inviteDomainAllowlist?: string[];
   /**
+   * Maximum snippet classification level that members of this workspace
+   * are allowed to turn into outbound shares (PDF, public link, /share).
+   * Stored as one of: "public" | "internal" | "confidential" | "restricted".
+   * Default when unset is "internal" (i.e. confidential and restricted
+   * snippets cannot be shared until an owner explicitly raises the
+   * ceiling). Wired through lib/snippets-policy.ts and the snippet
+   * share-policy API. Owner-only mutation, audit-logged.
+   */
+  snippetMaxShareClassification?:
+    | "public"
+    | "internal"
+    | "confidential"
+    | "restricted";
+  /**
    * Owner-configured allowlist of webhook destination domains. When the
    * list is non-empty, every webhook URL created in this workspace must
    * have a hostname that matches one of the entries (exact host, or a
@@ -1443,6 +1457,30 @@ export async function setInviteDomainAllowlist(
   domains: string[],
 ): Promise<WorkspaceRecord> {
   ws.inviteDomainAllowlist = domains;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Set the workspace's snippet share-classification ceiling. Passing
+ * null clears it (falls back to the global default in
+ * `lib/snippets-policy.ts`). Caller is responsible for permission
+ * checks and audit logging; this is purely the persistence step.
+ */
+export async function setSnippetMaxShareClassification(
+  ws: WorkspaceRecord,
+  level:
+    | "public"
+    | "internal"
+    | "confidential"
+    | "restricted"
+    | null,
+): Promise<WorkspaceRecord> {
+  if (level === null) {
+    delete ws.snippetMaxShareClassification;
+  } else {
+    ws.snippetMaxShareClassification = level;
+  }
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }
