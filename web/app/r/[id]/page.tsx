@@ -11,6 +11,7 @@ import { loadShare, shareSummary } from "../../../lib/share";
 import { DiffViewer } from "../../../components/DiffViewer";
 import { AlignmentMap } from "../../../components/AlignmentMap";
 import { CopyLinkButton } from "../../../components/CopyLinkButton";
+import { AddToCollectionButton } from "../../../components/AddToCollectionButton";
 import { labelForScore } from "../../../lib/similarity";
 
 export const dynamic = "force-dynamic";
@@ -98,6 +99,7 @@ export default async function SharedResultPage({ params }: PageProps) {
           </div>
           <div className="flex items-center gap-2">
             <CopyLinkButton url={`/r/${id}`} />
+            <AddToCollectionButton shareId={id} />
             <Link
               href="/compare"
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)] hover:opacity-90"

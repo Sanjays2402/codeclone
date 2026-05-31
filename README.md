@@ -29,6 +29,31 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Per-key usage and quota on `/usage`: every authenticated `/v1/compare` call is logged with timestamp, key id, byte count, and latency. The page shows month-to-date calls against a free-tier cap (default 1000, override with `CODECLONE_FREE_TIER_MONTHLY`), a daily bar chart for 7/30/90 day windows, and a per-key breakdown. When the cap is hit the API returns HTTP 429 with `Retry-After` and a structured `quota_exceeded` error, and every 200 response carries `x-codeclone-quota-limit` and `x-codeclone-quota-remaining` headers so clients can rate-limit themselves.
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
 - Snippets library at `/snippets`: save the code you keep comparing against (canonical implementations, suspected sources, internal templates) as titled, tagged, language-typed snippets. One click loads any snippet into the left or right pane of `/compare`, so returning users skip the copy-paste step. Backed by a per-user JSON store at `CODECLONE_SNIPPETS_DIR` (defaults to `../snippets`) with full CRUD, search across title, body, and tags, and a 64KB-per-snippet cap.
+- Collections at `/collections`: group any number of saved `/r/<id>` comparisons under a single title and ship one public URL (`/c/<id>`) you can hand a teammate. Build a collection from the dropdown on any share page, or paste `/r/<id>` URLs straight into the manage view. Rename, edit description, remove items, or delete the whole collection inline. Public view is read-only, deleted shares are flagged inline (no broken links), and everything persists as one JSON per collection at `CODECLONE_COLLECTIONS_DIR` (defaults to `../collections`).
+
+### Try it: ship a collection of duplicates
+
+1. `cd web && npm install && npm run dev`, then create a couple of comparisons via [http://localhost:3000/compare](http://localhost:3000/compare) and click **Save** on each so they get `/r/<id>` URLs.
+2. Open [http://localhost:3000/collections](http://localhost:3000/collections), click **new collection**, give it a title like `Sprint 14 duplicates`, then open it.
+3. Either click **add to collection** on each `/r/<id>` page, or paste `/r/<id>` URLs into the manage view.
+4. Open `/c/<id>` in an incognito window. That public URL is what you send to your teammate.
+5. Or hit the API directly:
+
+```bash
+# create
+curl -s -X POST http://localhost:3000/api/collections \
+  -H 'content-type: application/json' \
+  -d '{"title":"Sprint 14 dupes","description":"refactor candidates"}'
+
+# add a share to it
+curl -s -X POST http://localhost:3000/api/collections/<collectionId>/items \
+  -H 'content-type: application/json' \
+  -d '{"shareId":"<shareId>"}'
+
+# public read
+curl -s http://localhost:3000/api/collections/<collectionId>
+```
+
 
 ### Try it: build a reusable snippet library
 
