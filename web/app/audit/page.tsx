@@ -70,6 +70,44 @@ export default function AuditPage() {
     lastHash: string | null;
   } | null>(null);
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  const [serveVerifying, setServeVerifying] = useState(false);
+  const [serveVerify, setServeVerify] = useState<{
+    configured: boolean;
+    serveUrl?: string;
+    reason?: string;
+    upstreamStatus?: number;
+    reachError?: string | null;
+    result?: {
+      ok: boolean;
+      enabled?: boolean;
+      total_entries?: number;
+      chained_entries?: number;
+      legacy_entries?: number;
+      last_hash?: string | null;
+      last_seq?: number | null;
+      broken_at_seq?: number | null;
+      broken_reason?: string | null;
+    } | null;
+  } | null>(null);
+  const [serveVerifyError, setServeVerifyError] = useState<string | null>(null);
+
+  const verifyServeChain = useCallback(async () => {
+    setServeVerifying(true);
+    setServeVerifyError(null);
+    try {
+      const r = await fetch("/api/audit/serve-verify", { cache: "no-store" });
+      const j = await r.json();
+      if (r.status === 401) {
+        setServeVerifyError("sign in to verify");
+        return;
+      }
+      setServeVerify(j);
+    } catch (e) {
+      setServeVerifyError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setServeVerifying(false);
+    }
+  }, []);
 
   const verifyChain = useCallback(async () => {
     setVerifying(true);
@@ -229,6 +267,15 @@ export default function AuditPage() {
           >
             <LinkSimple size={14} weight="duotone" /> verify chain
           </button>
+          <button
+            type="button"
+            onClick={() => void verifyServeChain()}
+            disabled={serveVerifying}
+            className="inline-flex items-center gap-1.5 mono text-[12px] px-3 py-1.5 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] disabled:opacity-50"
+            title="Verify the inference service (/v1) audit hash chain"
+          >
+            <LinkSimple size={14} weight="duotone" /> verify serve chain
+          </button>
         </div>
       </form>
 
@@ -274,6 +321,73 @@ export default function AuditPage() {
                 <div className="mono text-[10.5px] text-[var(--color-ink-3)]">
                   reason: {verifyResult.brokenAt?.reason}
                 </div>
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
+
+      {(serveVerify || serveVerifyError) && (
+        <div
+          className={`ruled rounded-md p-3 mb-5 text-[12.5px] flex items-start gap-2 ${
+            serveVerifyError
+              ? "text-[var(--color-neg)]"
+              : serveVerify && serveVerify.configured && serveVerify.result?.ok
+                ? "text-[var(--color-pos)]"
+                : serveVerify && !serveVerify.configured
+                  ? "text-[var(--color-ink-2)]"
+                  : "text-[var(--color-neg)]"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {serveVerifyError ? (
+            <>
+              <WarningCircle size={16} weight="duotone" />
+              <span>serve verify failed: {serveVerifyError}</span>
+            </>
+          ) : serveVerify && !serveVerify.configured ? (
+            <>
+              <WarningCircle size={16} weight="duotone" />
+              <div className="flex-1 min-w-0">
+                <div>serve chain not configured</div>
+                <div className="mono text-[10.5px] text-[var(--color-ink-3)] truncate">
+                  set CODECLONE_SERVE_ADMIN_KEY to enable ({serveVerify.serveUrl})
+                </div>
+              </div>
+            </>
+          ) : serveVerify && serveVerify.result?.ok ? (
+            <>
+              <CheckCircle size={16} weight="duotone" />
+              <div className="flex-1 min-w-0">
+                <div>
+                  serve chain intact: {serveVerify.result.chained_entries ?? 0} chained
+                  {(serveVerify.result.legacy_entries ?? 0) > 0
+                    ? `, ${serveVerify.result.legacy_entries} legacy pre-chain`
+                    : ""}
+                </div>
+                {serveVerify.result.last_hash && (
+                  <div className="mono text-[10.5px] text-[var(--color-ink-3)] truncate">
+                    head: {serveVerify.result.last_hash} (seq {serveVerify.result.last_seq})
+                  </div>
+                )}
+              </div>
+            </>
+          ) : serveVerify && serveVerify.result ? (
+            <>
+              <XCircle size={16} weight="duotone" />
+              <div className="min-w-0">
+                <div>serve chain broken at seq {serveVerify.result.broken_at_seq}</div>
+                <div className="mono text-[10.5px] text-[var(--color-ink-3)]">
+                  reason: {serveVerify.result.broken_reason}
+                </div>
+              </div>
+            </>
+          ) : serveVerify ? (
+            <>
+              <XCircle size={16} weight="duotone" />
+              <div>
+                serve unreachable ({serveVerify.reachError || `HTTP ${serveVerify.upstreamStatus}`})
               </div>
             </>
           ) : null}

@@ -21,7 +21,7 @@ from prometheus_client import (
 )
 from sse_starlette.sse import EventSourceResponse
 
-from .audit import AuditMiddleware, build_sink_from_env
+from .audit import AuditMiddleware, build_sink_from_env, verify_chain
 from .auth import (
     Principal,
     require_scope,
@@ -399,6 +399,51 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             "remaining": max(0, limit - snap["used"]) if limit > 0 else None,
             "reset_epoch": period_reset_epoch(snap["period"]),
         }
+
+    # ---------------- /v1/audit/verify ----------------
+    # Walks the on-disk audit JSONL and verifies the sha256 hash chain.
+    # Admin scope only. Compliance teams pin ``last_hash`` externally so
+    # any silent rewrite of the log fails verification on the next run.
+    @app.get(
+        "/v1/audit/verify",
+        dependencies=[Depends(require_scope("admin"))],
+    )
+    def audit_verify():
+        if not settings.audit_log_enabled:
+            return JSONResponse(
+                status_code=200,
+                content={
+                    "enabled": False,
+                    "ok": True,
+                    "total_entries": 0,
+                    "chained_entries": 0,
+                    "legacy_entries": 0,
+                    "last_hash": None,
+                    "last_seq": None,
+                    "broken_at_seq": None,
+                    "broken_reason": None,
+                },
+            )
+        sink = getattr(app.state, "audit_sink", None)
+        if sink is not None:
+            # Drain the queue first so any record that just landed gets
+            # included in the verification window. Bounded so verify
+            # cannot hang behind a stuck writer thread.
+            sink.flush(timeout=2.0)
+        path = settings.audit_log_path
+        result = verify_chain(Path(path))
+        head = sink.chain_head() if sink is not None else None
+        if head is not None:
+            result["chain_head"] = head
+        result["enabled"] = True
+        return JSONResponse(
+            status_code=200 if result["ok"] else 409,
+            content=result,
+            headers={
+                "Cache-Control": "no-store",
+                "X-Audit-Chain-Status": "ok" if result["ok"] else "broken",
+            },
+        )
 
     # ---------------- /v1/models ----------------
 

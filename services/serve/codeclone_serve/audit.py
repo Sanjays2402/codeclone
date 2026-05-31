@@ -102,6 +102,11 @@ class AuditSink:
     keep; older files are pruned in age order on each rotation.
     """
 
+    # Genesis hash used as ``prev_hash`` for the very first record in a
+    # brand new audit log. Operators can pin this value externally to detect
+    # the log being replaced wholesale with a freshly-rebuilt chain.
+    GENESIS_HASH = "0" * 64
+
     def __init__(
         self,
         path: Path,
@@ -117,11 +122,97 @@ class AuditSink:
         self.max_bytes = max_bytes
         self.backup_count = backup_count
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Hash-chain state. Recovered from the live log + state sidecar so a
+        # crash mid-write cannot silently reset the chain on restart.
+        self._state_path = self.path.with_name(self.path.name + ".state")
+        self._chain_lock = threading.Lock()
+        self._prev_hash, self._seq = self._recover_chain_state()
         self._queue: queue.SimpleQueue[dict[str, Any] | None] = queue.SimpleQueue()
         self._thread = threading.Thread(
             target=self._run, name="codeclone-audit", daemon=True
         )
         self._thread.start()
+
+    # ---- hash chain helpers ----
+
+    @staticmethod
+    def _hash_record(prev_hash: str, payload: dict[str, Any]) -> str:
+        """Compute the chained sha256 over ``prev_hash`` + canonical JSON body.
+
+        Canonicalization uses sorted keys and compact separators so the same
+        record hashes identically regardless of dict insertion order.
+        """
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        h = hashlib.sha256()
+        h.update(prev_hash.encode("ascii"))
+        h.update(b"|")
+        h.update(body.encode("utf-8"))
+        return h.hexdigest()
+
+    def _recover_chain_state(self) -> tuple[str, int]:
+        """Return ``(prev_hash, next_seq)`` resuming any prior chain.
+
+        Reads the tail of the live log so we extend an existing chain rather
+        than starting a fresh one after a process restart. The sidecar state
+        file is a fast path that avoids re-reading the whole log; the log
+        itself is the source of truth.
+        """
+        if not self.path.exists() or self.path.stat().st_size == 0:
+            return self.GENESIS_HASH, 1
+        last_chained: dict[str, Any] | None = None
+        try:
+            with self.path.open("r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        rec = json.loads(line)
+                    except ValueError:
+                        continue
+                    if isinstance(rec, dict) and "hash" in rec and "seq" in rec:
+                        last_chained = rec
+        except OSError:
+            return self.GENESIS_HASH, 1
+        if last_chained is None:
+            # Pre-existing log written before the chain feature shipped. We
+            # start a fresh chain from genesis so legacy rows do not get
+            # retroactively claimed as part of the chain.
+            try:
+                next_seq = sum(
+                    1 for _ in self.path.open("r", encoding="utf-8")
+                ) + 1
+            except OSError:
+                next_seq = 1
+            return self.GENESIS_HASH, next_seq
+        try:
+            seq = int(last_chained.get("seq", 0))
+        except (TypeError, ValueError):
+            seq = 0
+        prev_hash = str(last_chained.get("hash") or self.GENESIS_HASH)
+        return prev_hash, seq + 1
+
+    def chain_head(self) -> dict[str, Any]:
+        """Return the current chain head (``seq``, ``prev_hash``).
+
+        Snapshot is taken under the chain lock so callers see a consistent
+        view even when the writer thread is mid-emit.
+        """
+        with self._chain_lock:
+            return {"next_seq": self._seq, "prev_hash": self._prev_hash}
+
+    def _write_state_sidecar(self) -> None:
+        try:
+            tmp = self._state_path.with_suffix(self._state_path.suffix + ".tmp")
+            with tmp.open("w", encoding="utf-8") as fh:
+                json.dump(
+                    {"prev_hash": self._prev_hash, "seq": self._seq - 1},
+                    fh,
+                    separators=(",", ":"),
+                )
+            os.replace(tmp, self._state_path)
+        except OSError:
+            return
 
     def write(self, record: dict[str, Any]) -> None:
         self._queue.put(record)
@@ -135,6 +226,7 @@ class AuditSink:
     def close(self) -> None:
         self._queue.put(None)
         self._thread.join(timeout=2.0)
+        self._write_state_sidecar()
 
     def _run(self) -> None:
         # Line-buffered append. POSIX guarantees atomicity for sub-PIPE_BUF
@@ -146,8 +238,17 @@ class AuditSink:
                 if item is None:
                     return
                 try:
+                    with self._chain_lock:
+                        item["seq"] = self._seq
+                        item["prev_hash"] = self._prev_hash
+                        item["hash"] = self._hash_record(self._prev_hash, item)
+                        self._prev_hash = item["hash"]
+                        self._seq += 1
+                        sidecar_due = (self._seq % 16) == 0
                     line = json.dumps(item, separators=(",", ":")) + "\n"
                     fh.write(line)
+                    if sidecar_due:
+                        self._write_state_sidecar()
                     if self.max_bytes and self._should_rotate(fh, len(line)):
                         fh.close()
                         self._rotate()
@@ -407,6 +508,94 @@ class AuditMiddleware:
         if error is not None:
             record["error"] = error
         self.sink.write(record)
+
+
+def verify_chain(path: Path) -> dict[str, Any]:
+    """Walk ``path`` and verify the sha256 hash chain end to end.
+
+    Returns a dict suitable for direct JSON serialization with the fields:
+
+    - ``ok`` (bool): True iff every chained row links to its predecessor.
+    - ``total_entries`` (int): every JSON line we could parse.
+    - ``chained_entries`` (int): rows that carry ``seq``/``prev_hash``/``hash``.
+    - ``legacy_entries`` (int): pre-chain rows skipped during verification.
+    - ``last_hash`` (str|None): tip of the chain, pin externally to anchor it.
+    - ``last_seq`` (int|None): sequence number of the tip.
+    - ``broken_at_seq`` (int|None): first ``seq`` where the chain broke.
+    - ``broken_reason`` (str|None): human-readable failure label.
+    """
+    out: dict[str, Any] = {
+        "ok": True,
+        "total_entries": 0,
+        "chained_entries": 0,
+        "legacy_entries": 0,
+        "last_hash": None,
+        "last_seq": None,
+        "broken_at_seq": None,
+        "broken_reason": None,
+    }
+    if not path.exists():
+        return out
+    prev_hash = AuditSink.GENESIS_HASH
+    expected_seq = 1
+    try:
+        fh = path.open("r", encoding="utf-8")
+    except OSError as exc:
+        out["ok"] = False
+        out["broken_reason"] = f"open_failed: {exc.__class__.__name__}"
+        return out
+    with fh:
+        for raw in fh:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                rec = json.loads(raw)
+            except ValueError:
+                out["ok"] = False
+                out["broken_reason"] = "invalid_json"
+                return out
+            out["total_entries"] += 1
+            if not isinstance(rec, dict):
+                continue
+            if "hash" not in rec or "seq" not in rec or "prev_hash" not in rec:
+                out["legacy_entries"] += 1
+                continue
+            seq = rec.get("seq")
+            claimed_hash = rec.get("hash")
+            claimed_prev = rec.get("prev_hash")
+            if not isinstance(seq, int) or not isinstance(claimed_hash, str) or not isinstance(claimed_prev, str):
+                out["ok"] = False
+                out["broken_at_seq"] = expected_seq
+                out["broken_reason"] = "malformed_chain_fields"
+                return out
+            if seq != expected_seq:
+                out["ok"] = False
+                out["broken_at_seq"] = seq
+                out["broken_reason"] = f"seq_gap: expected {expected_seq}"
+                return out
+            if claimed_prev != prev_hash:
+                out["ok"] = False
+                out["broken_at_seq"] = seq
+                out["broken_reason"] = "prev_hash_mismatch"
+                return out
+            payload = {
+                k: v
+                for k, v in rec.items()
+                if k != "hash"
+            }
+            recomputed = AuditSink._hash_record(prev_hash, payload)
+            if recomputed != claimed_hash:
+                out["ok"] = False
+                out["broken_at_seq"] = seq
+                out["broken_reason"] = "hash_mismatch"
+                return out
+            prev_hash = claimed_hash
+            expected_seq = seq + 1
+            out["chained_entries"] += 1
+            out["last_hash"] = claimed_hash
+            out["last_seq"] = seq
+    return out
 
 
 def build_sink_from_env(default_path: Path) -> AuditSink:
