@@ -6,6 +6,7 @@ import { ThemeToggle } from "./ThemeToggle";
 
 const items = [
   { href: "/",         label: "overview" },
+  { href: "/welcome",  label: "welcome" },
   { href: "/demo",     label: "demo" },
   { href: "/compare",  label: "compare" },
   { href: "/history",  label: "history" },

@@ -85,6 +85,14 @@ export default function ComparePage() {
         setResult(json as CompareResponse);
         setShareUrl(null);
         setShareError(null);
+        // Fire-and-forget: tell the onboarding tracker the user has
+        // successfully run their first compare. Errors are ignored on
+        // purpose so a slow disk write never blocks the UI.
+        void fetch("/api/onboarding", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ action: "compared" }),
+        }).catch(() => {});
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

@@ -4,6 +4,7 @@ import "../styles/globals.css";
 import { TopStrip } from "../components/TopStrip";
 import { NavBar } from "../components/NavBar";
 import { PWAInstall } from "../components/PWAInstall";
+import { WelcomeBanner } from "../components/WelcomeBanner";
 
 const sans = Inter_Tight({
   subsets: ["latin"],
@@ -63,6 +64,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         `}</style>
         <TopStrip />
         <NavBar />
+        <WelcomeBanner />
         <main className="mx-auto max-w-[1280px] px-7 pb-24 pt-6">
           {children}
         </main>
