@@ -14,6 +14,7 @@ import {
 } from "../../../../lib/auth";
 import { revokeAllSessions, revokeSession } from "../../../../lib/sessions";
 import { tryRecordAudit } from "../../../../lib/audit";
+import { requireStepUp } from "../../../../lib/mfa";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,6 +32,22 @@ export async function POST(req: Request) {
     /* tolerate empty body */
   }
   const includeCurrent = Boolean(body.includeCurrent);
+
+  const gate = await requireStepUp(ctx.user.id, ctx.jti);
+  if (!gate.allowed) {
+    await tryRecordAudit(req, {
+      action: includeCurrent ? "auth.session_revoke_all" : "auth.session_revoke_others",
+      actorId: ctx.user.id,
+      actorEmail: ctx.user.email,
+      target: { type: "user", id: ctx.user.id },
+      status: "denied",
+      meta: { reason: "mfa_required" },
+    });
+    return NextResponse.json(
+      { error: "mfa_required", message: "Verify your MFA code at /api/auth/mfa/challenge first." },
+      { status: 401, headers: { "WWW-Authenticate": 'MFA realm="codeclone"' } },
+    );
+  }
 
   const exceptJti = includeCurrent ? undefined : ctx.jti ?? undefined;
   let revoked = await revokeAllSessions(ctx.user.id, { exceptJti });

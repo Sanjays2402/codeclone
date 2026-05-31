@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { currentUserFromCookieHeader, currentSessionFromCookieHeader } from "../../../../lib/auth";
 import { tryRecordAudit } from "../../../../lib/audit";
+import { requireStepUp } from "../../../../lib/mfa";
 import {
   getWorkspace,
   getMember,
@@ -124,6 +125,24 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
       status: "denied",
     });
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  // Removing another member is a destructive admin action: require MFA step-up.
+  const ctxMfa = await currentSessionFromCookieHeader(req.headers.get("cookie"));
+  const gate = await requireStepUp(user.id, ctxMfa?.jti ?? null);
+  if (!gate.allowed) {
+    await tryRecordAudit(req, {
+      action: "workspace.member_remove",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace_member", id: targetUserId },
+      status: "denied",
+      meta: { reason: "mfa_required" },
+    });
+    return NextResponse.json(
+      { error: "mfa_required", message: "Verify your MFA code at /api/auth/mfa/challenge first." },
+      { status: 401, headers: { "WWW-Authenticate": 'MFA realm="codeclone"' } },
+    );
   }
   try {
     await removeMember(ws, targetUserId);

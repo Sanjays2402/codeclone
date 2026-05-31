@@ -256,6 +256,26 @@ export default function SettingsPage() {
             </a>
           </div>
 
+          <H2 eyebrow="two-factor">
+            <span className="inline-flex items-center gap-2">
+              <ShieldCheck weight="duotone" size={16} /> mfa for destructive actions
+            </span>
+          </H2>
+          <div className="ruled rounded-md p-5">
+            <p className="text-[13px] text-[var(--color-ink-2)] mb-3">
+              Require a 6-digit code before wiping data, force-logging-out
+              devices, or removing workspace members.
+            </p>
+            <a
+              href="/settings/security"
+              className="h-9 px-3 mono text-[12px] inline-flex items-center gap-2 border border-[var(--color-rule)] rounded-sm bg-[var(--color-paper-2)] hover:bg-[var(--color-paper-3)]"
+            >
+              <ShieldCheck weight="duotone" size={14} />
+              manage mfa
+              <ArrowUpRight weight="duotone" size={12} />
+            </a>
+          </div>
+
           <H2 eyebrow="danger zone">
             <span className="inline-flex items-center gap-2 text-[var(--color-neg)]">
               <Warning weight="duotone" size={16} /> delete all data
