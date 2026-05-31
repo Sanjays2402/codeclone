@@ -10,6 +10,40 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Idempotency keys on POST `/v1/chat/completions` and `/v1/completions`. Clients pass `Idempotency-Key: <opaque>` and any retry within 24h that sends the same body replays the original response verbatim with `Idempotency-Replayed: true`, so flaky network retries no longer double-charge tokens or duplicate inference work. Reuse of the same key with a different body returns `409 Conflict` (`{error:{type:"idempotency_conflict"}}`) instead of silently serving stale data. The cache is partitioned by `(tenant, key)` so the same opaque string from two tenants stays isolated, replays and conflicts both stream to the audit log as `idempotency.replay` / `idempotency.conflict`, and streaming requests are accepted but not cached because byte-replay of SSE bodies is unsafe. Configured via `CODECLONE_IDEMPOTENCY_ENABLED` / `_STATE_PATH` / `_TTL_SECONDS` in `packages/config/codeclone_config/settings.py` and pinned by `services/serve/tests/test_idempotency.py` (key shape, fingerprint stability, store-level tenant isolation, end-to-end replay, conflict, cross-tenant non-leak, audit emission). Covers the standard Stripe-style procurement ask: “non-idempotent paid POSTs must be safely retryable.”
+
+### Try it: replay a chat completion safely on retry
+
+```sh
+CODECLONE_API_KEYS=sk-acme:infer@acme uv run uvicorn codeclone_serve.app:create_app --factory --port 8000
+
+# First call processes normally.
+curl -si -X POST http://localhost:8000/v1/completions \
+  -H 'Authorization: Bearer sk-acme' \
+  -H 'Idempotency-Key: order-42' \
+  -H 'content-type: application/json' \
+  -d '{"model":"codeclone","prompt":"def add(a,b):","max_tokens":16}'
+# HTTP/1.1 200 OK
+
+# Same key + same body within 24h: replayed from cache.
+curl -si -X POST http://localhost:8000/v1/completions \
+  -H 'Authorization: Bearer sk-acme' \
+  -H 'Idempotency-Key: order-42' \
+  -H 'content-type: application/json' \
+  -d '{"model":"codeclone","prompt":"def add(a,b):","max_tokens":16}'
+# HTTP/1.1 200 OK
+# Idempotency-Replayed: true
+
+# Same key + different body: 409, no silent stale data.
+curl -si -X POST http://localhost:8000/v1/completions \
+  -H 'Authorization: Bearer sk-acme' \
+  -H 'Idempotency-Key: order-42' \
+  -H 'content-type: application/json' \
+  -d '{"model":"codeclone","prompt":"DIFFERENT","max_tokens":16}'
+# HTTP/1.1 409 Conflict
+# {"error":{"type":"idempotency_conflict",...}}
+```
+
 - Workspace API key max-age policy enforced at issue time and on every `/v1` call. Owners cap how long any API key minted in the workspace may live (1 to 365 days) under the workspace settings page; the policy clamps the `expiresAt` of every new key as it is created in `web/lib/api-keys.ts#createKey`, and a second guard (`web/lib/api-key-policy-enforce.ts`) runs on `/v1/compare`, `/v1/batch`, `/v1/shares`, and `/v1/shares/[id]` so legacy keys that pre-date the policy are refused with HTTP 401 and a structured `{error:{type:"api_key_policy_expired", max_age_days, age_days}}` body until rotated. Members hit the same audit chain everything else uses: every policy change emits `workspace.api_key_policy_update` with a before/after diff, every runtime block emits `workspace.api_key_policy_block` with the offending key id and computed age in days, and members who try to PUT the policy endpoint without owner permission get a denied entry so owners can see attempted privilege escalation. Covers the common SOC 2 CC6.1 / ISO 27001 A.9.2.6 procurement ask: “API credentials must expire within N days and be rotated.” Pinned by `web/tests/workspaces-api-key-policy.test.ts` (sanitization clamping, persist + clear round-trip, createKey clamping a 365-day request down to the workspace cap even when no expiry was requested, drift-key deadline math used by the enforcer).
 
 ### Try it: cap workspace API keys at 30 days and watch a stale key get refused

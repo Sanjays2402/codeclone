@@ -28,6 +28,14 @@ from .auth import (
     verify_api_key,  # noqa: F401  (re-exported for back-compat)
 )
 from .data_lifecycle import register as register_data_lifecycle
+from .idempotency import (
+    IdempotencyKeyError,
+    IdempotencyStore,
+    ReplayConflict,
+    ReplayHit,
+    fingerprint_body,
+    validate_key,
+)
 from .ip_allowlist import IpAllowlistMiddleware, parse_policy
 from .redaction import (
     EnforcementOutcome,
@@ -161,6 +169,20 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
             default_mode=settings.redact_policy,
             overrides=_redact_overrides,
         )
+
+    # ---- Idempotency cache for POST inference endpoints ----
+    if settings.idempotency_enabled:
+        app.state.idempotency_store = IdempotencyStore(
+            Path(settings.idempotency_state_path),
+            ttl_seconds=settings.idempotency_ttl_seconds,
+        )
+        log.info(
+            "idempotency.enabled",
+            ttl_seconds=settings.idempotency_ttl_seconds,
+            state_path=str(settings.idempotency_state_path),
+        )
+    else:
+        app.state.idempotency_store = None
 
     # ---- Audit log (who/what/when, persisted JSONL) ----
     if settings.audit_log_enabled:
@@ -394,6 +416,13 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
     ):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")
+        # ---- idempotency: replay or short-circuit before model work ----
+        idem = _idempotency_precheck(
+            app, principal, request, req.model_dump(), route="/v1/chat/completions",
+            stream=req.stream,
+        )
+        if isinstance(idem, JSONResponse):
+            return idem
         # ---- inbound redaction ----
         outcome = _apply_redaction(
             app,
@@ -439,6 +468,8 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         )
         json_resp = JSONResponse(content=body.model_dump())
         _attach_redaction_header(json_resp, outcome)
+        _idempotency_store(app, principal, idem, status=200,
+                           body=body.model_dump(), headers=dict(json_resp.headers))
         return json_resp
 
     # ---------------- /v1/completions ----------------
@@ -451,6 +482,12 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
     ):
         if req.n != 1:
             raise HTTPException(400, "n must be 1")
+        idem = _idempotency_precheck(
+            app, principal, request, req.model_dump(), route="/v1/completions",
+            stream=req.stream,
+        )
+        if isinstance(idem, JSONResponse):
+            return idem
         if isinstance(req.prompt, list):
             prompt_parts = list(req.prompt)
         else:
@@ -520,6 +557,8 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         )
         json_resp = JSONResponse(content=body.model_dump())
         _attach_redaction_header(json_resp, outcome)
+        _idempotency_store(app, principal, idem, status=200,
+                           body=body.model_dump(), headers=dict(json_resp.headers))
         return json_resp
 
     return app
@@ -602,6 +641,141 @@ def _redaction_blocked_response(outcome: EnforcementOutcome) -> JSONResponse:
                 f"{k}={v}" for k, v in sorted(outcome.summary.items())
             ),
         },
+    )
+
+
+# ---------------- idempotency helpers ----------------
+
+
+def _idempotency_precheck(
+    app: FastAPI,
+    principal: Principal,
+    request: Request,
+    body: dict,
+    *,
+    route: str,
+    stream: bool,
+):
+    """Validate ``Idempotency-Key`` and short-circuit on a hit/conflict.
+
+    Returns one of:
+
+    * ``None`` when no header is sent or the feature is disabled. Caller
+      proceeds normally.
+    * a tuple ``(key, fingerprint)`` when the request should be processed
+      and the result then stored via :func:`_idempotency_store`.
+    * a :class:`JSONResponse` when the cached response should be replayed
+      verbatim, the key conflicts with a different body, or the header is
+      malformed.
+
+    Streaming requests are accepted but never cached: replaying a chunked
+    SSE body byte-for-byte is unsafe and the spec exempts streams. The
+    return value for a streaming request with a valid key is ``None`` so
+    handlers proceed without storage.
+    """
+    store: IdempotencyStore | None = getattr(app.state, "idempotency_store", None)
+    if store is None:
+        return None
+    raw = request.headers.get("idempotency-key") or request.headers.get(
+        "Idempotency-Key"
+    )
+    if not raw:
+        return None
+    try:
+        key = validate_key(raw)
+    except IdempotencyKeyError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={
+                "error": {
+                    "type": "invalid_idempotency_key",
+                    "message": str(exc),
+                }
+            },
+        )
+    if stream:
+        # Accept the header so clients aren't surprised, but do not cache.
+        return None
+    fp = fingerprint_body(body)
+    result = store.lookup(principal.tenant, key, fp)
+    sink = getattr(app.state, "audit_sink", None)
+    if isinstance(result, ReplayHit):
+        if sink is not None:
+            sink.write(
+                {
+                    "event": "idempotency.replay",
+                    "request_id": getattr(request.state, "request_id", None),
+                    "actor": principal.fingerprint,
+                    "tenant": principal.tenant,
+                    "route": route,
+                    "idempotency_key": key,
+                }
+            )
+        headers = dict(result.response.headers)
+        # Strip headers that must reflect the *current* response, not the
+        # cached one (content-length is recomputed by Starlette).
+        for h in ("content-length", "date", "server"):
+            headers.pop(h, None)
+        headers["Idempotency-Replayed"] = "true"
+        headers["Idempotency-Key"] = key
+        return JSONResponse(
+            status_code=result.response.status,
+            content=result.response.body,
+            headers=headers,
+        )
+    if isinstance(result, ReplayConflict):
+        if sink is not None:
+            sink.write(
+                {
+                    "event": "idempotency.conflict",
+                    "request_id": getattr(request.state, "request_id", None),
+                    "actor": principal.fingerprint,
+                    "tenant": principal.tenant,
+                    "route": route,
+                    "idempotency_key": key,
+                    "stored_fingerprint": result.stored_fingerprint,
+                    "new_fingerprint": result.new_fingerprint,
+                }
+            )
+        return JSONResponse(
+            status_code=409,
+            content={
+                "error": {
+                    "type": "idempotency_conflict",
+                    "message": (
+                        "Idempotency-Key already used with a different request "
+                        "body; pick a new key or retry with the original body"
+                    ),
+                }
+            },
+            headers={"Idempotency-Key": key},
+        )
+    return (key, fp)
+
+
+def _idempotency_store(
+    app: FastAPI,
+    principal: Principal,
+    handle: object,
+    *,
+    status: int,
+    body: dict,
+    headers: dict[str, str],
+) -> None:
+    """Persist the response for later replay. No-op on miss/stream/disabled."""
+    if not isinstance(handle, tuple) or len(handle) != 2:
+        return
+    key, fp = handle
+    store: IdempotencyStore | None = getattr(app.state, "idempotency_store", None)
+    if store is None:
+        return
+    store.store(
+        principal.tenant,
+        str(key),
+        str(fp),
+        status=status,
+        body=body,
+        headers={k: v for k, v in headers.items() if k.lower() == "content-type"},
     )
 
 

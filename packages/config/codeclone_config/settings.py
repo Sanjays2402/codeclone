@@ -197,6 +197,34 @@ class Settings(BaseSettings):
             raise ValueError(f"audit_log_backup_count must be >= 0, got {v}")
         return v
 
+    # ---- Idempotency keys for POST inference endpoints ----
+    # Enterprise procurement requirement: any POST that costs money or tokens
+    # must be safely retryable. When enabled, clients can send
+    # ``Idempotency-Key`` on /v1/chat/completions and /v1/completions; the
+    # first response is cached per ``(tenant, key)`` and replayed on retries
+    # for ``idempotency_ttl_seconds``. Default-on with a 24h TTL: it is a
+    # no-op for callers that don't send the header, and conformant with the
+    # Stripe-style spec for callers that do.
+    idempotency_enabled: bool = Field(
+        default=True, alias="CODECLONE_IDEMPOTENCY_ENABLED"
+    )
+    idempotency_state_path: Path = Field(
+        default=Path("./runs/idempotency.json"),
+        alias="CODECLONE_IDEMPOTENCY_STATE_PATH",
+    )
+    idempotency_ttl_seconds: int = Field(
+        default=24 * 60 * 60, alias="CODECLONE_IDEMPOTENCY_TTL_SECONDS"
+    )
+
+    @field_validator("idempotency_ttl_seconds")
+    @classmethod
+    def _idem_ttl_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(
+                f"idempotency_ttl_seconds must be > 0, got {v}"
+            )
+        return v
+
     # ---- Inbound PII / secret redaction ----
     # Enterprise DLP requirement: scan prompts for secrets (AWS keys, GitHub
     # tokens, JWTs, private keys) and PII (emails, IPv4 addresses) before they
