@@ -22,7 +22,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, a line-level alignment heatmap that flags exact and moved blocks, and an automatic clone-type verdict (Type-1 exact / Type-2 renamed / Type-3 near-miss / Type-4 semantic candidate) with rationale
 - One-click `/demo` landing page: three preloaded sample pairs (rename, restyle, distinct) that hit the live `/api/compare` route on mount and render verdict, confidence, latency, scores, and diff in under a second so a first-time visitor sees the model work without typing anything
 - Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
-- Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with OG metadata, copy-link button, and a one-click "open in compare" entry. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
+- Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with a dynamically rendered 1200x630 OG image (similarity score, clone label, token counts, latency, tags) that previews on Twitter, LinkedIn, Slack, and Discord, plus a copy-link button and a one-click "open in compare" entry. The OG image and twitter:summary_large_image card are generated on demand at `/r/<id>/opengraph-image` and `/r/<id>/twitter-image` via `next/og`. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
 - Saved comparisons in `/history`: every share you create shows up in a browsable list with rename, tagging, JSON download, and delete. Search by title, id, language, or clone label; filter by tag. All writes go to the same on-disk store as `/r/<id>`, so links and history stay in sync.
 - Public `/v1/compare` and `/v1/batch` API with per-key auth: generate keys in the `/api-keys` page, copy-paste the curl example, call from anywhere. `/v1/batch` runs a full pairwise similarity matrix over 2 to 12 snippets in one authenticated request and fires a `batch.completed` webhook on completion. Each key shows its prefix, total calls, and last-used timestamp, with one-click revoke and delete. Only the SHA-256 hash of each key is persisted (override the on-disk location with `CODECLONE_KEYS_DIR`).
 - Outbound webhooks via `/webhooks`: register a URL, receive a real signed POST every time `/v1/compare` finishes. Each delivery retries up to three times with backoff, includes an HMAC-SHA256 signature (`X-CodeClone-Signature: t=<ts>,v1=<mac>`), and lands in a per-endpoint delivery log (last 50) you can browse from the dashboard. Pause, resume, or delete endpoints inline. Override the on-disk location with `CODECLONE_WEBHOOKS_DIR`.
@@ -43,6 +43,19 @@ curl -sS http://localhost:3000/v1/compare \
 
 # Inspect the JSON aggregate directly:
 curl -sS http://localhost:3000/api/usage?days=30 | jq .
+```
+
+### Try it: see the OG share card
+
+```bash
+cd web && npm run dev
+
+# 1. Create a share from /compare (Save button) and grab the id from the URL.
+# 2. Open the rendered PNG directly:
+open "http://localhost:3000/r/<id>/opengraph-image"
+
+# 3. Validate the page metadata that Twitter/LinkedIn read:
+curl -sS http://localhost:3000/r/<id> | grep -E 'og:image|twitter:card|twitter:image'
 ```
 
 ### Try it: receive a webhook locally
