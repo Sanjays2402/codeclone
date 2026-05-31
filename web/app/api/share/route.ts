@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createShare, listShares, MAX_SNIPPET_BYTES } from "../../../lib/share";
+import { createShare, listSharesPage, MAX_SNIPPET_BYTES } from "../../../lib/share";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { emitNotification } from "../../../lib/notifications";
@@ -17,17 +17,54 @@ interface ShareBody {
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  const limitParam = url.searchParams.get("limit");
-  const q = url.searchParams.get("q") ?? undefined;
-  const tag = url.searchParams.get("tag") ?? undefined;
-  let limit = 200;
+  const sp = url.searchParams;
+  const limitParam = sp.get("limit");
+  const offsetParam = sp.get("offset");
+  const q = sp.get("q") ?? undefined;
+  const tag = sp.get("tag") ?? undefined;
+  const language = sp.get("language") ?? undefined;
+  const cloneLabel = sp.get("label") ?? undefined;
+  const minScoreRaw = sp.get("minScore");
+  const maxScoreRaw = sp.get("maxScore");
+  let limit = 25;
   if (limitParam) {
     const n = Number.parseInt(limitParam, 10);
-    if (Number.isFinite(n) && n > 0 && n <= 1000) limit = n;
+    if (Number.isFinite(n) && n > 0 && n <= 200) limit = n;
   }
+  let offset = 0;
+  if (offsetParam) {
+    const n = Number.parseInt(offsetParam, 10);
+    if (Number.isFinite(n) && n >= 0 && n <= 100000) offset = n;
+  }
+  const parseScore = (raw: string | null): number | undefined => {
+    if (raw === null || raw === "") return undefined;
+    const n = Number.parseFloat(raw);
+    if (!Number.isFinite(n)) return undefined;
+    if (n < 0) return 0;
+    if (n > 1) return 1;
+    return n;
+  };
+  const minScore = parseScore(minScoreRaw);
+  const maxScore = parseScore(maxScoreRaw);
   try {
-    const items = await listShares({ limit, q, tag });
-    return NextResponse.json({ items, count: items.length });
+    const page = await listSharesPage({
+      limit,
+      offset,
+      q,
+      tag,
+      language,
+      cloneLabel,
+      minScore,
+      maxScore,
+    });
+    return NextResponse.json({
+      items: page.items,
+      count: page.items.length,
+      total: page.total,
+      offset: page.offset,
+      limit: page.limit,
+      facets: page.facets,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     return NextResponse.json({ error: msg }, { status: 500 });

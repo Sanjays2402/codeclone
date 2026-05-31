@@ -249,13 +249,16 @@ export function shareSummary(rec: ShareRecord): ShareSummary {
 
 export interface ListSharesOptions {
   limit?: number;
+  offset?: number;
   q?: string;
   tag?: string;
+  language?: string;
+  cloneLabel?: string;
+  minScore?: number;
+  maxScore?: number;
 }
 
-export async function listShares(
-  opts: ListSharesOptions = {},
-): Promise<ShareSummary[]> {
+async function loadAllSummaries(): Promise<ShareSummary[]> {
   await ensureDir();
   let names: string[];
   try {
@@ -273,10 +276,34 @@ export async function listShares(
     summaries.push(shareSummary(rec));
   }
   summaries.sort((a, b) => b.createdAt - a.createdAt);
-  let out = summaries;
+  return summaries;
+}
+
+function applyFilters(
+  rows: ShareSummary[],
+  opts: ListSharesOptions,
+): ShareSummary[] {
+  let out = rows;
   if (opts.tag) {
     const tg = opts.tag.toLowerCase();
     out = out.filter((s) => s.tags?.includes(tg));
+  }
+  if (opts.language) {
+    const lg = opts.language.toLowerCase();
+    if (lg !== "all") out = out.filter((s) => s.language.toLowerCase() === lg);
+  }
+  if (opts.cloneLabel) {
+    const cl = opts.cloneLabel.toLowerCase();
+    if (cl !== "all")
+      out = out.filter((s) => s.cloneLabel.toLowerCase() === cl);
+  }
+  if (typeof opts.minScore === "number" && Number.isFinite(opts.minScore)) {
+    const mn = opts.minScore;
+    out = out.filter((s) => s.shingleJaccard >= mn);
+  }
+  if (typeof opts.maxScore === "number" && Number.isFinite(opts.maxScore)) {
+    const mx = opts.maxScore;
+    out = out.filter((s) => s.shingleJaccard <= mx);
   }
   if (opts.q) {
     const q = opts.q.toLowerCase();
@@ -288,8 +315,60 @@ export async function listShares(
         s.cloneLabel.toLowerCase().includes(q),
     );
   }
+  return out;
+}
+
+export async function listShares(
+  opts: ListSharesOptions = {},
+): Promise<ShareSummary[]> {
+  const all = await loadAllSummaries();
+  let out = applyFilters(all, opts);
+  if (typeof opts.offset === "number" && opts.offset > 0) {
+    out = out.slice(opts.offset);
+  }
   if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
   return out;
+}
+
+export interface ListSharesPage {
+  items: ShareSummary[];
+  total: number;
+  offset: number;
+  limit: number;
+  facets: {
+    languages: { name: string; count: number }[];
+    cloneLabels: { name: string; count: number }[];
+  };
+}
+
+export async function listSharesPage(
+  opts: ListSharesOptions = {},
+): Promise<ListSharesPage> {
+  const all = await loadAllSummaries();
+  const filtered = applyFilters(all, opts);
+  const offset = Math.max(0, opts.offset ?? 0);
+  const limit = opts.limit && opts.limit > 0 ? opts.limit : 25;
+  const page = filtered.slice(offset, offset + limit);
+  const langCounts = new Map<string, number>();
+  const labelCounts = new Map<string, number>();
+  for (const s of all) {
+    langCounts.set(s.language, (langCounts.get(s.language) ?? 0) + 1);
+    labelCounts.set(s.cloneLabel, (labelCounts.get(s.cloneLabel) ?? 0) + 1);
+  }
+  const toFacet = (m: Map<string, number>) =>
+    Array.from(m.entries())
+      .map(([name, count]) => ({ name, count }))
+      .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  return {
+    items: page,
+    total: filtered.length,
+    offset,
+    limit,
+    facets: {
+      languages: toFacet(langCounts),
+      cloneLabels: toFacet(labelCounts),
+    },
+  };
 }
 
 /**
