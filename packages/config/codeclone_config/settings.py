@@ -104,6 +104,21 @@ class Settings(BaseSettings):
         default=False, alias="CODECLONE_RATELIMIT_TRUST_FORWARDED"
     )
 
+    # ---- Per-tenant monthly request quotas ----
+    # Enterprise contracts specify monthly request ceilings distinct from
+    # per-minute rate limits. ``0`` means unlimited (backward compatible).
+    # ``CODECLONE_QUOTA_OVERRIDES`` is a ``tenant=N`` CSV that overrides the
+    # default for specific tenants; the counter is persisted at
+    # ``CODECLONE_QUOTA_STATE_PATH`` so it survives restarts.
+    quota_enabled: bool = Field(default=True, alias="CODECLONE_QUOTA_ENABLED")
+    quota_per_tenant_monthly: int = Field(
+        default=0, alias="CODECLONE_QUOTA_PER_TENANT_MONTHLY"
+    )
+    quota_overrides: str = Field(default="", alias="CODECLONE_QUOTA_OVERRIDES")
+    quota_state_path: Path = Field(
+        default=Path("./runs/quota_state.json"), alias="CODECLONE_QUOTA_STATE_PATH"
+    )
+
     # ---- CORS (browser cross-origin policy on the serve API) ----
     # By default CORS is locked down: no cross-origin browser callers are
     # allowed. Set CODECLONE_CORS_ALLOW_ORIGINS to a CSV of exact origins

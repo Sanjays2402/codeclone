@@ -29,6 +29,7 @@ from .auth import (
 from .data_lifecycle import register as register_data_lifecycle
 from .ip_allowlist import IpAllowlistMiddleware, parse_policy
 from .model_handle import ModelHandle, load_handle
+from .quota import QuotaMiddleware, QuotaStore, parse_overrides
 from .ratelimit import RateLimitMiddleware, TokenBucketLimiter
 from .readiness import ReadinessProbe
 from .request_id import RequestIdMiddleware
@@ -173,6 +174,38 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         else:
             log.info("ip_allowlist.disabled", reason="no tenant policies configured")
 
+    # ---- Per-tenant monthly request quotas ----
+    # Sits inside the per-minute rate limiter (added later, runs earlier in
+    # Starlette's last-in-first-out wrapping order) so flood traffic is
+    # rejected by the cheap token bucket before the persistent quota
+    # counter touches disk. Default of 0 is unlimited so existing
+    # deployments are unaffected.
+    if settings.quota_enabled and (
+        settings.quota_per_tenant_monthly > 0
+        or settings.quota_overrides.strip()
+    ):
+        try:
+            overrides = parse_overrides(settings.quota_overrides)
+        except ValueError as exc:
+            log.error("quota.invalid_overrides", error=str(exc))
+            raise
+        store = QuotaStore(Path(settings.quota_state_path))
+        app.state.quota_store = store
+        app.state.quota_default_limit = settings.quota_per_tenant_monthly
+        app.state.quota_overrides = overrides
+        app.add_middleware(
+            QuotaMiddleware,
+            store=store,
+            default_limit=settings.quota_per_tenant_monthly,
+            overrides=overrides,
+        )
+        log.info(
+            "quota.enabled",
+            default_monthly=settings.quota_per_tenant_monthly,
+            overrides=overrides,
+            state_path=str(settings.quota_state_path),
+        )
+
     if settings.ratelimit_enabled:
         app.add_middleware(
             RateLimitMiddleware,
@@ -277,6 +310,47 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
     # which is the only persisted caller-derived data this service keeps.
     register_data_lifecycle(app)
 
+    # ---------------- /v1/quota ----------------
+    # Returns the caller's current monthly request usage. Admin scope can
+    # introspect any tenant via ``?tenant=...``; non-admin callers can only
+    # see their own tenant, which prevents cross-tenant disclosure.
+    from .auth import verify_api_key
+
+    @app.get("/v1/quota")
+    def quota_status(
+        request: Request,
+        tenant: str | None = None,
+        principal=Depends(verify_api_key),
+    ):
+        store = getattr(app.state, "quota_store", None)
+        if store is None:
+            return JSONResponse(
+                status_code=200,
+                content={"enabled": False, "tenant": principal.tenant},
+            )
+        target = principal.tenant
+        if tenant and tenant != principal.tenant:
+            if not principal.is_admin():
+                raise HTTPException(
+                    status_code=403,
+                    detail="admin scope required to read another tenant's quota",
+                )
+            target = tenant
+        mw = _find_quota_middleware(app)
+        limit = mw.limit_for(target) if mw is not None else 0
+        snap = store.snapshot(target)
+        from .quota import period_reset_epoch
+
+        return {
+            "enabled": True,
+            "tenant": target,
+            "period": snap["period"],
+            "used": snap["used"],
+            "limit": limit,
+            "remaining": max(0, limit - snap["used"]) if limit > 0 else None,
+            "reset_epoch": period_reset_epoch(snap["period"]),
+        }
+
     # ---------------- /v1/models ----------------
 
     @app.get("/v1/models", dependencies=[Depends(require_scope("models:read"))])
@@ -358,6 +432,27 @@ def create_app(model_dir: str | Path | None = None, model_name: str | None = Non
         )
 
     return app
+
+
+def _find_quota_middleware(app: FastAPI):
+    """Return a lightweight helper exposing the configured per-tenant limit.
+
+    The actual middleware instance is constructed by Starlette deep inside
+    the ASGI stack and is not easily reachable, so we reconstruct an
+    equivalent :class:`QuotaMiddleware` (which is a pure-Python object with
+    no per-request state of its own) from the configuration we stashed on
+    ``app.state``. The returned object is only used for its ``limit_for``
+    lookup, not for request handling.
+    """
+    store = getattr(app.state, "quota_store", None)
+    if store is None:
+        return None
+    return QuotaMiddleware(
+        app,
+        store=store,
+        default_limit=getattr(app.state, "quota_default_limit", 0),
+        overrides=getattr(app.state, "quota_overrides", {}) or {},
+    )
 
 
 # ---------------- streaming helpers ----------------

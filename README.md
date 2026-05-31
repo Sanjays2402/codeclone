@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Per-tenant monthly request quotas on the serve API: enterprise contracts specify a calendar-month ceiling distinct from per-minute rate limits, and the serve API now enforces one. Set `CODECLONE_QUOTA_PER_TENANT_MONTHLY=100000` for a global default, or `CODECLONE_QUOTA_OVERRIDES="acme=1000000,trial=1000"` for per-tenant caps. Every authenticated response carries `X-RateLimit-Limit-Month`, `X-RateLimit-Remaining-Month`, `X-RateLimit-Reset-Month`, and `X-RateLimit-Period` so customer SDKs can render usage without a side call. Once a tenant exhausts its cap the next request gets HTTP 429 with a structured `quota_exceeded` body and a `Retry-After` pointing at the next UTC month boundary, while other tenants are unaffected. The counter is persisted at `CODECLONE_QUOTA_STATE_PATH` (defaults to `runs/quota_state.json`) via atomic file rewrites so the cap survives restarts and rolling redeploys, and rolls over automatically at the first UTC midnight of each calendar month. `GET /v1/quota` returns the caller's current period, used count, limit, remaining, and reset epoch; admin-scope holders can introspect any tenant via `?tenant=<id>`, non-admin callers cannot, so cross-tenant disclosure is blocked. Default of `0` is unlimited, so existing deployments are unaffected until an operator opts in. Cross-tenant isolation, persistence, and the admin RBAC boundary are pinned by `services/serve/tests/test_quota.py`.
+
+### Try it: enforce a monthly request cap
+
+```
+export CODECLONE_API_KEYS="sk-acme:models:read+infer@acme"
+export CODECLONE_QUOTA_PER_TENANT_MONTHLY=3
+codeclone serve --port 7461 &
+
+# Three calls succeed and report decreasing remaining quota.
+for i in 1 2 3; do
+  curl -is http://localhost:7461/v1/models -H 'Authorization: Bearer sk-acme' \
+    | grep -E '^(HTTP|X-RateLimit-)'
+done
+
+# Fourth call is rejected with the standard quota-exceeded payload.
+curl -i http://localhost:7461/v1/models -H 'Authorization: Bearer sk-acme'
+
+# Inspect remaining quota without spending any.
+curl -s http://localhost:7461/v1/quota -H 'Authorization: Bearer sk-acme'
+```
+
 - Workspace member role changes and forced removals on `/workspaces/<id>` now sever credentials the moment privilege drops. `PATCH /api/workspaces/:id` with `{member:{userId,role}}` requires MFA step-up, records a before/after role diff to the audit log under `workspace.member_role_change`, and on any actual role change calls `revokeAllSessions(userId)` so the affected user's next request re-authenticates against their new role (no quiet window where a freshly demoted editor keeps writing). `DELETE /api/workspaces/:id?userId=<uid>` for forced removal (owner removing someone else) similarly requires MFA step-up and, after `removeMember`, calls both `revokeAllSessions` and `revokeKey` over every key returned by `listKeys` so a removed employee cannot keep using cookies or API keys they already held. Sole-owner demotion and last-owner removal are rejected (`only_owner`) and both denials and the per-removal `sessionsRevoked` / `apiKeysRevoked` counts land in the audit log so reviewers can see exactly what was torn down. The privilege-boundary contract (`setMemberRole` + revocation, sole-owner safety, forced removal + revocation, and a source-level assertion that the route still wires MFA, revocation, and audit diffs) is pinned by `web/tests/workspaces-role-change.test.ts`.
 - Workspace member suspension on `/workspaces/<id>`: owners can pause a member's access without losing the audit trail. The roster row stays put with `status: "suspended"` so every historical event keeps its actor link, but every gating helper (`getActiveMember`, `canInvite`, `canManage`) treats the user as a non-member. On suspend the server also revokes every active session for that user (`revokeAllSessions`) and revokes every API key they own (`listKeys` then `revokeKey`), and the audit log captures both counts. Owner-only `POST /api/workspaces/:id/members/:userId/suspend` (with MFA step-up) does the suspension; `DELETE` on the same path reinstates the member. Sole-owner self-suspend is blocked (`only_owner`) and owners cannot suspend themselves (`cannot_suspend_self`); reinstating does not auto-restore the revoked sessions or keys. Cross-tenant isolation, audit-row preservation, and the sole-owner safety check are pinned by `web/tests/workspaces-suspend.test.ts`.
 
