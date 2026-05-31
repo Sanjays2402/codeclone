@@ -35,7 +35,7 @@ export function TopStrip() {
 
   return (
     <div className="border-b border-[var(--color-rule)] bg-[var(--color-paper-2)]">
-      <div className="mx-auto max-w-[1280px] px-7 h-8 flex items-center gap-5 text-[11px]">
+      <div className="mx-auto max-w-[1280px] px-4 sm:px-7 h-8 flex items-center gap-3 sm:gap-5 text-[11px] overflow-x-auto whitespace-nowrap">
         <span className="inline-flex items-center gap-1.5">
           <span className={`dot ${serveOk ? "bg-[var(--color-pos)]" : "bg-[var(--color-ink-4)]"}`} />
           <span className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
