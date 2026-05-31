@@ -537,6 +537,13 @@ export default function HistoryPage() {
                     >
                       <ArrowSquareOut weight="duotone" size={13} /> open
                     </Link>
+                    <Link
+                      href={`/compare?from=${encodeURIComponent(it.id)}`}
+                      className="inline-flex items-center gap-1 mono text-[11px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[color:var(--color-accent)] text-[var(--color-accent-ink)] bg-[var(--color-accent-soft)] hover:opacity-90"
+                      title="Open in compare and re-run"
+                    >
+                      <ClockClockwise weight="duotone" size={13} /> re-run
+                    </Link>
                     <a
                       href={`/api/share/${it.id}`}
                       download={`codeclone-${it.id}.json`}                      className="inline-flex items-center gap-1 mono text-[11px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"

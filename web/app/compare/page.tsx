@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
-import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy } from "@phosphor-icons/react/dist/ssr";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy, ClockClockwise, X as XIcon } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
@@ -55,6 +56,21 @@ function ScoreBar({ value }: { value: number }) {
 }
 
 export default function ComparePage() {
+  return (
+    <Suspense fallback={null}>
+      <ComparePageInner />
+    </Suspense>
+  );
+}
+
+interface RerunInfo {
+  id: string;
+  title?: string;
+}
+
+function ComparePageInner() {
+  const searchParams = useSearchParams();
+  const fromId = searchParams.get("from");
   const [a, setA] = useState(COMPARE_SAMPLES[0].a);
   const [b, setB] = useState(COMPARE_SAMPLES[0].b);
   const [language, setLanguage] = useState(COMPARE_SAMPLES[0].language);
@@ -66,6 +82,10 @@ export default function ComparePage() {
   const [sharing, setSharing] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [rerun, setRerun] = useState<RerunInfo | null>(null);
+  const [rerunLoading, setRerunLoading] = useState<boolean>(Boolean(fromId));
+  const [rerunError, setRerunError] = useState<string | null>(null);
+  const autoRunRef = useRef<string | null>(null);
 
   const canCompare = a.trim().length > 0 && b.trim().length > 0 && !loading;
 
@@ -163,10 +183,106 @@ export default function ComparePage() {
     } catch {}
   }, [shareUrl]);
 
+  // Re-run support: when /compare?from=<shareId> is opened, fetch the saved
+  // share, prefill both editors and the language picker, and auto-run a fresh
+  // comparison so the user lands directly on the result.
+  useEffect(() => {
+    if (!fromId) return;
+    let cancelled = false;
+    setRerunLoading(true);
+    setRerunError(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/share/${encodeURIComponent(fromId)}`, {
+          cache: "no-store",
+        });
+        const json = await res.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!res.ok) {
+          setRerunError(
+            typeof json?.error === "string"
+              ? json.error
+              : `Could not load saved comparison (${res.status}).`,
+          );
+          setRerunLoading(false);
+          return;
+        }
+        const rec = json as {
+          id: string;
+          title?: string;
+          language?: string;
+          a?: string;
+          b?: string;
+        };
+        if (typeof rec.a === "string") setA(rec.a);
+        if (typeof rec.b === "string") setB(rec.b);
+        if (typeof rec.language === "string") setLanguage(rec.language);
+        setActiveSample(null);
+        setRerun({ id: rec.id, title: rec.title });
+      } catch (e) {
+        if (!cancelled) {
+          setRerunError(e instanceof Error ? e.message : String(e));
+        }
+      } finally {
+        if (!cancelled) setRerunLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fromId]);
+
+  // After prefill, fire one auto-run per share id.
+  useEffect(() => {
+    if (!rerun) return;
+    if (autoRunRef.current === rerun.id) return;
+    if (!a.trim() || !b.trim()) return;
+    autoRunRef.current = rerun.id;
+    void submit();
+    // submit is intentionally omitted: we only re-fire when the rerun target
+    // changes, not on every keystroke that re-creates submit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rerun, a, b]);
+
+  const dismissRerun = useCallback(() => {
+    setRerun(null);
+    setRerunError(null);
+  }, []);
+
   const charCounts = useMemo(() => ({ a: a.length, b: b.length }), [a, b]);
 
   return (
     <div className="flex flex-col gap-6">
+      {(rerunLoading || rerun || rerunError) && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`ruled rounded-md px-3 py-2 flex items-center gap-2 text-[12.5px] ${
+            rerunError
+              ? "border-[color:var(--color-neg-bar)] bg-[var(--color-neg-soft)] text-[var(--color-neg)]"
+              : "bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+          }`}
+        >
+          <ClockClockwise weight="duotone" size={14} />
+          <span className="truncate">
+            {rerunError
+              ? `Re-run failed: ${rerunError}`
+              : rerunLoading
+                ? "Loading saved comparison…"
+                : `Re-running saved comparison: ${rerun?.title ?? "Untitled"} (/r/${rerun?.id})`}
+          </span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            onClick={dismissRerun}
+            className="text-[var(--color-ink-4)] hover:text-[var(--color-ink-2)]"
+            aria-label="Dismiss re-run banner"
+          >
+            <XIcon weight="bold" size={12} />
+          </button>
+        </div>
+      )}
+
       <header className="flex flex-col gap-2">
         <div className="eyebrow">try it · compare two snippets</div>
         <h1 className="text-[28px] sm:text-[32px] tracking-tight font-medium leading-[1.15]">

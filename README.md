@@ -326,6 +326,23 @@ curl -sS -OJ 'http://localhost:3000/api/share/export?format=json&tag=renamed-var
 ```
 
 Response sets `Content-Disposition: attachment; filename="codeclone-history-<ts>.<ext>"` and `X-Codeclone-Export-Count` so scripts can verify the row count without parsing the body. Covered by `tests/share-export.test.ts`.
+
+### Try it: re-run a saved comparison
+
+Every saved comparison in `/history` gets a one-click **re-run** button. It opens `/compare?from=<shareId>`, prefills both editors and the language picker from the stored share, and fires a fresh comparison automatically. Useful for seeing how a tweak to either snippet moves the score, or for replaying yesterday's result against a newer model.
+
+```bash
+cd web && pnpm dev          # http://localhost:3000/history
+
+# pick any share id from history, then re-run it directly:
+open 'http://localhost:3000/compare?from=JRe9kkq8kcY3'
+
+# the page is wired to /api/share/<id>, which returns the full record:
+curl -s http://localhost:3000/api/share/JRe9kkq8kcY3 \
+  | jq '{id,language,a_bytes:(.a|length),b_bytes:(.b|length)}'
+```
+
+A banner at the top of `/compare` shows which saved comparison the run was loaded from, with a dismiss button. The round-trip contract (snippets + language survive create -> load) is locked down by `tests/share-rerun.test.ts`.
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack
