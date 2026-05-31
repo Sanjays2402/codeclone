@@ -140,6 +140,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "a", kind: "body", required: true, type: "string", description: "First snippet source. Max 64 KB." },
       { name: "b", kind: "body", required: true, type: "string", description: "Second snippet source. Max 64 KB." },
       { name: "language", kind: "body", required: false, type: "string", description: "Hint for tokenizer (python, javascript, typescript, java, go, rust)." },
+      { name: "dry_run", kind: "body", required: false, type: "boolean", description: "Sandbox mode. Validates input, scope, quota, and rate limits then returns the would-be result without charging quota, logging usage, or firing webhooks. Also accepted as ?dry_run=true." },
     ],
     sampleBody: compareBody,
     sampleResponse: compareResponse,
@@ -156,6 +157,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
     params: [
       { name: "language", kind: "body", required: false, type: "string", description: "Tokenizer hint applied to every snippet." },
       { name: "snippets", kind: "body", required: true, type: "Array<{id,code}>", description: "2..12 snippets. Each id must be unique." },
+      { name: "dry_run", kind: "body", required: false, type: "boolean", description: "Sandbox mode. Returns the preview including pair_count and total_bytes without charging quota or firing webhooks. Also accepted as ?dry_run=true." },
     ],
     sampleBody: batchBody,
     sampleResponse: batchResponse,

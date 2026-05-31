@@ -21,6 +21,7 @@ import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
 import { tryRecordAudit } from "../../../../lib/audit";
 import { getWorkspace } from "../../../../lib/workspaces";
 import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
+import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -121,12 +122,13 @@ export async function POST(req: Request) {
     );
   }
 
-  let raw: BatchInput;
+  let raw: BatchInput & { dry_run?: unknown };
   try {
-    raw = (await req.json()) as BatchInput;
+    raw = (await req.json()) as BatchInput & { dry_run?: unknown };
   } catch {
     return badRequest("Body must be JSON.");
   }
+  const dryRun = isDryRun(req, raw);
 
   const parsed = parseBatch(raw);
   if (!parsed.ok) return badRequest(parsed.error);
@@ -137,6 +139,52 @@ export async function POST(req: Request) {
   );
 
   const result = runBatch(parsed.snippets, parsed.language);
+
+  if (dryRun) {
+    void tryRecordAudit(req, {
+      action: "v1.batch.dry_run",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: { snippets: parsed.snippets.length, language: parsed.language },
+    });
+    return NextResponse.json(
+      {
+        dry_run: true,
+        would: {
+          charge_quota: true,
+          dispatch_webhook_event: "batch.completed",
+          record_usage: true,
+          snippet_count: parsed.snippets.length,
+          pair_count:
+            (parsed.snippets.length * (parsed.snippets.length - 1)) / 2,
+          total_bytes: totalBytes,
+        },
+        ...result,
+      },
+      {
+        headers: {
+          ...rl.headers,
+          ...DRY_RUN_HEADER,
+          "x-codeclone-key-id": key.id,
+          "x-codeclone-key-prefix": key.prefix,
+          ...(wsQuota
+            ? {
+                ...planHeaders(wsQuota),
+                "x-codeclone-plan-remaining":
+                  wsQuota.remaining == null
+                    ? "unlimited"
+                    : String(Math.max(0, wsQuota.remaining)),
+              }
+            : {
+                "x-codeclone-quota-limit": String(quota!.limit),
+                "x-codeclone-quota-remaining": String(
+                  Math.max(0, quota!.remaining),
+                ),
+              }),
+        },
+      },
+    );
+  }
 
   void recordUse(key.id);
   void tryRecordAudit(req, {
@@ -198,7 +246,9 @@ export async function GET() {
         snippets:
           "array of { id?: string, label?: string, code: string }, 2 to 12 items",
         language: "string (optional, default 'auto')",
+        dry_run: "boolean (optional) - validate without charging quota or firing webhooks",
       },
+      sandbox: "Pass ?dry_run=true or { \"dry_run\": true } to preview pair_count and totals without side effects.",
       limits: {
         max_snippets: 12,
         max_bytes_each: 32 * 1024,

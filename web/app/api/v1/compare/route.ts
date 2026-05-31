@@ -13,6 +13,7 @@ import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { tryRecordAudit } from "../../../../lib/audit";
 import { getWorkspace } from "../../../../lib/workspaces";
 import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
+import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -124,12 +125,13 @@ export async function POST(req: Request) {
     );
   }
 
-  let raw: Body;
+  let raw: Body & { dry_run?: unknown };
   try {
-    raw = (await req.json()) as Body;
+    raw = (await req.json()) as Body & { dry_run?: unknown };
   } catch {
     return badRequest("Body must be JSON.");
   }
+  const dryRun = isDryRun(req, raw);
   const a = typeof raw.a === "string" ? raw.a : "";
   const b = typeof raw.b === "string" ? raw.b : "";
   const language =
@@ -159,6 +161,66 @@ export async function POST(req: Request) {
   const alignment = alignLines(a, b);
   const clone = classifyClone(a, b, scores);
   const latencyMs = performance.now() - started;
+
+  if (dryRun) {
+    // Sandbox mode: validation passed and we computed the real shape so
+    // the caller can inspect it, but we deliberately skip recordUse,
+    // logUsage, and webhook dispatch. A single audit entry still goes in
+    // so security teams can see the probe.
+    void tryRecordAudit(req, {
+      action: "v1.compare.dry_run",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: {
+        language,
+        bytes_a: Buffer.byteLength(a, "utf-8"),
+        bytes_b: Buffer.byteLength(b, "utf-8"),
+      },
+    });
+    return NextResponse.json(
+      {
+        dry_run: true,
+        would: {
+          charge_quota: true,
+          dispatch_webhook_event: "compare.completed",
+          record_usage: true,
+        },
+        language,
+        bytes: {
+          a: Buffer.byteLength(a, "utf-8"),
+          b: Buffer.byteLength(b, "utf-8"),
+        },
+        scores,
+        alignment,
+        clone,
+        latency_ms: Number(latencyMs.toFixed(3)),
+        method:
+          "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+      },
+      {
+        headers: {
+          ...rl.headers,
+          ...DRY_RUN_HEADER,
+          "x-codeclone-key-id": key.id,
+          "x-codeclone-key-prefix": key.prefix,
+          ...(wsQuota
+            ? {
+                ...planHeaders(wsQuota),
+                "x-codeclone-plan-remaining":
+                  wsQuota.remaining == null
+                    ? "unlimited"
+                    : String(Math.max(0, wsQuota.remaining)),
+              }
+            : {
+                "x-codeclone-quota-limit": String(quota!.limit),
+                "x-codeclone-quota-remaining": String(
+                  Math.max(0, quota!.remaining),
+                ),
+              }),
+        },
+      },
+    );
+  }
 
   // Fire-and-forget usage recording; the response should not block on it.
   void recordUse(key.id);
@@ -246,7 +308,13 @@ export async function GET() {
         method: "POST",
         path: "/v1/compare",
         auth: "Bearer <api-key>",
-        body: { a: "string", b: "string", language: "string (optional)" },
+        body: {
+          a: "string",
+          b: "string",
+          language: "string (optional)",
+          dry_run: "boolean (optional) - validate without charging quota or firing webhooks",
+        },
+        sandbox: "Pass ?dry_run=true or { \"dry_run\": true } to preview without side effects.",
       },
       batch: {
         method: "POST",
@@ -256,6 +324,7 @@ export async function GET() {
           snippets:
             "array of { id?: string, label?: string, code: string }, 2 to 12 items",
           language: "string (optional)",
+          dry_run: "boolean (optional) - validate without charging quota or firing webhooks",
         },
       },
     },
