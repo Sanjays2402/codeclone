@@ -183,6 +183,23 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Owner-configured API key max age policy. When `maxAgeDays > 0`, every
+   * workspace-bound API key must have an `expiresAt` no later than
+   * `createdAt + maxAgeDays`. New keys created without an explicit expiry,
+   * or with a longer expiry, are clamped at creation time. Existing keys
+   * that drift past the policy are refused at /v1 request time with HTTP
+   * 401 `api_key_policy_expired` and the rejection is recorded in the
+   * audit log. 0 / null disables the policy.
+   *
+   * Common procurement requirement (SOC 2 CC6.1, ISO 27001 A.9.2.6):
+   * "API credentials must expire within N days and be rotated."
+   */
+  apiKeyPolicy?: {
+    maxAgeDays: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export type ResidencyRegion = "us" | "eu" | "apac" | "global";
@@ -643,6 +660,66 @@ export async function setSessionPolicy(
   }
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+/**
+ * Bounds for the workspace API key max age policy. Min 1 day so a key is
+ * usable for at least one full rotation cycle; max 365 days mirrors the
+ * per-key MAX_EXPIRES_DAYS cap in lib/api-keys.ts.
+ */
+export const API_KEY_POLICY_BOUNDS = {
+  maxAgeDays: { min: 1, max: 365 },
+} as const;
+
+export function sanitizeApiKeyPolicy(
+  input: { maxAgeDays?: unknown } | null | undefined,
+): { maxAgeDays: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as Record<string, unknown>).maxAgeDays;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return null;
+  if (n <= 0) return { maxAgeDays: 0 };
+  const clamped = Math.min(
+    API_KEY_POLICY_BOUNDS.maxAgeDays.max,
+    Math.max(API_KEY_POLICY_BOUNDS.maxAgeDays.min, Math.floor(n)),
+  );
+  return { maxAgeDays: clamped };
+}
+
+/**
+ * Replace the workspace API key max-age policy. Pass null or 0 to clear.
+ * Caller must enforce owner-only permission and write the audit entry.
+ */
+export async function setApiKeyPolicy(
+  ws: WorkspaceRecord,
+  policy: { maxAgeDays: number } | null,
+  actor: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || policy.maxAgeDays === 0) {
+    ws.apiKeyPolicy = null;
+  } else {
+    ws.apiKeyPolicy = {
+      maxAgeDays: policy.maxAgeDays,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * The latest `expiresAt` (ms) an API key in this workspace may have given
+ * the configured policy and the key's `createdAt`. Returns null when the
+ * policy is unset (no enforcement).
+ */
+export function apiKeyPolicyDeadline(
+  ws: WorkspaceRecord | null | undefined,
+  createdAtMs: number,
+): number | null {
+  const days = ws?.apiKeyPolicy?.maxAgeDays;
+  if (!days || days <= 0) return null;
+  return createdAtMs + days * 24 * 60 * 60 * 1000;
 }
 
 // Resolve the effective session policy for a user across every workspace

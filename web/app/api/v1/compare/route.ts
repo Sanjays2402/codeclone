@@ -8,6 +8,7 @@ import { extractBearer, findByPlaintext, hasScope, recordUse } from "../../../..
 import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
+import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
@@ -70,6 +71,8 @@ export async function POST(req: Request) {
   if (keyBlocked) return keyBlocked;
   const residencyBlocked = await enforceWorkspaceResidencyForKey(req, key);
   if (residencyBlocked) return residencyBlocked;
+  const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
+  if (policyBlocked) return policyBlocked;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;

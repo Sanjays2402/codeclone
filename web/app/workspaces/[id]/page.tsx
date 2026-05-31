@@ -23,6 +23,7 @@ import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { WebhookDomainAllowlistEditor } from "../../../components/WebhookDomainAllowlistEditor";
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
+import { ApiKeyPolicyEditor } from "../../../components/ApiKeyPolicyEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
@@ -434,6 +435,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SessionPolicyEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <ApiKeyPolicyEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

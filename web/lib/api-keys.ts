@@ -13,6 +13,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { normalizeRpm } from "./rate-limit.ts";
 import { sanitizeCidrList } from "./ip-allowlist.ts";
+import { apiKeyPolicyDeadline, getWorkspace } from "./workspaces.ts";
 
 const MIN_RPM_HINT = 1;
 
@@ -205,6 +206,24 @@ export async function createKey(label: unknown, opts: CreateOptions = {}): Promi
     }
     const exp = normalizeExpiresInDays(opts.expiresInDays);
     if (exp) rec.expiresAt = exp;
+    // Workspace API key max-age policy clamp. If the workspace owner has
+    // configured a maxAgeDays cap, the key's expiresAt is forced down to
+    // createdAt + maxAgeDays. Applied even when the caller passes no
+    // expiresInDays so policy is enforced by default for the entire
+    // workspace, not opt-in per key.
+    if (rec.workspaceId) {
+      try {
+        const ws = await getWorkspace(rec.workspaceId);
+        const deadline = apiKeyPolicyDeadline(ws, rec.createdAt);
+        if (deadline !== null) {
+          rec.expiresAt = rec.expiresAt ? Math.min(rec.expiresAt, deadline) : deadline;
+        }
+      } catch {
+        // Filesystem read failure: do not block key creation, but a missing
+        // clamp here is still caught at /v1 request time by
+        // enforceWorkspaceApiKeyPolicyForKey.
+      }
+    }
     const scopes = normalizeScopes(opts.scopes);
     if (scopes) rec.scopes = scopes;
     const rpm = normalizeRpm(opts.rpm);

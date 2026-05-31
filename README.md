@@ -10,6 +10,34 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace API key max-age policy enforced at issue time and on every `/v1` call. Owners cap how long any API key minted in the workspace may live (1 to 365 days) under the workspace settings page; the policy clamps the `expiresAt` of every new key as it is created in `web/lib/api-keys.ts#createKey`, and a second guard (`web/lib/api-key-policy-enforce.ts`) runs on `/v1/compare`, `/v1/batch`, `/v1/shares`, and `/v1/shares/[id]` so legacy keys that pre-date the policy are refused with HTTP 401 and a structured `{error:{type:"api_key_policy_expired", max_age_days, age_days}}` body until rotated. Members hit the same audit chain everything else uses: every policy change emits `workspace.api_key_policy_update` with a before/after diff, every runtime block emits `workspace.api_key_policy_block` with the offending key id and computed age in days, and members who try to PUT the policy endpoint without owner permission get a denied entry so owners can see attempted privilege escalation. Covers the common SOC 2 CC6.1 / ISO 27001 A.9.2.6 procurement ask: “API credentials must expire within N days and be rotated.” Pinned by `web/tests/workspaces-api-key-policy.test.ts` (sanitization clamping, persist + clear round-trip, createKey clamping a 365-day request down to the workspace cap even when no expiry was requested, drift-key deadline math used by the enforcer).
+
+### Try it: cap workspace API keys at 30 days and watch a stale key get refused
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# As the workspace owner, set the policy:
+curl -s -X PUT http://localhost:3000/api/workspaces/$WS_ID/api-key-policy \
+  -b "$COOKIE" -H 'content-type: application/json' \
+  -d '{"maxAgeDays":30}' | jq
+# { "policy": { "maxAgeDays": 30, "updatedAt": ..., "updatedBy": "u_..." } }
+
+# A brand-new key in this workspace gets expiresAt clamped to ~30d even
+# if the caller asks for 365d:
+curl -s -X POST http://localhost:3000/api/api-keys \
+  -b "$COOKIE" -H 'content-type: application/json' \
+  -d "{\"label\":\"ci\",\"workspaceId\":\"$WS_ID\",\"expiresInDays\":365}" | jq '.key.expiresAt'
+
+# Any /v1 call from a key whose createdAt is older than 30d is refused:
+curl -si -X POST http://localhost:3000/api/v1/compare \
+  -H "Authorization: Bearer $OLD_WS_KEY" -H 'content-type: application/json' \
+  -d '{"a":"x","b":"y"}'
+# HTTP/1.1 401 Unauthorized
+# WWW-Authenticate: Bearer
+# {"error":{"type":"api_key_policy_expired","max_age_days":30,"age_days":47,...}}
+```
+
 - Workspace data residency policy with per-region enforcement on the public API. Owners pin a workspace to `us`, `eu`, `apac`, or `global` under the workspace settings page; flipping `enforced` causes every `/v1/*` request served by a node whose `CODECLONE_REGION` does not match to be refused with HTTP 451 (Unavailable For Legal Reasons) and a structured `{error:{type:"residency_violation", pinned_region, serving_region}}` body. Non-enforced mismatches still succeed but emit a `workspace.residency_warn` audit entry so ops can watch drift before flipping the policy on. Enforcement runs inside the same `enforceWorkspace*ForKey` chain as the IP allowlist and per-key allowlist (`web/lib/residency-enforce.ts`) and is wired into every existing v1 surface (`/v1/compare`, `/v1/batch`, `/v1/shares`, `/v1/shares/[id]`), not just one new route, so a half-migrated EU workspace cannot leak through a forgotten endpoint. The settings card shows the current serving region next to the pinned region with a banner that calls out a live mismatch, so an EU customer staring at a US node sees the problem before their first call fails. Every change writes a tamper-evident audit entry (`workspace.residency_update`, `workspace.residency_clear`) with a before/after diff of the policy, and members trying to PUT the endpoint get a denied entry so owners can see attempted privilege escalation. Pinned by `web/tests/residency.test.ts` (sanitization, persistence, decision matrix, 451 body shape, cross-tenant isolation between an EU-pinned and US-pinned workspace on the same node).
 
 ### Try it: pin a workspace to EU and watch a US node refuse the call
