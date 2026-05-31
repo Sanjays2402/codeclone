@@ -31,6 +31,12 @@ export interface UsageEvent {
   endpoint: string;
   bytes?: number;
   latencyMs?: number;
+  /**
+   * Workspace this call was billed against. Populated when the API key
+   * is workspace-bound; used by lib/plans.ts to enforce per-workspace
+   * monthly quotas. Optional so legacy unscoped keys still log.
+   */
+  workspaceId?: string;
 }
 
 export interface DailyUsage {

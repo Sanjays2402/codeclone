@@ -19,6 +19,7 @@ import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
+import { PlanEditor } from "../../../components/PlanEditor";
 import { WorkspaceDataControls } from "../../../components/WorkspaceDataControls";
 import { fmtTs } from "../../../lib/format";
 
@@ -297,6 +298,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
             ))}
           </div>
         </section>
+      )}
+
+      {ws.myRole && (
+        <PlanEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

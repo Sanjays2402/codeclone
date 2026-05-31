@@ -13,6 +13,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import type { PlanId } from "./plans.ts";
+import { isPlanId } from "./plans.ts";
 
 const CWD = process.cwd();
 
@@ -53,6 +55,13 @@ export interface WorkspaceRecord {
    * Managed by lib/sso.ts; persisted inline so a workspace fetch returns
    * the policy in one read.
    */
+  /**
+   * Billing plan that gates the workspace's per-month /v1 call quota.
+   * See lib/plans.ts for the catalog and limits. Defaults to "free"
+   * when absent so existing workspaces keep working under the lowest
+   * tier until an owner upgrades.
+   */
+  plan?: PlanId | null;
   sso?: {
     provider: "oidc";
     issuer: string;
@@ -247,6 +256,23 @@ export async function setSsoConfig(
   cfg: WorkspaceRecord["sso"],
 ): Promise<WorkspaceRecord> {
   ws.sso = cfg ?? null;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Update the workspace billing plan. Caller is responsible for the
+ * owner-only authorisation check and for writing the audit entry; we
+ * just validate the id and persist.
+ */
+export async function setWorkspacePlan(
+  ws: WorkspaceRecord,
+  plan: PlanId,
+): Promise<WorkspaceRecord> {
+  if (!isPlanId(plan)) {
+    throw new Error(`invalid plan id: ${String(plan)}`);
+  }
+  ws.plan = plan;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }

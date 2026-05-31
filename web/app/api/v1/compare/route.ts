@@ -11,6 +11,8 @@ import { compareCode, alignLines, classifyClone } from "../../../../lib/similari
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { tryRecordAudit } from "../../../../lib/audit";
+import { getWorkspace } from "../../../../lib/workspaces";
+import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -66,8 +68,38 @@ export async function POST(req: Request) {
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;
 
-  const quota = await quotaCheck();
-  if (!quota.allowed) {
+  // Per-workspace plan quota (free / pro / enterprise). Falls back to the
+  // global free-tier counter when the key has no workspace binding so
+  // legacy installs keep working unchanged.
+  const ws = key.workspaceId ? await getWorkspace(key.workspaceId) : null;
+  const wsQuota = await workspaceQuotaCheck(key.workspaceId ?? null, ws);
+  if (wsQuota && !wsQuota.allowed) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "plan_quota_exceeded",
+          message: `Workspace plan "${wsQuota.plan.label}" monthly cap of ${wsQuota.limit} /v1 calls reached. Upgrade the workspace plan or wait for the next calendar month.`,
+        },
+        plan: {
+          id: wsQuota.plan.id,
+          monthToDate: wsQuota.monthToDate,
+          limit: wsQuota.limit,
+          remaining: 0,
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          ...rl.headers,
+          ...planHeaders(wsQuota),
+          "Retry-After": "3600",
+        },
+      },
+    );
+  }
+
+  const quota = wsQuota ? null : await quotaCheck();
+  if (quota && !quota.allowed) {
     return NextResponse.json(
       {
         error: {
@@ -149,6 +181,7 @@ export async function POST(req: Request) {
     endpoint: "/v1/compare",
     bytes: Buffer.byteLength(a, "utf-8") + Buffer.byteLength(b, "utf-8"),
     latencyMs: Number(latencyMs.toFixed(3)),
+    workspaceId: key.workspaceId,
   });
 
   // Fan-out to registered webhooks. Best-effort: failures are logged
@@ -187,8 +220,18 @@ export async function POST(req: Request) {
         ...rl.headers,
         "x-codeclone-key-id": key.id,
         "x-codeclone-key-prefix": key.prefix,
-        "x-codeclone-quota-limit": String(quota.limit),
-        "x-codeclone-quota-remaining": String(Math.max(0, quota.remaining - 1)),
+        ...(wsQuota
+          ? {
+              ...planHeaders(wsQuota),
+              "x-codeclone-plan-remaining":
+                wsQuota.remaining == null
+                  ? "unlimited"
+                  : String(Math.max(0, wsQuota.remaining - 1)),
+            }
+          : {
+              "x-codeclone-quota-limit": String(quota!.limit),
+              "x-codeclone-quota-remaining": String(Math.max(0, quota!.remaining - 1)),
+            }),
       },
     },
   );
