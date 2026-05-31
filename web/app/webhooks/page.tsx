@@ -254,6 +254,9 @@ export default function WebhooksPage() {
               required
               className="mono bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm px-2.5 py-1.5 text-[12.5px] outline-none focus:border-[var(--color-ink-3)]"
             />
+            <span className="mono text-[10.5px] text-[var(--color-ink-3)]">
+              must be a public https endpoint. loopback, RFC1918, link-local, and cloud metadata addresses are blocked at create and at delivery.
+            </span>
           </div>
           <div className="flex flex-col gap-1">
             <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-transparent select-none">submit</span>

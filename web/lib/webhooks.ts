@@ -105,6 +105,68 @@ function sanitizeLabel(t: unknown): string {
   return cleaned || "Untitled webhook";
 }
 
+/**
+ * Return true when the given hostname (literal IP or DNS name) targets
+ * a network we must not allow outbound webhook traffic to reach.
+ *
+ * Blocks loopback, RFC1918 private, link-local, unique-local (IPv6 fc00::/7),
+ * IPv6 loopback (::1), the cloud metadata IP (169.254.169.254 is link-local
+ * but called out below for documentation), and well-known internal-only
+ * hostnames (`localhost`, anything ending in `.local` / `.internal` /
+ * `.localhost` / `.lan` / `.intranet`). This is a defense in depth check on
+ * top of TLS + auth; it is not a substitute for runtime DNS pinning.
+ */
+export function isPrivateHost(hostname: string): boolean {
+  if (!hostname) return true;
+  const h = hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (h === "localhost" || h === "ip6-localhost" || h === "ip6-loopback") return true;
+  if (h.endsWith(".localhost") || h.endsWith(".local") || h.endsWith(".internal") ||
+      h.endsWith(".lan") || h.endsWith(".intranet") || h.endsWith(".home.arpa")) {
+    return true;
+  }
+  // IPv4 literal
+  const m4 = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (m4) {
+    const parts = m4.slice(1).map((n) => Number(n));
+    if (parts.some((p) => p < 0 || p > 255)) return true;
+    const [a, b] = parts;
+    if (a === 10) return true;                               // 10/8
+    if (a === 127) return true;                              // loopback
+    if (a === 0) return true;                                // 0/8 wildcard
+    if (a === 169 && b === 254) return true;                 // link-local + AWS/GCP metadata
+    if (a === 172 && b >= 16 && b <= 31) return true;        // 172.16/12
+    if (a === 192 && b === 168) return true;                 // 192.168/16
+    if (a === 192 && b === 0 && parts[2] === 0) return true; // 192.0.0/24
+    if (a === 100 && b >= 64 && b <= 127) return true;       // CGNAT 100.64/10
+    if (a >= 224) return true;                               // multicast + reserved
+    return false;
+  }
+  // IPv6 literal (very rough; we strip zone id and check well-known ranges)
+  if (h.includes(":")) {
+    const stripped = h.split("%")[0];
+    if (stripped === "::" || stripped === "::1") return true;
+    if (stripped.startsWith("fe8") || stripped.startsWith("fe9") ||
+        stripped.startsWith("fea") || stripped.startsWith("feb")) return true; // fe80::/10
+    if (stripped.startsWith("fc") || stripped.startsWith("fd")) return true;   // fc00::/7
+    if (stripped.startsWith("::ffff:")) {
+      // IPv4-mapped IPv6: recurse on the embedded v4.
+      return isPrivateHost(stripped.slice(7));
+    }
+    return false;
+  }
+  return false;
+}
+
+/**
+ * When `CODECLONE_WEBHOOKS_ALLOW_PRIVATE=1`, the SSRF block is disabled.
+ * Required for the local dev loop where someone points a webhook at
+ * `http://localhost:4000/hook` and for the test suite, which uses a
+ * mock fetch but may exercise loopback URLs.
+ */
+function privateHostsAllowed(): boolean {
+  return process.env.CODECLONE_WEBHOOKS_ALLOW_PRIVATE === "1";
+}
+
 export function validateUrl(raw: unknown): { ok: true; url: string } | { ok: false; error: string } {
   if (typeof raw !== "string") return { ok: false, error: "URL is required." };
   const trimmed = raw.trim();
@@ -118,6 +180,12 @@ export function validateUrl(raw: unknown): { ok: true; url: string } | { ok: fal
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return { ok: false, error: "URL must use http or https." };
+  }
+  if (!privateHostsAllowed() && isPrivateHost(parsed.hostname)) {
+    return {
+      ok: false,
+      error: "URL targets a private, loopback, or link-local address. Set CODECLONE_WEBHOOKS_ALLOW_PRIVATE=1 to override for local development.",
+    };
   }
   return { ok: true, url: parsed.toString() };
 }
@@ -417,6 +485,20 @@ async function deliverOnce(
       await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS[i]));
     }
     attempts += 1;
+    // Re-check at delivery time so a webhook stored before the SSRF rules
+    // shipped, or one whose DNS now points at an internal IP literal, cannot
+    // exfiltrate traffic to private networks. We do not yet pin DNS, so this
+    // does not defeat a sophisticated DNS-rebinding attacker; documented in
+    // docs/threat-model.md.
+    if (!privateHostsAllowed()) {
+      let host = "";
+      try { host = new URL(rec.url).hostname; } catch { host = ""; }
+      if (!host || isPrivateHost(host)) {
+        lastErr = "blocked: webhook URL targets a private or loopback address";
+        lastStatus = 0;
+        break;
+      }
+    }
     try {
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), DELIVERY_TIMEOUT_MS);
