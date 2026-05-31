@@ -10,6 +10,36 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Stripe-style Idempotency-Key on `/v1/compare` and `/v1/batch`. Customers retry POSTs on network blips, proxy 502s, and client timeouts; without an idempotency contract those retries double-charge plan quota and fire webhook subscribers twice. Pass `Idempotency-Key: <client-string>` on a write and codeclone records a per-API-key slot with a SHA-256 fingerprint of the canonical request body. A duplicate request with the same key replays the original status code and JSON body (and sets `Idempotent-Replayed: true`) without re-running similarity, without bumping `lastUsedAt`, without charging plan quota, and without fanning out a second webhook. A reuse with a different body returns HTTP 409 `idempotency_conflict` and writes a `v1.compare.idempotency_conflict` (or `v1.batch.idempotency_conflict`) audit row so operators can pivot from the audit log to the offending client. A duplicate that arrives while the first is still inflight returns HTTP 409 `idempotency_in_progress` with `Retry-After: 2`. Slots are scoped per API key (two keys cannot collide on the same idempotency value), expire after 24 hours, and live on the filesystem under `$CODECLONE_IDEMPOTENCY_DIR` (defaults to `runs/_idempotency`). Dry-run probes deliberately do NOT consume an idempotency slot, so wiring `?dry_run=true` in CI cannot lock out a later real call. 22 regression tests in `web/tests/idempotency.test.ts` cover header parsing (length and printable-ASCII bounds), body-hash stability across object key order, fresh/replay/conflict_body/conflict_inflight outcomes, per-key isolation, replay header echo, and source-level wiring on both `/v1/compare` and `/v1/batch` including the dry-run ordering invariant.
+
+### Try it: retry a compare on flaky wifi without double-charging
+
+```bash
+KEY=$(cat api-keys/keys.json | jq -r '.[0].plaintext // empty')
+curl -s -X POST http://localhost:3000/v1/compare \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: deploy-2026-05-31-abc123" \
+  -d '{"a":"def add(x,y):return x+y","b":"def add(a,b):return a+b"}' -i | head -20
+
+# Now replay the same request. Body is byte-identical, so codeclone
+# returns the stored response with Idempotent-Replayed: true and does
+# NOT charge plan quota again.
+curl -s -X POST http://localhost:3000/v1/compare \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: deploy-2026-05-31-abc123" \
+  -d '{"a":"def add(x,y):return x+y","b":"def add(a,b):return a+b"}' -i | grep -i 'idempotent\|HTTP'
+
+# Reuse the same key with a different body and codeclone refuses with
+# 409 idempotency_conflict, then writes an audit row.
+curl -s -X POST http://localhost:3000/v1/compare \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -H "Idempotency-Key: deploy-2026-05-31-abc123" \
+  -d '{"a":"different","b":"payload"}' -i | head -5
+```
+
 - Workspace invite-domain allowlist. Owners can restrict which email domains may join a workspace, enforced on every member entry path: manual invite issuance (`POST /api/workspaces/:id/invites` returns 403 `invite_domain_not_allowed`), invite acceptance (a token issued before the policy tightened can no longer be redeemed if the recipient is now off-list), domain auto-join (an SSO sign-in whose email matches `autoJoinDomains` but not the stricter allowlist is skipped), and SCIM 2.0 user provisioning (`POST /scim/v2/<wsId>/Users` with an off-policy `userName` returns SCIM 400 `invalidValue`). Existing members are never evicted by a policy change. Managed via `GET/PUT /api/workspaces/:id/invite-domain-allowlist`; every mutation lands in the audit log as `workspace.invite_domain_allowlist_update` with a before/after diff and every denied invite as `workspace.invite_create` with status `denied`. The workspace settings page surfaces a dedicated editor; non-owners see it read-only. Seven regression tests in `web/tests/workspaces-invite-domain-allowlist.test.ts` cover sanitiser normalisation, all four enforcement paths, the existing-member carve-out, and cross-tenant isolation (a policy on workspace A never constrains workspace B). Closes the standard SOC2 / ISO 27001 procurement ask: "the customer must be able to restrict access to corporate identity domains only."
 
 ### Try it: lock a workspace to your corporate email domain

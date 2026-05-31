@@ -21,6 +21,7 @@ import { getWorkspace } from "../../../../lib/workspaces";
 import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
 import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
 import { scanInputs, findingsForAudit } from "../../../../lib/secret-scan-enforce";
+import { begin as idempotencyBegin, buildReplay, readIdempotencyKey, KEY_HEADER, REPLAY_HEADER } from "../../../../lib/idempotency";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -274,6 +275,54 @@ export async function POST(req: Request) {
     );
   }
 
+  // Idempotency: if the caller supplied an Idempotency-Key header and a
+  // matching prior request exists, replay its response instead of
+  // running the side-effects again (recordUse, logUsage, webhooks).
+  // Inflight duplicates and body-mismatch retries get a 409.
+  const idemKey = readIdempotencyKey(req);
+  let idemFinalize: ((resp: { status: number; contentType: string; body: string }) => Promise<void>) | null = null;
+  if (idemKey) {
+    const r = await idempotencyBegin(key.id, idemKey, raw);
+    if (r.kind === "conflict_body") {
+      void tryRecordAudit(req, {
+        action: "v1.compare.idempotency_conflict",
+        actorId: key.userId ?? null,
+        target: { type: "api_key", id: key.id, label: key.label },
+        meta: { reason: "body_mismatch", idempotency_key: idemKey },
+      });
+      return NextResponse.json(
+        {
+          error: {
+            type: "idempotency_conflict",
+            message: "Idempotency-Key was reused with a different request body. Choose a fresh key or send the original payload.",
+          },
+        },
+        { status: 409, headers: { ...rl.headers, [KEY_HEADER]: idemKey } },
+      );
+    }
+    if (r.kind === "conflict_inflight") {
+      return NextResponse.json(
+        {
+          error: {
+            type: "idempotency_in_progress",
+            message: "A prior request with this Idempotency-Key is still being processed. Retry in a moment.",
+          },
+        },
+        { status: 409, headers: { ...rl.headers, [KEY_HEADER]: idemKey, "Retry-After": "2" } },
+      );
+    }
+    if (r.kind === "replay") {
+      return buildReplay(r.response, {
+        ...rl.headers,
+        [KEY_HEADER]: idemKey,
+        "x-codeclone-key-id": key.id,
+        "x-codeclone-key-prefix": key.prefix,
+        ...(wsQuota ? planHeaders(wsQuota) : {}),
+      });
+    }
+    idemFinalize = r.finalize;
+  }
+
   // Fire-and-forget usage recording; the response should not block on it.
   void recordUse(key.id);
   void tryRecordAudit(req, {
@@ -316,27 +365,36 @@ export async function POST(req: Request) {
     },
   }).catch(() => {});
 
-  return NextResponse.json(
-    {
-      language,
-      bytes: {
-        a: Buffer.byteLength(a, "utf-8"),
-        b: Buffer.byteLength(b, "utf-8"),
-      },
-      scores,
-      alignment,
-      clone,
-      latency_ms: Number(latencyMs.toFixed(3)),
-      method:
-        "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
-      secret_scan: {
-        mode: scan.mode,
-        findings: findingsForAudit(scan.findings),
-      },
+  const responseBody = {
+    language,
+    bytes: {
+      a: Buffer.byteLength(a, "utf-8"),
+      b: Buffer.byteLength(b, "utf-8"),
     },
+    scores,
+    alignment,
+    clone,
+    latency_ms: Number(latencyMs.toFixed(3)),
+    method:
+      "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+    secret_scan: {
+      mode: scan.mode,
+      findings: findingsForAudit(scan.findings),
+    },
+  };
+  if (idemFinalize) {
+    void idemFinalize({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify(responseBody),
+    });
+  }
+  return NextResponse.json(
+    responseBody,
     {
       headers: {
         ...rl.headers,
+        ...(idemKey ? { [KEY_HEADER]: idemKey, [REPLAY_HEADER]: "false" } : {}),
         "x-codeclone-key-id": key.id,
         "x-codeclone-key-prefix": key.prefix,
         "x-codeclone-secret-scan-mode": scan.mode,
