@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { Lightning, ArrowRight } from "@phosphor-icons/react/dist/ssr";
 import { loadAllPairs, loadEvalReports, loadLatestRun, loadAdapters, loadDatasetStats } from "../lib/data";
 import { H1, H2 } from "../components/Headings";
 import { MetricChip } from "../components/MetricChip";
@@ -30,6 +31,21 @@ export default async function Page() {
   return (
     <div>
       <H1 eyebrow="overview · codeclone">Clone-pair surface and adapter eval report.</H1>
+
+      <section className="ruled rounded-md p-4 mb-6 bg-[var(--color-accent-soft)] border-[color:var(--color-accent)] flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:gap-5 justify-between">
+        <div className="flex flex-col gap-0.5">
+          <div className="eyebrow text-[var(--color-accent-ink)]">new · interactive demo</div>
+          <div className="text-[14px] tracking-tight text-[var(--color-ink)]">
+            Try the live clone detector on three real samples. No setup, sub-second response.
+          </div>
+        </div>
+        <Link
+          href="/demo"
+          className="inline-flex items-center gap-1.5 mono text-[11.5px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)] hover:opacity-90 shrink-0"
+        >
+          <Lightning weight="duotone" size={13} /> open demo <ArrowRight weight="duotone" size={13} />
+        </Link>
+      </section>
 
       {hero && heroFull ? (
         <section className="ruled rounded-lg p-5 bg-[var(--color-paper)]">

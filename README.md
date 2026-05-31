@@ -20,6 +20,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Recipe YAMLs (`quick`, `small`, `standard`, `full`, `python_only`, `ts_js_only`, `cuda_overnight`)
 - Next.js 15 dashboard: pairs list with search + lang filter, pair detail with shiki diff viewer, datasets browse, models/adapters registry, eval grid with Recharts sparklines, serve health probe
 - Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, a line-level alignment heatmap that flags exact and moved blocks, and an automatic clone-type verdict (Type-1 exact / Type-2 renamed / Type-3 near-miss / Type-4 semantic candidate) with rationale
+- One-click `/demo` landing page: three preloaded sample pairs (rename, restyle, distinct) that hit the live `/api/compare` route on mount and render verdict, confidence, latency, scores, and diff in under a second so a first-time visitor sees the model work without typing anything
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack
@@ -176,10 +177,11 @@ Web (`web/package.json`): `dev`, `build`, `start`, `lint`, `typecheck`, `seed` (
 
 ```
 cd web && npm run dev
-open http://127.0.0.1:3000/compare
+open http://127.0.0.1:3000/demo     # zero-typing landing, runs samples automatically
+open http://127.0.0.1:3000/compare  # bring your own snippets
 ```
 
-The page ships with three preloaded samples (renamed variables, partial overlap, distinct). Click one and hit compare. For a scripted call:
+The `/demo` page auto-runs the first of three preloaded sample pairs (renamed variables, partial overlap, distinct) against the live `/api/compare` route and renders verdict, confidence, latency, scores, shared identifiers, and a diff. Click another sample to switch. The `/compare` page is the same scoring backend behind a paste-your-own editor. For a scripted call:
 
 ```
 curl -sS -X POST http://127.0.0.1:3000/api/compare \
