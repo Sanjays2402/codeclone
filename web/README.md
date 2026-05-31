@@ -1,5 +1,19 @@
 codeclone web
 
+codeclone is a clone-pair detection and adapter eval surface for code: compare two snippets, save the result, and review training runs on a single dashboard.
+
+Installable PWA (new)
+
+codeclone is now an installable Progressive Web App. On Chrome/Edge desktop and Android, an "install codeclone" prompt appears in the bottom-right; on iOS Safari, use Share → Add to Home Screen. Once installed, codeclone launches in a standalone window, ships its own icon, and previously visited pages keep working when the network drops (you get an /offline shell instead of the dinosaur).
+
+Try it locally:
+
+  npm run dev
+  # open http://localhost:3000 — install prompt appears once the SW is registered
+  curl -fsS http://localhost:3000/manifest.webmanifest
+  curl -fsSI http://localhost:3000/sw.js
+  curl -fsS http://localhost:3000/offline | head -20
+
 A research-paper-grade eval surface for the codeclone toolchain. Reads from
 the on-disk artifacts that the CLI writes:
 
