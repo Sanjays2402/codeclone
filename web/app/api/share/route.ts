@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createShare, MAX_SNIPPET_BYTES } from "../../../lib/share";
+import { createShare, listShares, MAX_SNIPPET_BYTES } from "../../../lib/share";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
 
 export const runtime = "nodejs";
@@ -9,6 +9,27 @@ interface ShareBody {
   a?: unknown;
   b?: unknown;
   language?: unknown;
+  title?: unknown;
+  tags?: unknown;
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const limitParam = url.searchParams.get("limit");
+  const q = url.searchParams.get("q") ?? undefined;
+  const tag = url.searchParams.get("tag") ?? undefined;
+  let limit = 200;
+  if (limitParam) {
+    const n = Number.parseInt(limitParam, 10);
+    if (Number.isFinite(n) && n > 0 && n <= 1000) limit = n;
+  }
+  try {
+    const items = await listShares({ limit, q, tag });
+    return NextResponse.json({ items, count: items.length });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
 
 export async function POST(req: Request) {
@@ -46,10 +67,14 @@ export async function POST(req: Request) {
   const clone = classifyClone(a, b, scores);
   const latencyMs = performance.now() - started;
   try {
+    const title = typeof raw.title === "string" ? raw.title : undefined;
+    const tags = Array.isArray(raw.tags) ? (raw.tags as unknown[]).filter((t) => typeof t === "string") as string[] : undefined;
     const rec = await createShare({
       a,
       b,
       language,
+      title,
+      tags,
       result: {
         language,
         scores,

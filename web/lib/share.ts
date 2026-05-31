@@ -5,7 +5,8 @@
  * (defaults to ../shares relative to web/). Public, read-only by id.
  *
  * Schema is versioned via the `v` field so we can evolve it later without
- * breaking existing links.
+ * breaking existing links. v1 records (id, a, b, result, language, createdAt)
+ * are upgraded in memory to v2 with optional title + tags.
  */
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -24,6 +25,9 @@ export const SHARES_DIR = process.env.CODECLONE_SHARES_DIR
 
 export const MAX_SNIPPET_BYTES = 64 * 1024;
 const ID_LEN = 12;
+const MAX_TITLE_LEN = 120;
+const MAX_TAGS = 8;
+const MAX_TAG_LEN = 32;
 
 export interface ShareResult {
   language: string;
@@ -36,10 +40,13 @@ export interface ShareResult {
 }
 
 export interface ShareRecord {
-  v: 1;
+  v: 1 | 2;
   id: string;
   createdAt: number;
+  updatedAt?: number;
   language: string;
+  title?: string;
+  tags?: string[];
   a: string;
   b: string;
   result: ShareResult;
@@ -50,10 +57,16 @@ export interface CreateShareInput {
   b: string;
   language: string;
   result: ShareResult;
+  title?: string;
+  tags?: string[];
+}
+
+export interface UpdateShareInput {
+  title?: string | null;
+  tags?: string[] | null;
 }
 
 function newId(): string {
-  // 9 bytes -> 12 base64url chars, url-safe, no padding.
   return crypto.randomBytes(9).toString("base64url");
 }
 
@@ -67,6 +80,28 @@ async function ensureDir() {
 
 function shareFile(id: string): string {
   return path.join(SHARES_DIR, `${id}.json`);
+}
+
+function sanitizeTitle(t: unknown): string | undefined {
+  if (typeof t !== "string") return undefined;
+  const cleaned = t.replace(/\s+/g, " ").trim().slice(0, MAX_TITLE_LEN);
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function sanitizeTags(t: unknown): string[] | undefined {
+  if (!Array.isArray(t)) return undefined;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of t) {
+    if (typeof raw !== "string") continue;
+    const cleaned = raw.trim().toLowerCase().replace(/\s+/g, "-").slice(0, MAX_TAG_LEN);
+    if (!cleaned || seen.has(cleaned)) continue;
+    if (!/^[a-z0-9][a-z0-9_-]*$/.test(cleaned)) continue;
+    seen.add(cleaned);
+    out.push(cleaned);
+    if (out.length >= MAX_TAGS) break;
+  }
+  return out;
 }
 
 export async function createShare(input: CreateShareInput): Promise<ShareRecord> {
@@ -86,21 +121,24 @@ export async function createShare(input: CreateShareInput): Promise<ShareRecord>
     throw new Error("result is required");
   }
   await ensureDir();
-  // Retry on the astronomically unlikely id collision.
   for (let attempt = 0; attempt < 4; attempt++) {
     const id = newId().slice(0, ID_LEN);
     const file = shareFile(id);
     try {
       await fs.access(file);
-      continue; // taken, try again
+      continue;
     } catch {
       // free
     }
+    const now = Date.now();
     const rec: ShareRecord = {
-      v: 1,
+      v: 2,
       id,
-      createdAt: Date.now(),
+      createdAt: now,
+      updatedAt: now,
       language: input.language || "auto",
+      title: sanitizeTitle(input.title),
+      tags: sanitizeTags(input.tags),
       a: input.a,
       b: input.b,
       result: input.result,
@@ -116,25 +154,140 @@ export async function loadShare(id: string): Promise<ShareRecord | null> {
   try {
     const buf = await fs.readFile(shareFile(id), "utf-8");
     const rec = JSON.parse(buf) as ShareRecord;
-    if (!rec || rec.v !== 1 || typeof rec.id !== "string") return null;
+    if (!rec || (rec.v !== 1 && rec.v !== 2) || typeof rec.id !== "string") {
+      return null;
+    }
     return rec;
   } catch {
     return null;
   }
 }
 
-export function shareSummary(rec: ShareRecord): {
+export async function updateShare(
+  id: string,
+  patch: UpdateShareInput,
+): Promise<ShareRecord | null> {
+  const rec = await loadShare(id);
+  if (!rec) return null;
+  let changed = false;
+  if (patch.title !== undefined) {
+    if (patch.title === null || patch.title === "") {
+      if (rec.title !== undefined) {
+        delete rec.title;
+        changed = true;
+      }
+    } else {
+      const t = sanitizeTitle(patch.title);
+      if (t && t !== rec.title) {
+        rec.title = t;
+        changed = true;
+      }
+    }
+  }
+  if (patch.tags !== undefined) {
+    if (patch.tags === null) {
+      if (rec.tags && rec.tags.length > 0) {
+        delete rec.tags;
+        changed = true;
+      }
+    } else {
+      const tags = sanitizeTags(patch.tags) ?? [];
+      const same =
+        rec.tags &&
+        rec.tags.length === tags.length &&
+        rec.tags.every((x, i) => x === tags[i]);
+      if (!same) {
+        if (tags.length > 0) rec.tags = tags;
+        else delete rec.tags;
+        changed = true;
+      }
+    }
+  }
+  if (changed) {
+    rec.v = 2;
+    rec.updatedAt = Date.now();
+    await fs.writeFile(shareFile(id), JSON.stringify(rec), "utf-8");
+  }
+  return rec;
+}
+
+export async function deleteShare(id: string): Promise<boolean> {
+  if (!isShareId(id)) return false;
+  try {
+    await fs.unlink(shareFile(id));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export interface ShareSummary {
   id: string;
   language: string;
   cloneLabel: string;
   shingleJaccard: number;
   createdAt: number;
-} {
+  updatedAt?: number;
+  title?: string;
+  tags?: string[];
+  bytes: { a: number; b: number };
+}
+
+export function shareSummary(rec: ShareRecord): ShareSummary {
   return {
     id: rec.id,
     language: rec.language,
     cloneLabel: rec.result.clone.label,
     shingleJaccard: rec.result.scores.shingleJaccard,
     createdAt: rec.createdAt,
+    updatedAt: rec.updatedAt,
+    title: rec.title,
+    tags: rec.tags,
+    bytes: rec.result.bytes,
   };
+}
+
+export interface ListSharesOptions {
+  limit?: number;
+  q?: string;
+  tag?: string;
+}
+
+export async function listShares(
+  opts: ListSharesOptions = {},
+): Promise<ShareSummary[]> {
+  await ensureDir();
+  let names: string[];
+  try {
+    names = await fs.readdir(SHARES_DIR);
+  } catch {
+    return [];
+  }
+  const summaries: ShareSummary[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -5);
+    if (!isShareId(id)) continue;
+    const rec = await loadShare(id);
+    if (!rec) continue;
+    summaries.push(shareSummary(rec));
+  }
+  summaries.sort((a, b) => b.createdAt - a.createdAt);
+  let out = summaries;
+  if (opts.tag) {
+    const tg = opts.tag.toLowerCase();
+    out = out.filter((s) => s.tags?.includes(tg));
+  }
+  if (opts.q) {
+    const q = opts.q.toLowerCase();
+    out = out.filter(
+      (s) =>
+        s.id.toLowerCase().includes(q) ||
+        (s.title?.toLowerCase().includes(q) ?? false) ||
+        s.language.toLowerCase().includes(q) ||
+        s.cloneLabel.toLowerCase().includes(q),
+    );
+  }
+  if (opts.limit && opts.limit > 0) out = out.slice(0, opts.limit);
+  return out;
 }

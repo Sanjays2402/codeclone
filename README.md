@@ -23,6 +23,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - One-click `/demo` landing page: three preloaded sample pairs (rename, restyle, distinct) that hit the live `/api/compare` route on mount and render verdict, confidence, latency, scores, and diff in under a second so a first-time visitor sees the model work without typing anything
 - Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
 - Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with OG metadata, copy-link button, and a one-click "open in compare" entry. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
+- Saved comparisons in `/history`: every share you create shows up in a browsable list with rename, tagging, JSON download, and delete. Search by title, id, language, or clone label; filter by tag. All writes go to the same on-disk store as `/r/<id>`, so links and history stay in sync.
 
 ### Try it: share a comparison
 
@@ -44,6 +45,28 @@ open http://localhost:3000/r/JRe9kkq8kcY3
 ```
 
 Smoke test: `node web/scripts/test-share.mjs` boots `next dev` against a temp shares dir and round-trips create / read / render / 404 / 400.
+
+### Try it: history, rename, tag, delete
+
+```bash
+cd web && pnpm dev          # http://localhost:3000/history
+
+# list every saved comparison (newest first)
+curl -s 'http://localhost:3000/api/share?limit=20' | jq '.items[] | {id,title,tags,cloneLabel}'
+
+# rename and tag
+curl -s -X PATCH http://localhost:3000/api/share/JRe9kkq8kcY3 \
+  -H 'content-type: application/json' \
+  -d '{"title":"add vs sum","tags":["javascript","renamed-vars"]}'
+
+# download the full record as JSON
+curl -s http://localhost:3000/api/share/JRe9kkq8kcY3 -o codeclone-JRe9kkq8kcY3.json
+
+# delete
+curl -s -X DELETE http://localhost:3000/api/share/JRe9kkq8kcY3
+```
+
+Unit test: `cd web && pnpm test` runs `node --test --experimental-strip-types tests/share.test.ts` against a temp `CODECLONE_SHARES_DIR` and round-trips create / load / update / list / delete plus input validation.
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack

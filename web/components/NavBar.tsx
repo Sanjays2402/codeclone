@@ -8,6 +8,7 @@ const items = [
   { href: "/",         label: "overview" },
   { href: "/demo",     label: "demo" },
   { href: "/compare",  label: "compare" },
+  { href: "/history",  label: "history" },
   { href: "/batch",    label: "batch" },
   { href: "/pairs",    label: "pairs" },
   { href: "/eval",     label: "eval" },
