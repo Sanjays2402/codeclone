@@ -5,7 +5,7 @@
  * test can verify the contents without importing this route.
  */
 import { NextResponse } from "next/server";
-import { buildSecurityTxt } from "../../../../lib/security-headers";
+import { buildSecurityTxt } from "../../../lib/security-headers";
 
 export const dynamic = "force-static";
 export const revalidate = 86400;
