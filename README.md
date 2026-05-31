@@ -30,6 +30,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
 - Email magic-link sign-in at `/signin`: stateless HMAC session cookies, one-shot tokens with 15-minute expiry, and a user menu in the nav. Dev mode shows the link inline so you can complete the loop locally without an SMTP provider; production swaps in a real mailer. Users persist on disk under `CODECLONE_USERS_DIR` (defaults to `../users`), keyed by a deterministic id derived from the lowercased email. Set `CODECLONE_AUTH_SECRET` in production. Routes: `POST /api/auth/request`, `GET /api/auth/verify`, `GET /api/auth/me`, `POST /api/auth/signout`.
 - First-run `/welcome`: a 3-step onboarding flow (create API key, run a comparison, save to history) with a live progress bar and a thin banner that sits under the nav on every page until you finish or dismiss. Step completion is derived from real state on disk (active API keys, a saved share, a `compared` event), so the checklist cannot lie. Override the persisted dismiss/finished state with `CODECLONE_ONBOARDING_FILE` (defaults to `../.onboarding.json`).
+- Persistent notifications inbox at `/notifications`: per-user activity log for share creations and batch completions, with a bell badge in the top bar that polls unread count every 30 seconds. Filter all/unread, mark read or unread, dismiss, mark-all-read, clear. Stored as one JSON-lines file per user under `CODECLONE_NOTIFICATIONS_DIR` (defaults to `../runs/notifications`), capped at 200 records per user. Routes: `GET /api/notifications`, `POST /api/notifications` (`mark-all-read`/`clear`), `PATCH /api/notifications/<id>`, `DELETE /api/notifications/<id>`. Emission is best-effort, so an inbox write failure never breaks the originating action.
 - In-app notification toasts wired to the existing settings prefs: when `notifyOnCompareCompleted` is on, any comparison that takes longer than 2 seconds drops a success toast with the verdict and elapsed time. When `notifyOnWebhookFailure` is on, every page polls `/api/webhooks/recent-failures` every 20 seconds (while the tab is visible) and surfaces fresh failed deliveries as an error toast with a one-click jump to the per-endpoint delivery log. Toasts are dismissable, screen-reader friendly (`aria-live=polite`, `role=alert` for errors), bottom-right on desktop, bottom-center on mobile.
 
 ### Try it: get notified when a long compare finishes
@@ -37,6 +38,25 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 1. Open `/settings`, tick "In-app toast when a long compare finishes", save.
 2. Open `/compare`, paste two big snippets, hit compare.
 3. Any run over two seconds shows a toast in the bottom-right with the elapsed time and verdict. Webhook delivery failures (when you have any registered hooks) appear as red toasts with a link to `/webhooks`.
+
+### Try it: your notifications inbox
+
+The in-app toaster is good for the moment something happens. The new `/notifications` page is the persistent record. Every save to `/r/<id>` and every batch run lands in the signed-in user's inbox with a deep link, a kind tag, and an unread badge. A bell in the top bar polls the unread count every 30 seconds.
+
+```bash
+# Start the dashboard
+cd web && npm install && npm run dev
+# In another shell, after signing in at http://localhost:3000/signin and copying your cc_session cookie:
+curl -s http://localhost:3000/api/notifications \
+  -H 'cookie: cc_session=<paste-your-cookie>' | jq
+# Mark everything read
+curl -s -X POST http://localhost:3000/api/notifications \
+  -H 'content-type: application/json' \
+  -H 'cookie: cc_session=<paste-your-cookie>' \
+  -d '{"action":"mark-all-read"}'
+```
+
+Storage: one JSON-lines file per user under `CODECLONE_NOTIFICATIONS_DIR` (defaults to `../runs/notifications`). Capped at 200 per user. Emission is best-effort, so a notification write failure can never break the originating action.
 
 ```bash
 # The aggregator endpoint that powers the failure toasts:

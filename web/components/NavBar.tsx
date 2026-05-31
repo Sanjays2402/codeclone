@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import { clsx } from "clsx";
 import { ThemeToggle } from "./ThemeToggle";
 import { UserMenu } from "./UserMenu";
+import { NotificationBell } from "./NotificationBell";
 
 const items = [
   { href: "/",         label: "overview" },
@@ -19,6 +20,7 @@ const items = [
   { href: "/api-keys", label: "api keys" },
   { href: "/usage",    label: "usage" },
   { href: "/webhooks", label: "webhooks" },
+  { href: "/notifications", label: "inbox" },
   { href: "/settings", label: "settings" },
 ];
 
@@ -51,6 +53,7 @@ export function NavBar() {
           })}
         </nav>
         <div className="ml-auto flex items-center gap-2">
+          <NotificationBell />
           <ThemeToggle />
           <UserMenu />
         </div>

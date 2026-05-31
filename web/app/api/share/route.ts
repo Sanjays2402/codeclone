@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createShare, listShares, MAX_SNIPPET_BYTES } from "../../../lib/share";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
+import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { emitNotification } from "../../../lib/notifications";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -89,6 +91,20 @@ export async function POST(req: Request) {
           "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
       },
     });
+    // Best-effort: log this in the signed-in user's inbox.
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    if (user) {
+      const pct = (scores.shingleJaccard * 100).toFixed(1);
+      const titleText = (typeof raw.title === "string" && raw.title.trim()) || "Untitled comparison";
+      await emitNotification({
+        userId: user.id,
+        kind: "share.created",
+        title: `Saved "${titleText}"`,
+        body: `${clone.label} match at ${pct}% on ${language}. Public link is ready to copy.`,
+        href: `/r/${rec.id}`,
+        meta: { language, shingleJaccard: scores.shingleJaccard },
+      });
+    }
     return NextResponse.json({ id: rec.id, url: `/r/${rec.id}` }, { status: 201 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
