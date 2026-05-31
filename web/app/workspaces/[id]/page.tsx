@@ -19,6 +19,7 @@ import {
 import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
 import { AllowlistEditor } from "../../../components/AllowlistEditor";
+import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
 import { PlanEditor } from "../../../components/PlanEditor";
@@ -334,6 +335,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <AllowlistEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <SessionPolicyEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (
