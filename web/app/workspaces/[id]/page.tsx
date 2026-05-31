@@ -22,6 +22,7 @@ import { AllowlistEditor } from "../../../components/AllowlistEditor";
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
+import { ScimEditor } from "../../../components/ScimEditor";
 import { PlanEditor } from "../../../components/PlanEditor";
 import { WorkspaceDataControls } from "../../../components/WorkspaceDataControls";
 import { fmtTs } from "../../../lib/format";
@@ -343,6 +344,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SsoEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <ScimEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

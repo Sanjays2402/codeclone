@@ -672,6 +672,7 @@ export interface WorkspaceExportBundle {
   invites: ReturnType<typeof publicInvite>[];
   apiKeys: unknown[];
   audit: unknown[];
+  scimUsers: unknown[];
 }
 
 export async function exportWorkspace(ws: WorkspaceRecord): Promise<WorkspaceExportBundle> {
@@ -683,6 +684,22 @@ export async function exportWorkspace(ws: WorkspaceRecord): Promise<WorkspaceExp
   const allKeys = await keysMod.listKeys();
   const apiKeys = allKeys.filter((k) => (k as { workspaceId?: string }).workspaceId === ws.id);
   const audit = await auditMod.listAudit({ workspaceId: ws.id, limit: auditMod.MAX_LIST });
+  // SCIM directory mirror (no token secret; only provisioned user records).
+  let scimUsers: unknown[] = [];
+  try {
+    const scimDir = process.env.CODECLONE_SCIM_DIR
+      ? path.resolve(process.cwd(), process.env.CODECLONE_SCIM_DIR)
+      : path.resolve(process.cwd(), "..", "scim");
+    const dir = path.join(scimDir, "users", ws.id);
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    for (const n of names) {
+      if (!n.endsWith(".json")) continue;
+      const rec = await readJson<unknown>(path.join(dir, n));
+      if (rec) scimUsers.push(rec);
+    }
+  } catch {
+    scimUsers = [];
+  }
   const sso = ws.sso
     ? (() => {
         const { clientSecret: _omit, ...rest } = ws.sso!;
@@ -698,6 +715,7 @@ export async function exportWorkspace(ws: WorkspaceRecord): Promise<WorkspaceExp
     invites: invites.map(publicInvite),
     apiKeys,
     audit,
+    scimUsers,
   };
 }
 
@@ -749,7 +767,15 @@ export async function deleteWorkspace(ws: WorkspaceRecord): Promise<{
   for (const m of ws.members) {
     await removeFromMemberIndex(m.userId, ws.id).catch(() => {});
   }
-  // 4. Delete the workspace record itself.
+  // 4. Wipe SCIM provisioning state (token + provisioned user mirror).
+  try {
+    const scimDir = process.env.CODECLONE_SCIM_DIR
+      ? path.resolve(process.cwd(), process.env.CODECLONE_SCIM_DIR)
+      : path.resolve(process.cwd(), "..", "scim");
+    await fs.unlink(path.join(scimDir, "tokens", ws.id + ".json")).catch(() => {});
+    await fs.rm(path.join(scimDir, "users", ws.id), { recursive: true, force: true }).catch(() => {});
+  } catch { /* best effort */ }
+  // 5. Delete the workspace record itself.
   await fs.unlink(workspacePath(ws.id)).catch(() => {});
   return { workspaceId: ws.id, removedInvites, removedApiKeys, removedMembers };
 }
