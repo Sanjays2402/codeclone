@@ -31,6 +31,7 @@ interface CreateBody {
   scopes?: unknown;
   rpm?: unknown;
   workspaceId?: unknown;
+  ipAllowlist?: unknown;
 }
 
 export async function POST(req: Request) {
@@ -49,13 +50,14 @@ export async function POST(req: Request) {
       expiresInDays: body.expiresInDays,
       scopes: body.scopes,
       rpm: body.rpm,
+      ipAllowlist: body.ipAllowlist,
     });
     await tryRecordAudit(req, {
       action: "api_key.create",
       actorId: user.id,
       actorEmail: user.email,
       target: { type: "api_key", id: record.id, label: record.label },
-      diff: { after: { label: record.label, scopes: record.scopes, expiresAt: record.expiresAt, rateLimit: record.rateLimit } },
+      diff: { after: { label: record.label, scopes: record.scopes, expiresAt: record.expiresAt, rateLimit: record.rateLimit, ipAllowlist: record.ipAllowlist } },
     });
     return NextResponse.json({ key: record, plaintext }, { status: 201 });
   } catch (e) {

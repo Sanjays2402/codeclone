@@ -14,7 +14,7 @@ import {
   recordUse,
 } from "../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
-import { enforceWorkspaceAllowlistForKey } from "../../../../lib/ip-allowlist-enforce";
+import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
@@ -65,6 +65,8 @@ export async function POST(req: Request) {
 
   const blocked = await enforceWorkspaceAllowlistForKey(req, key);
   if (blocked) return blocked;
+  const keyBlocked = await enforceKeyAllowlist(req, key);
+  if (keyBlocked) return keyBlocked;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;

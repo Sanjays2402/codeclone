@@ -211,6 +211,36 @@ export function evaluateAllowlist(
 }
 
 /**
+ * Per-API-key variant. Identical CIDR semantics to evaluateAllowlist, but
+ * skips the loopback bypass: enterprise teams use per-key allowlists to
+ * prove that a specific production credential ONLY works from a named
+ * source network, and silently letting localhost through would defeat
+ * that audit story. An empty/missing list still means open.
+ */
+export function evaluateKeyAllowlist(
+  req: Request,
+  entries: string[] | undefined | null,
+): AllowlistDecision {
+  const list = Array.isArray(entries) ? entries : [];
+  if (list.length === 0) {
+    return { allowed: true, reason: "open", ip: clientIpFromRequest(req), rules: 0 };
+  }
+  const ip = clientIpFromRequest(req);
+  if (!ip) {
+    return { allowed: false, reason: "no_ip", ip: null, rules: list.length };
+  }
+  const parsed: ParsedCidr[] = [];
+  for (const e of list) {
+    const p = parseCidr(e);
+    if (p) parsed.push(p);
+  }
+  if (matchCidr(ip, parsed)) {
+    return { allowed: true, reason: "match", ip, rules: parsed.length };
+  }
+  return { allowed: false, reason: "blocked", ip, rules: parsed.length };
+}
+
+/**
  * Sanitise a user-submitted CIDR list. Dedupes, drops invalid entries,
  * preserves order, and caps at MAX_CIDR_ENTRIES. Returns the cleaned
  * list AND the set of rejected raw inputs so the UI can surface them.

@@ -12,6 +12,7 @@ import {
   Eye,
   ArrowsClockwise,
   Gauge,
+  ShieldCheck,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -29,6 +30,7 @@ interface ApiKeySummary {
   expired?: boolean;
   scopes?: string[];
   rateLimit?: { rpm: number };
+  ipAllowlist?: string[];
 }
 
 const ALL_SCOPES = [
@@ -80,6 +82,7 @@ export default function ApiKeysPage() {
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [scopes, setScopes] = useState<string[]>(["compare:write", "batch:write"]);
   const [rpm, setRpm] = useState<string>("");
+  const [ipAllowlist, setIpAllowlist] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [reveal, setReveal] = useState<{ id: string; plaintext: string } | null>(null);
   const [busy, setBusy] = useState("");
@@ -117,6 +120,10 @@ export default function ApiKeysPage() {
       if (expRaw && (!Number.isFinite(expNum) || (expNum as number) <= 0 || (expNum as number) > 365)) {
         throw new Error("Expiry must be 1 to 365 days, or blank for never.");
       }
+      const cidrs = ipAllowlist
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
       const res = await fetch("/api/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -125,6 +132,7 @@ export default function ApiKeysPage() {
           ...(expNum ? { expiresInDays: expNum } : {}),
           scopes,
           ...(rpm.trim() ? { rpm: Number(rpm.trim()) } : {}),
+          ...(cidrs.length > 0 ? { ipAllowlist: cidrs } : {}),
         }),
       });
       if (res.status === 401) {
@@ -143,13 +151,14 @@ export default function ApiKeysPage() {
       setLabel("");
       setExpiresInDays("");
       setRpm("");
+      setIpAllowlist("");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }
-  }, [label, expiresInDays, scopes, rpm, refresh]);
+  }, [label, expiresInDays, scopes, rpm, ipAllowlist, refresh]);
 
   const onRevoke = useCallback(
     async (id: string) => {
@@ -226,6 +235,46 @@ export default function ApiKeysPage() {
         if (!res.ok) {
           const j = await res.json().catch(() => ({}));
           throw new Error(j.error?.message ?? `Update failed (${res.status}).`);
+        }
+        await refresh();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy("");
+      }
+    },
+    [refresh],
+  );
+
+  const onSetAllowlist = useCallback(
+    async (id: string, current: string[] | undefined) => {
+      const ans = window.prompt(
+        "Source IP allowlist for this key (CIDRs, comma- or space-separated). Leave blank to clear and accept any source IP.",
+        Array.isArray(current) && current.length > 0 ? current.join(", ") : "",
+      );
+      if (ans === null) return;
+      const cidrs = ans
+        .split(/[\s,]+/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const payload: { ipAllowlist: string[] | null } = {
+        ipAllowlist: cidrs.length === 0 ? null : cidrs,
+      };
+      setBusy(id);
+      setError("");
+      try {
+        const res = await fetch(`/api/api-keys/${id}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok) {
+          const j = await res.json().catch(() => ({}));
+          throw new Error(j.error?.message ?? `Update failed (${res.status}).`);
+        }
+        const j = (await res.json()) as { rejectedCidrs?: string[] };
+        if (Array.isArray(j.rejectedCidrs) && j.rejectedCidrs.length > 0) {
+          setError(`Skipped invalid CIDR entries: ${j.rejectedCidrs.join(", ")}`);
         }
         await refresh();
       } catch (e) {
@@ -336,6 +385,19 @@ export default function ApiKeysPage() {
             <Plus size={12} weight="bold" />
             {creating ? "Creating" : "Create key"}
           </button>
+        </div>
+        <div className="mt-3 flex items-start gap-2">
+          <ShieldCheck size={14} weight="duotone" className="text-[var(--color-ink-3)] mt-2 hidden sm:block" />
+          <input
+            type="text"
+            value={ipAllowlist}
+            onChange={(e) => setIpAllowlist(e.target.value)}
+            placeholder="Source IP allowlist (CIDRs, comma-separated, blank = any). Example: 203.0.113.0/24, 2001:db8::/32"
+            className="flex-1 bg-transparent outline-none text-[12.5px] px-2 py-1.5 border border-[var(--color-rule)] rounded-sm focus:border-[var(--color-accent)] mono"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onCreate();
+            }}
+          />
         </div>
         <div className="mt-3 flex flex-wrap items-center gap-2">
           <span className="mono text-[10px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] mr-1">scopes</span>
@@ -480,6 +542,24 @@ export default function ApiKeysPage() {
                   >
                     <Gauge size={11} weight="duotone" />
                     {k.rateLimit ? `${k.rateLimit.rpm}/m` : "60/m"}
+                  </button>
+                )}
+                {!k.revoked && !k.expired && (
+                  <button
+                    type="button"
+                    onClick={() => void onSetAllowlist(k.id, k.ipAllowlist)}
+                    disabled={busy === k.id}
+                    title={
+                      Array.isArray(k.ipAllowlist) && k.ipAllowlist.length > 0
+                        ? `Locked to source IPs: ${k.ipAllowlist.join(", ")}. Click to change.`
+                        : "No source IP restriction. Click to lock this key to specific CIDRs."
+                    }
+                    className="inline-flex items-center gap-1 mono text-[10.5px] uppercase tracking-[0.14em] px-1.5 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+                  >
+                    <ShieldCheck size={11} weight="duotone" />
+                    {Array.isArray(k.ipAllowlist) && k.ipAllowlist.length > 0
+                      ? `${k.ipAllowlist.length} cidr`
+                      : "any ip"}
                   </button>
                 )}
                 {!k.revoked && !k.expired && (

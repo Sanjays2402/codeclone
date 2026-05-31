@@ -12,6 +12,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { normalizeRpm } from "./rate-limit.ts";
+import { sanitizeCidrList } from "./ip-allowlist.ts";
 
 const MIN_RPM_HINT = 1;
 
@@ -84,6 +85,7 @@ export interface ApiKeyRecord {
   expiresAt?: number; // optional epoch ms; absent means never expires
   scopes?: Scope[]; // permission scopes; absent on legacy records = full access
   rateLimit?: { rpm: number }; // per-key requests-per-minute cap; absent = default
+  ipAllowlist?: string[]; // per-key source IP CIDR allowlist; absent/empty = open
 }
 
 export interface ApiKeySummary {
@@ -100,6 +102,7 @@ export interface ApiKeySummary {
   expired?: boolean;
   scopes?: Scope[];
   rateLimit?: { rpm: number };
+  ipAllowlist?: string[];
 }
 
 const MAX_EXPIRES_DAYS = 365;
@@ -154,6 +157,7 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     expired: isExpired(rec),
     scopes: rec.scopes,
     rateLimit: rec.rateLimit,
+    ipAllowlist: Array.isArray(rec.ipAllowlist) && rec.ipAllowlist.length > 0 ? rec.ipAllowlist : undefined,
   };
 }
 
@@ -168,6 +172,7 @@ export interface CreateOptions {
   expiresInDays?: unknown;
   scopes?: unknown;
   rpm?: unknown;
+  ipAllowlist?: unknown;
 }
 
 export async function createKey(label: unknown, opts: CreateOptions = {}): Promise<CreatedKey> {
@@ -204,6 +209,10 @@ export async function createKey(label: unknown, opts: CreateOptions = {}): Promi
     if (scopes) rec.scopes = scopes;
     const rpm = normalizeRpm(opts.rpm);
     if (typeof rpm === "number") rec.rateLimit = { rpm };
+    if (opts.ipAllowlist !== undefined && opts.ipAllowlist !== null) {
+      const { ok } = sanitizeCidrList(opts.ipAllowlist);
+      if (ok.length > 0) rec.ipAllowlist = ok;
+    }
     await fs.writeFile(file, JSON.stringify(rec), "utf-8");
     return { record: summarize(rec), plaintext };
   }
@@ -258,9 +267,9 @@ export async function rotateKey(
  */
 export async function updateKey(
   id: string,
-  patch: { rpm?: unknown },
+  patch: { rpm?: unknown; ipAllowlist?: unknown },
   userId?: string,
-): Promise<ApiKeySummary | null> {
+): Promise<{ summary: ApiKeySummary; rejectedCidrs: string[] } | null> {
   const rec = await loadKey(id);
   if (!rec) return null;
   if (userId !== undefined && rec.userId && rec.userId !== userId) return null;
@@ -275,8 +284,25 @@ export async function updateKey(
       rec.rateLimit = { rpm };
     }
   }
+  let rejectedCidrs: string[] = [];
+  if ("ipAllowlist" in patch) {
+    if (patch.ipAllowlist === null || patch.ipAllowlist === undefined) {
+      delete rec.ipAllowlist;
+    } else if (Array.isArray(patch.ipAllowlist) && patch.ipAllowlist.length === 0) {
+      delete rec.ipAllowlist;
+    } else {
+      const { ok, rejected } = sanitizeCidrList(patch.ipAllowlist);
+      rejectedCidrs = rejected;
+      if (ok.length === 0) {
+        throw new Error(
+          `ipAllowlist contained no valid CIDR entries. Rejected: ${rejected.join(", ") || "(none)"}`,
+        );
+      }
+      rec.ipAllowlist = ok;
+    }
+  }
   await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
-  return summarize(rec);
+  return { summary: summarize(rec), rejectedCidrs };
 }
 
 export async function revokeKey(id: string, userId?: string): Promise<boolean> {

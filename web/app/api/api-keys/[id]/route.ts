@@ -58,42 +58,47 @@ export async function PUT(
   const { id } = await ctx.params;
   const before = await loadKey(id);
   if (!before || (before.userId && before.userId !== user.id)) return notFound();
-  let body: { rpm?: unknown } = {};
+  let body: { rpm?: unknown; ipAllowlist?: unknown } = {};
   try {
-    body = (await req.json()) as { rpm?: unknown };
+    body = (await req.json()) as { rpm?: unknown; ipAllowlist?: unknown };
   } catch {
     return NextResponse.json(
       { error: { type: "invalid_request", message: "Body must be JSON." } },
       { status: 400 },
     );
   }
-  if (!("rpm" in body)) {
+  if (!("rpm" in body) && !("ipAllowlist" in body)) {
     return NextResponse.json(
-      { error: { type: "invalid_request", message: "Send { rpm: number | null } to set or clear the per-key limit." } },
+      { error: { type: "invalid_request", message: "Send { rpm: number | null } and/or { ipAllowlist: string[] | null } to update the key." } },
       { status: 400 },
     );
   }
-  let updated;
+  let result;
   try {
-    updated = await updateKey(id, { rpm: body.rpm }, user.id);
+    const patch: { rpm?: unknown; ipAllowlist?: unknown } = {};
+    if ("rpm" in body) patch.rpm = body.rpm;
+    if ("ipAllowlist" in body) patch.ipAllowlist = body.ipAllowlist;
+    result = await updateKey(id, patch, user.id);
   } catch (e) {
     return NextResponse.json(
       { error: { type: "invalid_request", message: e instanceof Error ? e.message : String(e) } },
       { status: 400 },
     );
   }
-  if (!updated) return notFound();
+  if (!result) return notFound();
+  const updated = result.summary;
   await tryRecordAudit(req, {
-    action: "api_key.update_rate_limit",
+    action: "ipAllowlist" in body ? "api_key.update_ip_allowlist" : "api_key.update_rate_limit",
     actorId: user.id,
     actorEmail: user.email,
     target: { type: "api_key", id, label: updated.label },
     diff: {
-      before: { rateLimit: before.rateLimit ?? null },
-      after: { rateLimit: updated.rateLimit ?? null },
+      before: { rateLimit: before.rateLimit ?? null, ipAllowlist: before.ipAllowlist ?? null },
+      after: { rateLimit: updated.rateLimit ?? null, ipAllowlist: updated.ipAllowlist ?? null },
     },
+    meta: result.rejectedCidrs.length > 0 ? { rejected_cidrs: result.rejectedCidrs } : undefined,
   });
-  return NextResponse.json(updated);
+  return NextResponse.json({ ...updated, rejectedCidrs: result.rejectedCidrs });
 }
 
 export async function DELETE(
