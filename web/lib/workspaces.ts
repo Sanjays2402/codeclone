@@ -507,6 +507,35 @@ export async function setMemberRole(ws: WorkspaceRecord, userId: string, role: R
   return ws;
 }
 
+/**
+ * Transfer the sole-owner role from `fromUserId` to `toUserId`.
+ *
+ * Enterprise requirement: when a workspace owner leaves the company, the org
+ * must be able to re-home the workspace without rebuilding it. We keep the
+ * "exactly one owner" invariant by atomically promoting the target to owner
+ * and demoting the previous owner to editor in the same write.
+ *
+ * Throws:
+ *   - `not_owner`     fromUserId is not currently the owner of this workspace
+ *   - `not_member`    toUserId is not a member of this workspace
+ *   - `same_user`     fromUserId === toUserId (no-op rejected so callers must be intentional)
+ */
+export async function transferOwnership(
+  ws: WorkspaceRecord,
+  fromUserId: string,
+  toUserId: string,
+): Promise<WorkspaceRecord> {
+  if (fromUserId === toUserId) throw new Error("same_user");
+  const from = ws.members.find((m) => m.userId === fromUserId);
+  if (!from || from.role !== "owner") throw new Error("not_owner");
+  const to = ws.members.find((m) => m.userId === toUserId);
+  if (!to) throw new Error("not_member");
+  to.role = "owner";
+  from.role = "editor";
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
 export async function removeMember(ws: WorkspaceRecord, userId: string): Promise<WorkspaceRecord> {
   const m = ws.members.find((x) => x.userId === userId);
   if (!m) return ws;

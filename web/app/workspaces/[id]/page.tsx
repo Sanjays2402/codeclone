@@ -10,6 +10,7 @@ import {
   CheckCircle,
   ArrowLeft,
   Crown,
+  CrownSimple,
   PencilSimple,
   Eye,
   PaperPlaneTilt,
@@ -143,6 +144,26 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
     await refresh();
   }
 
+  async function transferOwnership(toUserId: string, toEmail: string) {
+    const confirmText = `Transfer ownership to ${toEmail}? You will be demoted to editor. This cannot be undone without their cooperation.`;
+    if (!confirm(confirmText)) return;
+    const r = await fetch(`/api/workspaces/${id}/transfer-ownership`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ toUserId }),
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401 && j?.error === "mfa_required") {
+        setError("MFA required. Verify your code in Settings then try again.");
+        return;
+      }
+      setError(j?.error || `HTTP ${r.status}`);
+      return;
+    }
+    await refresh();
+  }
+
   async function removeMember(userId: string) {
     if (!confirm("Remove this member from the workspace?")) return;
     const r = await fetch(`/api/workspaces/${id}?userId=${encodeURIComponent(userId)}`, {
@@ -264,6 +285,12 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
                 <span className="mono text-[10px] uppercase tracking-[0.14em] inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)]">
                   {roleIcon(m.role)} {m.role}
                 </span>
+              )}
+              {canManage && m.role !== "owner" && (
+                <button onClick={() => transferOwnership(m.userId, m.email)} type="button"
+                  className="p-1.5 rounded hover:bg-[var(--color-paper-2)] text-[var(--color-ink-3)]" aria-label="transfer ownership" title="Transfer ownership">
+                  <CrownSimple weight="duotone" size={14} />
+                </button>
               )}
               {canManage && m.role !== "owner" && (
                 <button onClick={() => removeMember(m.userId)} type="button"
