@@ -23,6 +23,7 @@ import {
   applyAutoJoinForUser,
   effectiveSessionPolicyForUser,
 } from "../../../../lib/workspaces";
+import { findEnforcedSsoForUser } from "../../../../lib/sso";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,6 +41,30 @@ export async function GET(req: Request) {
   if (!user) {
     const back = new URL("/signin", url.origin);
     back.searchParams.set("error", "invalid_or_expired");
+    return NextResponse.redirect(back, { status: 303 });
+  }
+
+  // Defense in depth: even if the magic link was issued before SSO
+  // enforcement was toggled on, or for a contractor email outside the
+  // SSO domain, refuse to mint a session if the user now belongs to an
+  // SSO-enforced workspace. They must complete the IdP flow instead.
+  const enforced = await findEnforcedSsoForUser({ userId: user.id, email: user.email });
+  if (enforced) {
+    await tryRecordAudit(req, {
+      action: "auth.magic_link_blocked_sso",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: enforced.id,
+      target: { type: "workspace", id: enforced.id, label: enforced.name },
+      status: "denied",
+      meta: { reason: "sso_enforced", stage: "verify" },
+    });
+    const back = new URL("/signin", url.origin);
+    back.searchParams.set("error", "sso_required");
+    back.searchParams.set("workspace", enforced.name);
+    const start = new URL(`/api/auth/sso/${enforced.id}/start`, url.origin);
+    if (redirect && redirect !== "/") start.searchParams.set("redirect", redirect);
+    back.searchParams.set("sso_start", start.pathname + start.search);
     return NextResponse.redirect(back, { status: 303 });
   }
 

@@ -94,6 +94,40 @@ export async function findEnforcedSsoForEmail(email: string): Promise<WorkspaceR
   return null;
 }
 
+/**
+ * Find a workspace that requires this *user* to sign in via SSO. This is
+ * the superset of `findEnforcedSsoForEmail` plus a membership check, so
+ * a contractor invited from a different email domain into an SSO-enforced
+ * workspace is still funneled through the IdP. Also defends against the
+ * race where SSO enforcement is toggled on after a magic link was issued.
+ *
+ * Order of preference for the returned workspace:
+ *   1) one that matches the email domain (the most specific claim);
+ *   2) any workspace the user is an active member of with sso.enforced=true.
+ */
+export async function findEnforcedSsoForUser(opts: {
+  userId?: string | null;
+  email: string;
+}): Promise<WorkspaceRecord | null> {
+  const dom = emailDomain(opts.email);
+  const all = await listWorkspaces();
+  // Pass 1: domain-claim match (most specific).
+  if (dom) {
+    for (const ws of all) {
+      if (ws.sso && ws.sso.enforced && ws.sso.allowedDomain === dom) return ws;
+    }
+  }
+  // Pass 2: existing-membership match for contractors / cross-domain members.
+  if (opts.userId) {
+    const { getActiveMember } = await import("./workspaces.ts");
+    for (const ws of all) {
+      if (!ws.sso || !ws.sso.enforced) continue;
+      if (getActiveMember(ws, opts.userId)) return ws;
+    }
+  }
+  return null;
+}
+
 /** Workspace SSO config as exposed to API consumers (clientSecret redacted). */
 export function publicSsoConfig(ws: WorkspaceRecord) {
   if (!ws.sso) return null;

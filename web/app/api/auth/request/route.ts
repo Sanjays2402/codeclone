@@ -11,8 +11,9 @@ import {
   normalizeEmail,
   issueMagicLink,
   isProdSecret,
+  previewUserIdForEmail,
 } from "../../../../lib/auth";
-import { findEnforcedSsoForEmail } from "../../../../lib/sso";
+import { findEnforcedSsoForUser } from "../../../../lib/sso";
 import { tryRecordAudit } from "../../../../lib/audit";
 import {
   evaluate as evaluateThrottle,
@@ -91,7 +92,10 @@ export async function POST(req: Request) {
   // SSO enforcement: if any workspace has enforced OIDC for this email
   // domain, the user must complete the SSO flow instead of receiving a
   // magic link. We tell the client where to go so the UI can redirect.
-  const enforced = await findEnforcedSsoForEmail(email);
+  const enforced = await findEnforcedSsoForUser({
+    userId: previewUserIdForEmail(email),
+    email,
+  });
   if (enforced) {
     const start = new URL(`/api/auth/sso/${enforced.id}/start`, origin);
     if (redirect) start.searchParams.set("redirect", redirect);

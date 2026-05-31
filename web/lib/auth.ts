@@ -77,6 +77,17 @@ function userIdFromEmail(email: string): string {
   return "u_" + h.slice(0, 12);
 }
 
+/**
+ * Compute the deterministic user id for a (normalized) email without
+ * touching the filesystem or creating a user record. Lets callers check
+ * membership-scoped policies before a sign-in side effect occurs.
+ */
+export function previewUserIdForEmail(email: string): string | null {
+  const norm = normalizeEmail(email);
+  if (!norm) return null;
+  return userIdFromEmail(norm);
+}
+
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }

@@ -149,3 +149,70 @@ test("enforced workspace yields a usable /api/auth/sso/<id>/start URL", async ()
   const none = await sso.findEnforcedSsoForEmail("user@initech.com");
   assert.equal(none, null);
 });
+
+test("findEnforcedSsoForUser blocks contractor from a different email domain who is a member of an SSO-enforced workspace", async () => {
+  // A contractor (paid via gmail) is invited as editor into an
+  // SSO-enforced corp workspace. The corp's SSO claim covers @globex.io,
+  // not gmail. Email-only enforcement would miss this user and let them
+  // sign in via magic link, bypassing the IdP policy entirely. The
+  // user-aware lookup must catch it.
+  const globex = await ws.createWorkspace({
+    name: "Globex",
+    ownerId: "u_globexown01",
+    ownerEmail: "owner@globex.io",
+  });
+  await ws.setSsoConfig(globex, {
+    provider: "oidc",
+    issuer: "https://login.microsoftonline.com/g/v2.0",
+    clientId: "globex-client",
+    clientSecret: "globex-secret",
+    allowedDomain: "globex.io",
+    enforced: true,
+    updatedAt: Date.now(),
+    updatedBy: "u_globexown01",
+  });
+
+  const contractorEmail = "contractor@gmail.com";
+  const issued = await ws.issueInvite({
+    workspace: globex,
+    email: contractorEmail,
+    role: "editor",
+    invitedBy: "u_globexown01",
+    origin: "https://app.example.com",
+  });
+  const contractorId = "u_contractor1";
+  const joined = await ws.acceptInvite({
+    token: issued.token,
+    userId: contractorId,
+    userEmail: contractorEmail,
+  });
+  assert.ok(joined, "contractor must have joined the SSO-enforced workspace");
+
+  // Email-only lookup misses the contractor: they're not in the SSO domain.
+  const byEmailOnly = await sso.findEnforcedSsoForEmail(contractorEmail);
+  assert.equal(byEmailOnly, null);
+
+  // User-aware lookup catches them via membership.
+  const byUser = await sso.findEnforcedSsoForUser({
+    userId: contractorId,
+    email: contractorEmail,
+  });
+  assert.ok(byUser, "contractor must be forced through SSO via membership");
+  assert.equal(byUser!.id, globex.id);
+
+  // Cross-tenant isolation: an unrelated user with no membership and no
+  // domain match must NOT be funneled into Globex's SSO.
+  const stranger = await sso.findEnforcedSsoForUser({
+    userId: "u_stranger001",
+    email: "stranger@elsewhere.net",
+  });
+  assert.equal(stranger, null);
+
+  // Domain match still wins (most-specific) for a user with a globex email.
+  const employee = await sso.findEnforcedSsoForUser({
+    userId: "u_globexown01",
+    email: "owner@globex.io",
+  });
+  assert.ok(employee);
+  assert.equal(employee!.id, globex.id);
+});

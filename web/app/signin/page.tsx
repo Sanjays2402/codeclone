@@ -18,6 +18,8 @@ function errorCopy(code: string | null): string | null {
     return "That account is not allowed for this workspace.";
   if (code === "sso_email_unverified") return "Your provider has not verified that email.";
   if (code === "sso_denied") return "Single sign-on was cancelled.";
+  if (code === "sso_required")
+    return "Your organization requires single sign-on. Continue with SSO below.";
   return "Something went wrong. Try again.";
 }
 
@@ -31,6 +33,27 @@ function SignInInner() {
   const [message, setMessage] = useState<string | null>(initialError);
   const [devLink, setDevLink] = useState<string | null>(null);
   const [ssoHint, setSsoHint] = useState<{ startUrl: string; workspaceName?: string; enforced: boolean } | null>(null);
+
+  // Pre-populate the SSO hint when the verify route redirected us back
+  // with a workspace + start URL because the magic link was blocked
+  // (defense-in-depth: enforcement toggled on between issue and consume,
+  // or user is a member of an SSO-enforced workspace from a different
+  // email domain).
+  useEffect(() => {
+    const err = search.get("error");
+    const start = search.get("sso_start");
+    const ws = search.get("workspace");
+    if (err === "sso_required" && start && start.startsWith("/")) {
+      try {
+        const u = new URL(start, window.location.origin);
+        setSsoHint({
+          startUrl: u.toString(),
+          workspaceName: ws || undefined,
+          enforced: true,
+        });
+      } catch { /* ignore */ }
+    }
+  }, [search]);
 
   useEffect(() => {
     if (initialError) setState("error");
