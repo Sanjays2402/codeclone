@@ -332,6 +332,20 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Owner-configured dual-control (a.k.a. four-eyes / maker-checker)
+   * policy. When an operation appears in `operations`, calls to that
+   * destructive endpoint must carry a one-time `approval_token` minted
+   * by a *different* owner via the approvals API. See lib/dual-control.ts.
+   *
+   * Common procurement requirement (SOC 2 CC6.3, ISO 27001 A.5.3,
+   * NIST 800-53 AC-5): "Separation of duties for high-risk admin actions."
+   */
+  dualControl?: {
+    operations: string[];
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export type ResidencyRegion = "us" | "eu" | "apac" | "global";

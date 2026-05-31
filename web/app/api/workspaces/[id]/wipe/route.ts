@@ -27,6 +27,11 @@ import {
   deleteWorkspace,
   isOnLegalHold,
 } from "../../../../../lib/workspaces";
+import {
+  isDualControlEnabled,
+  consumeApprovalToken,
+  ApprovalError,
+} from "../../../../../lib/dual-control";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -148,6 +153,60 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       meta: { dry_run: true, preview },
     });
     return NextResponse.json({ ok: true, dry_run: true, ...preview });
+  }
+
+  // Dual-control gate. When the workspace has separation-of-duties enabled
+  // for wipe, this destructive call MUST carry a one-time approval_token
+  // minted by a different owner via /api/workspaces/:id/approvals.
+  // We intentionally evaluate this AFTER MFA so an attacker who steals a
+  // session cannot use the dual-control denial as an oracle for whether
+  // MFA passed.
+  if (!dryRun && isDualControlEnabled(ws, "workspace.wipe")) {
+    const token = typeof (body as { approval_token?: unknown }).approval_token === "string"
+      ? ((body as { approval_token: string }).approval_token)
+      : "";
+    try {
+      const approval = await consumeApprovalToken({
+        workspaceId: ws.id,
+        operation: "workspace.wipe",
+        token,
+        payloadForHash: { confirm: ws.slug },
+      });
+      await tryRecordAudit(req, {
+        action: "workspace.approval_consumed",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "approval", id: approval.id, label: approval.operation },
+        meta: {
+          operation: approval.operation,
+          requestedBy: approval.requestedBy,
+          approvedBy: approval.approvedBy,
+        },
+      });
+    } catch (e) {
+      const code = e instanceof ApprovalError ? e.code : "approval_error";
+      await tryRecordAudit(req, {
+        action: "workspace.wipe",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "workspace", id: ws.id, label: ws.name },
+        status: "denied",
+        meta: { reason: "dual_control_required", code },
+      });
+      return NextResponse.json(
+        {
+          error: "approval_required",
+          code,
+          message:
+            "This workspace requires a second owner to approve a wipe. Request one at /api/workspaces/" +
+            ws.id +
+            "/approvals.",
+        },
+        { status: 403 },
+      );
+    }
   }
 
   const result = await deleteWorkspace(ws);

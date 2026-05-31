@@ -10,6 +10,32 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Dual-control approvals (separation of duties / four-eyes) for the most destructive workspace actions. Enterprise procurement teams refuse to sign without this: a single compromised owner credential should not be enough to hand the workspace to an attacker or wipe it. Workspace owners opt in per operation under Settings -> Dual-control approvals; today the gated operations are `workspace.wipe` and `workspace.transfer_ownership`. When the policy is on, the destructive endpoint refuses the call with HTTP 403 `approval_required` unless the body carries a fresh `approval_token` minted by a *different* owner. Tokens are single-use, expire in 30 minutes, are bound by SHA-256 hash to the exact request payload (an approval for "transfer to Alice" cannot be replayed to transfer to Eve), are constant-time compared, and are stored only as their hash so a leak of the approvals.json cannot mint authority. Every state transition (request, approve, cancel, consume, denied) writes to the tamper-evident audit chain. Approvals live under `$CODECLONE_APPROVALS_DIR` (defaults to `$CODECLONE_WORKSPACES_DIR/_approvals/<workspaceId>/`) so cross-tenant queries are not representable at the storage layer. Maps to SOC 2 CC6.3, ISO 27001 A.5.3, NIST 800-53 AC-5. Regression coverage in `web/tests/workspaces-dual-control.test.ts` proves cross-tenant isolation (a token approved in workspace A cannot be consumed in workspace B even when slugs collide), self-approval rejection, payload binding, single-use semantics, and cancel-invalidates-approved-token.
+
+### Try it: require a second owner to approve a workspace wipe
+
+```bash
+# 1. As an owner, turn on dual control for wipe (Settings page or:)
+curl -s -X PUT http://localhost:3000/api/workspaces/$WS_ID/dual-control \
+  -H "cookie: $COOKIE" -H "content-type: application/json" \
+  -d '{"operations":["workspace.wipe"]}'
+
+# 2. Open a request (audited as workspace.approval_requested):
+curl -s -X POST http://localhost:3000/api/workspaces/$WS_ID/approvals \
+  -H "cookie: $COOKIE" -H "content-type: application/json" \
+  -d '{"operation":"workspace.wipe","reason":"Decommissioning per SEC-204"}'
+
+# 3. A *different* owner approves (returns the one-time token):
+curl -s -X POST http://localhost:3000/api/workspaces/$WS_ID/approvals/$APR_ID/approve \
+  -H "cookie: $OTHER_OWNER_COOKIE"
+# => { "approval": { ... }, "token": "...one-shot token..." }
+
+# 4. The wipe call now succeeds; without the token it returns 403 approval_required:
+curl -s -X POST http://localhost:3000/api/workspaces/$WS_ID/wipe \
+  -H "cookie: $COOKIE" -H "content-type: application/json" \
+  -d "{\"confirm\":\"$WS_SLUG\",\"approval_token\":\"$TOKEN\"}"
+```
+
 - Stripe-style Idempotency-Key on `/v1/compare` and `/v1/batch`. Customers retry POSTs on network blips, proxy 502s, and client timeouts; without an idempotency contract those retries double-charge plan quota and fire webhook subscribers twice. Pass `Idempotency-Key: <client-string>` on a write and codeclone records a per-API-key slot with a SHA-256 fingerprint of the canonical request body. A duplicate request with the same key replays the original status code and JSON body (and sets `Idempotent-Replayed: true`) without re-running similarity, without bumping `lastUsedAt`, without charging plan quota, and without fanning out a second webhook. A reuse with a different body returns HTTP 409 `idempotency_conflict` and writes a `v1.compare.idempotency_conflict` (or `v1.batch.idempotency_conflict`) audit row so operators can pivot from the audit log to the offending client. A duplicate that arrives while the first is still inflight returns HTTP 409 `idempotency_in_progress` with `Retry-After: 2`. Slots are scoped per API key (two keys cannot collide on the same idempotency value), expire after 24 hours, and live on the filesystem under `$CODECLONE_IDEMPOTENCY_DIR` (defaults to `runs/_idempotency`). Dry-run probes deliberately do NOT consume an idempotency slot, so wiring `?dry_run=true` in CI cannot lock out a later real call. 22 regression tests in `web/tests/idempotency.test.ts` cover header parsing (length and printable-ASCII bounds), body-hash stability across object key order, fresh/replay/conflict_body/conflict_inflight outcomes, per-key isolation, replay header echo, and source-level wiring on both `/v1/compare` and `/v1/batch` including the dry-run ordering invariant.
 
 ### Try it: retry a compare on flaky wifi without double-charging

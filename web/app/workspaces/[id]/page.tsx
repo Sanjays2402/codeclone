@@ -27,6 +27,7 @@ import { ApiKeyPolicyEditor } from "../../../components/ApiKeyPolicyEditor";
 import { PayloadPolicyEditor } from "../../../components/PayloadPolicyEditor";
 import { SecretScanPolicyEditor } from "../../../components/SecretScanPolicyEditor";
 import { MfaPolicyEditor } from "../../../components/MfaPolicyEditor";
+import { DualControlEditor } from "../../../components/DualControlEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
@@ -78,6 +79,7 @@ const roleIcon = (r: Role) =>
 export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const [ws, setWs] = useState<Workspace | null>(null);
+  const [viewerId, setViewerId] = useState<string>("");
   const [invites, setInvites] = useState<Invite[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
@@ -103,6 +105,13 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
         throw new Error(`HTTP ${r.status}`);
       }
       setWs(j.workspace);
+      try {
+        const meR = await fetch("/api/auth/me", { cache: "no-store" });
+        if (meR.ok) {
+          const meJ = (await meR.json()) as { user?: { id?: string } };
+          if (meJ.user?.id) setViewerId(meJ.user.id);
+        }
+      } catch { /* viewerId is best-effort */ }
       // Invites are visible to owner/editor only.
       if (j.workspace.myRole === "owner" || j.workspace.myRole === "editor") {
         const ri = await fetch(`/api/workspaces/${id}/invites`, { cache: "no-store" });
@@ -460,6 +469,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <SecretScanPolicyEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole === "owner" && (
+        <DualControlEditor workspaceId={ws.id} currentUserId={viewerId} />
       )}
 
       {ws.myRole && (

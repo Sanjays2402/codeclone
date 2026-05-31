@@ -27,6 +27,11 @@ import {
   getActiveMember,
   transferOwnership,
 } from "../../../../../lib/workspaces";
+import {
+  isDualControlEnabled,
+  consumeApprovalToken,
+  ApprovalError,
+} from "../../../../../lib/dual-control";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,6 +91,51 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   try {
+    if (isDualControlEnabled(ws, "workspace.transfer_ownership")) {
+      const token = typeof (body as { approval_token?: unknown }).approval_token === "string"
+        ? ((body as { approval_token: string }).approval_token)
+        : "";
+      try {
+        const approval = await consumeApprovalToken({
+          workspaceId: ws.id,
+          operation: "workspace.transfer_ownership",
+          token,
+          payloadForHash: { toUserId },
+        });
+        await tryRecordAudit(req, {
+          action: "workspace.approval_consumed",
+          actorId: user.id,
+          actorEmail: user.email,
+          workspaceId: ws.id,
+          target: { type: "approval", id: approval.id, label: approval.operation },
+          meta: {
+            operation: approval.operation,
+            requestedBy: approval.requestedBy,
+            approvedBy: approval.approvedBy,
+          },
+        });
+      } catch (e) {
+        const code = e instanceof ApprovalError ? e.code : "approval_error";
+        await tryRecordAudit(req, {
+          action: "workspace.transfer_ownership",
+          actorId: user.id,
+          actorEmail: user.email,
+          workspaceId: ws.id,
+          target: { type: "workspace", id: ws.id, label: ws.name },
+          status: "denied",
+          meta: { reason: "dual_control_required", code, toUserId },
+        });
+        return NextResponse.json(
+          {
+            error: "approval_required",
+            code,
+            message:
+              "This workspace requires a second owner to approve an ownership transfer.",
+          },
+          { status: 403 },
+        );
+      }
+    }
     const beforeOwner = user.id;
     await transferOwnership(ws, user.id, toUserId);
     await tryRecordAudit(req, {
