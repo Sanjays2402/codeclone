@@ -91,6 +91,25 @@ npm run dev          # http://localhost:3000, expects serve on :7461
 
 Set `CODECLONE_SERVE_URL` if serve is elsewhere.
 
+### Try it: interactive compare page
+
+The dashboard ships a `/compare` page that takes two code snippets, a language
+picker, and reports three real similarity scores (5-gram shingle Jaccard,
+token Jaccard, and containment) plus a side-by-side diff. Three preloaded
+samples (renamed-variable near-duplicate, restyled algorithm, distinct
+functions with shared vocabulary) let a first-time visitor see results in one
+click. The same JSON is available over HTTP:
+
+```bash
+curl -s http://localhost:3000/api/compare \
+  -H 'content-type: application/json' \
+  -d '{"a":"def add(a,b):\n  return a+b","b":"def sum(x,y):\n  return x+y","language":"python"}'
+```
+
+Scoring uses the same whitespace normalization and 5-character shingling the
+offline dedupe pipeline uses in `packages/dataset/codeclone_dataset/dedupe.py`,
+so dashboard scores match what the preprocessor sees.
+
 ## Configuration
 
 From `.env.example`:
