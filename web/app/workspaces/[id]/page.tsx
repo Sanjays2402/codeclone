@@ -28,6 +28,7 @@ import { MfaPolicyEditor } from "../../../components/MfaPolicyEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
+import { SupportAccessEditor } from "../../../components/SupportAccessEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
 import { ScimEditor } from "../../../components/ScimEditor";
@@ -463,6 +464,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <LegalHoldEditor workspaceId={ws.id} workspaceSlug={ws.slug} />
+      )}
+
+      {ws.myRole && (
+        <SupportAccessEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

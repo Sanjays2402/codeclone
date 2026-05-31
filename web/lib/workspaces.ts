@@ -41,18 +41,47 @@ export interface Member {
    * but does not auto-restore revoked sessions or keys; users must sign back
    * in and owners may rotate keys explicitly.
    */
-  status?: "active" | "suspended";
+  status?: "active" | "suspended" | "support";
   suspendedAt?: number;
   suspendedBy?: string; // userId of the owner who suspended
   suspendedReason?: string;
+  /**
+   * Just-in-time support access fields. Present only when `status === "support"`.
+   * The member is treated as active by `isMemberActive` while `now < expiresAt`,
+   * and as removed (effectively no-member) once expired. `role` is always
+   * "viewer" for support grants so they can read but never invite or manage.
+   * Each grant carries a mandatory `grantReason` and an immutable `grantedBy`
+   * for the audit trail. Owners can revoke at any time, which removes the row.
+   */
+  expiresAt?: number;
+  grantedAt?: number;
+  grantedBy?: string;
+  grantReason?: string;
+  grantCaseRef?: string | null;
 }
 
 export function isMemberSuspended(m: Member | null | undefined): boolean {
   return !!m && m.status === "suspended";
 }
 
-export function isMemberActive(m: Member | null | undefined): boolean {
-  return !!m && m.status !== "suspended";
+export function isSupportMember(m: Member | null | undefined): boolean {
+  return !!m && m.status === "support";
+}
+
+export function isSupportGrantExpired(
+  m: Member | null | undefined,
+  now: number = Date.now(),
+): boolean {
+  return !!m && m.status === "support" && (typeof m.expiresAt !== "number" || now >= m.expiresAt);
+}
+
+export function isMemberActive(m: Member | null | undefined, now: number = Date.now()): boolean {
+  if (!m) return false;
+  if (m.status === "suspended") return false;
+  if (m.status === "support") {
+    return typeof m.expiresAt === "number" && now < m.expiresAt;
+  }
+  return true;
 }
 
 export interface WorkspaceRecord {
@@ -1094,6 +1123,7 @@ export async function revokeInvite(inviteId: string): Promise<boolean> {
 export async function setMemberRole(ws: WorkspaceRecord, userId: string, role: Role): Promise<WorkspaceRecord> {
   const m = ws.members.find((x) => x.userId === userId);
   if (!m) throw new Error("not_member");
+  if (m.status === "support") throw new Error("support_grant_immutable");
   if (m.role === "owner" && role !== "owner") {
     // Cannot demote the only owner.
     const owners = ws.members.filter((x) => x.role === "owner").length;
@@ -1127,6 +1157,7 @@ export async function transferOwnership(
   if (!from || from.role !== "owner") throw new Error("not_owner");
   const to = ws.members.find((m) => m.userId === toUserId);
   if (!to) throw new Error("not_member");
+  if (to.status === "support") throw new Error("support_grant_immutable");
   to.role = "owner";
   from.role = "editor";
   await writeJson(workspacePath(ws.id), ws);
@@ -1152,6 +1183,7 @@ export async function suspendMember(
 ): Promise<WorkspaceRecord> {
   const m = ws.members.find((x) => x.userId === userId);
   if (!m) throw new Error("not_member");
+  if (m.status === "support") throw new Error("support_grant_immutable");
   if (m.status === "suspended") throw new Error("already_suspended");
   if (m.role === "owner") {
     const activeOwners = ws.members.filter(
@@ -1210,6 +1242,170 @@ function safeEq(a: string, b: string): boolean {
   const bb = Buffer.from(b);
   if (ab.length !== bb.length) return false;
   return crypto.timingSafeEqual(ab, bb);
+}
+
+// ---------------------------------------------------------------------------
+// Just-in-time support access grants.
+//
+// Procurement requirement: customers want a documented, time-bounded path
+// for our own support staff to enter their workspace (or for the customer
+// to invite a contractor) without that engineer becoming a permanent member.
+// Each grant carries a mandatory reason and optional case reference, is
+// capped at 24h, and is auditable through both placement and revocation.
+//
+// Implementation: a support grant is just a Member row with
+// `status: "support"`, `role: "viewer"`, and an `expiresAt`. The existing
+// access gate `getActiveMember` consults `isMemberActive` which already
+// honours the expiry, so support access falls off automatically with no
+// background job. Owners can revoke at any time via `revokeSupportGrant`.
+// ---------------------------------------------------------------------------
+
+export const SUPPORT_GRANT_MIN_MINUTES = 15;
+export const SUPPORT_GRANT_MAX_MINUTES = 24 * 60; // 24 hours, hard cap.
+export const SUPPORT_GRANT_DEFAULT_MINUTES = 60;
+
+export interface SupportGrantInput {
+  email: string;
+  minutes: number;
+  reason: string;
+  caseRef?: string | null;
+}
+
+export interface PublicSupportGrant {
+  userId: string;
+  email: string;
+  grantedAt: number;
+  grantedBy: string;
+  expiresAt: number;
+  reason: string;
+  caseRef: string | null;
+  expired: boolean;
+  remainingMs: number;
+}
+
+const SUPPORT_CASE_REF_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+export function sanitizeSupportGrantInput(input: unknown): SupportGrantInput | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = input as Record<string, unknown>;
+  const emailRaw = typeof raw.email === "string" ? raw.email : "";
+  const reasonRaw = typeof raw.reason === "string" ? raw.reason.trim() : "";
+  const minutesRaw = typeof raw.minutes === "number" ? raw.minutes : Number.NaN;
+  if (!emailRaw || !reasonRaw) return null;
+  if (reasonRaw.length < 3 || reasonRaw.length > 500) return null;
+  if (!Number.isFinite(minutesRaw)) return null;
+  const minutes = Math.floor(minutesRaw);
+  if (minutes < SUPPORT_GRANT_MIN_MINUTES) return null;
+  if (minutes > SUPPORT_GRANT_MAX_MINUTES) return null;
+  let caseRef: string | null = null;
+  if (raw.caseRef != null && raw.caseRef !== "") {
+    if (typeof raw.caseRef !== "string") return null;
+    const c = raw.caseRef.trim();
+    if (c && !SUPPORT_CASE_REF_RE.test(c)) return null;
+    caseRef = c || null;
+  }
+  return { email: emailRaw, minutes, reason: reasonRaw, caseRef };
+}
+
+export function publicSupportGrant(
+  m: Member,
+  now: number = Date.now(),
+): PublicSupportGrant | null {
+  if (m.status !== "support" || typeof m.expiresAt !== "number") return null;
+  const remainingMs = Math.max(0, m.expiresAt - now);
+  return {
+    userId: m.userId,
+    email: m.email,
+    grantedAt: m.grantedAt ?? m.joinedAt,
+    grantedBy: m.grantedBy ?? "",
+    expiresAt: m.expiresAt,
+    reason: m.grantReason ?? "",
+    caseRef: m.grantCaseRef ?? null,
+    expired: remainingMs <= 0,
+    remainingMs,
+  };
+}
+
+export function listSupportGrants(
+  ws: WorkspaceRecord,
+  now: number = Date.now(),
+): PublicSupportGrant[] {
+  return ws.members
+    .filter((m) => m.status === "support")
+    .map((m) => publicSupportGrant(m, now))
+    .filter((g): g is PublicSupportGrant => g !== null)
+    .sort((a, b) => b.grantedAt - a.grantedAt);
+}
+
+export function findActiveSupportGrant(
+  ws: WorkspaceRecord,
+  userId: string,
+  now: number = Date.now(),
+): Member | null {
+  const m = ws.members.find((x) => x.userId === userId && x.status === "support");
+  if (!m) return null;
+  if (typeof m.expiresAt !== "number" || now >= m.expiresAt) return null;
+  return m;
+}
+
+/**
+ * Create or replace a support grant for the given resolved user.
+ *
+ * Rejects when the userId is already a permanent member: we never silently
+ * downgrade a real teammate into a support row. Replaces an existing
+ * support grant for the same user (the caller may use this to extend or
+ * shorten the window) and signals that via `replaced=true` so the audit
+ * entry can record both before and after.
+ */
+export async function createSupportGrant(
+  ws: WorkspaceRecord,
+  resolved: { userId: string; email: string },
+  input: SupportGrantInput,
+  grantedBy: string,
+  now: number = Date.now(),
+): Promise<{ ws: WorkspaceRecord; member: Member; replaced: boolean }> {
+  const existing = ws.members.find((m) => m.userId === resolved.userId);
+  if (existing && existing.status !== "support") {
+    throw new Error("already_member");
+  }
+  const expiresAt = now + input.minutes * 60 * 1000;
+  const next: Member = {
+    userId: resolved.userId,
+    email: resolved.email,
+    role: "viewer",
+    joinedAt: existing?.joinedAt ?? now,
+    status: "support",
+    expiresAt,
+    grantedAt: now,
+    grantedBy,
+    grantReason: input.reason,
+    grantCaseRef: input.caseRef ?? null,
+  };
+  if (existing) {
+    ws.members = ws.members.map((m) => (m.userId === resolved.userId ? next : m));
+  } else {
+    ws.members = [...ws.members, next];
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  await addToMemberIndex(resolved.userId, ws.id);
+  return { ws, member: next, replaced: !!existing };
+}
+
+/**
+ * Revoke a support grant. Refuses to touch permanent members so an owner
+ * cannot accidentally remove a real teammate via the support console.
+ */
+export async function revokeSupportGrant(
+  ws: WorkspaceRecord,
+  userId: string,
+): Promise<{ ws: WorkspaceRecord; removed: Member | null }> {
+  const m = ws.members.find((x) => x.userId === userId);
+  if (!m) return { ws, removed: null };
+  if (m.status !== "support") throw new Error("not_support_grant");
+  ws.members = ws.members.filter((x) => x.userId !== userId);
+  await writeJson(workspacePath(ws.id), ws);
+  await removeFromMemberIndex(userId, ws.id);
+  return { ws, removed: m };
 }
 
 /**
