@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { listAudit, toCsv, tryRecordAudit, MAX_LIST } from "../../../lib/audit";
-import { listWorkspacesForUser, getWorkspace, getMember } from "../../../lib/workspaces";
+import { listWorkspacesForUser, getWorkspace, getMember, retentionCutoffMs } from "../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +54,16 @@ export async function GET(req: Request) {
   const memberWorkspaces = await listWorkspacesForUser(user.id);
   const allowedWorkspaceIds = new Set(memberWorkspaces.map((w) => w.id));
 
+  // Build the per-workspace retention cutoff map. listAudit applies this
+  // to drop entries older than the owner-configured retention window for
+  // each workspace the caller can see. Workspaces without a policy are
+  // omitted so their entries are returned unfiltered.
+  const retentionCutoffByWorkspace = new Map<string, number>();
+  for (const w of memberWorkspaces) {
+    const cutoff = retentionCutoffMs(w);
+    if (cutoff != null) retentionCutoffByWorkspace.set(w.id, cutoff);
+  }
+
   const requestedWorkspaceId = sp.get("workspaceId") ?? undefined;
   if (requestedWorkspaceId) {
     const ws = await getWorkspace(requestedWorkspaceId);
@@ -80,6 +90,7 @@ export async function GET(req: Request) {
     workspaceId: requestedWorkspaceId,
     allowedWorkspaceIds,
     selfActorId: user.id,
+    retentionCutoffByWorkspace,
     action: sp.get("action") ?? undefined,
     targetType: sp.get("targetType") ?? undefined,
     targetId: sp.get("targetId") ?? undefined,

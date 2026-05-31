@@ -405,6 +405,15 @@ export interface ListAuditOptions {
   allowedWorkspaceIds?: Set<string>;
   /** Used together with allowedWorkspaceIds to admit a user's own null-workspace events. */
   selfActorId?: string;
+  /**
+   * Per-workspace retention cutoff (ms epoch). When set, any entry whose
+   * `ts` is older than the cutoff for its `workspaceId` is dropped from the
+   * results. The underlying JSONL files are not modified so the audit
+   * hash chain stays verifiable; this is the access-layer enforcement of
+   * the owner-configured workspace retention policy. Entries with no
+   * `workspaceId` are never affected by this filter.
+   */
+  retentionCutoffByWorkspace?: Map<string, number>;
   action?: string; // exact match or prefix with trailing "."
   targetType?: string;
   targetId?: string;
@@ -448,6 +457,10 @@ export async function listAudit(opts: ListAuditOptions = {}): Promise<AuditEntry
       }
       if (opts.actorId && entry.actorId !== opts.actorId) continue;
       if (opts.workspaceId && entry.workspaceId !== opts.workspaceId) continue;
+      if (opts.retentionCutoffByWorkspace && entry.workspaceId) {
+        const cutoff = opts.retentionCutoffByWorkspace.get(entry.workspaceId);
+        if (cutoff != null && entry.ts < cutoff) continue;
+      }
       if (opts.allowedWorkspaceIds) {
         if (entry.workspaceId) {
           if (!opts.allowedWorkspaceIds.has(entry.workspaceId)) continue;
@@ -523,4 +536,75 @@ export async function tryRecordAudit(
   } catch {
     // Audit failure must not break the request. Errors are swallowed.
   }
+}
+
+/**
+ * Preview how many audit entries for a single workspace fall outside the
+ * given retention cutoff. Scans the on-disk JSONL files but does not
+ * modify them. Used by the workspace retention dry-run endpoint.
+ *
+ * Returns counts, the oldest/newest affected entry timestamps, and the
+ * set of day files that contain at least one affected entry.
+ */
+export interface RetentionPreview {
+  workspaceId: string;
+  cutoffMs: number;
+  scannedFiles: number;
+  scannedEntries: number;
+  affectedEntries: number;
+  affectedFiles: string[];
+  oldestAffectedTs: number | null;
+  newestAffectedTs: number | null;
+}
+
+export async function previewWorkspaceRetention(
+  workspaceId: string,
+  cutoffMs: number,
+): Promise<RetentionPreview> {
+  await ensureDir(AUDIT_DIR);
+  let files: string[] = [];
+  try {
+    files = (await fs.readdir(AUDIT_DIR))
+      .filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+      .sort();
+  } catch {
+    /* empty dir */
+  }
+  const out: RetentionPreview = {
+    workspaceId,
+    cutoffMs,
+    scannedFiles: 0,
+    scannedEntries: 0,
+    affectedEntries: 0,
+    affectedFiles: [],
+    oldestAffectedTs: null,
+    newestAffectedTs: null,
+  };
+  for (const f of files) {
+    out.scannedFiles++;
+    const raw = await fs.readFile(path.join(AUDIT_DIR, f), "utf8").catch(() => "");
+    const lines = raw.split("\n").filter(Boolean);
+    let fileAffected = false;
+    for (const line of lines) {
+      out.scannedEntries++;
+      let entry: AuditEntry;
+      try {
+        entry = JSON.parse(line) as AuditEntry;
+      } catch {
+        continue;
+      }
+      if (entry.workspaceId !== workspaceId) continue;
+      if (entry.ts >= cutoffMs) continue;
+      out.affectedEntries++;
+      fileAffected = true;
+      if (out.oldestAffectedTs == null || entry.ts < out.oldestAffectedTs) {
+        out.oldestAffectedTs = entry.ts;
+      }
+      if (out.newestAffectedTs == null || entry.ts > out.newestAffectedTs) {
+        out.newestAffectedTs = entry.ts;
+      }
+    }
+    if (fileAffected) out.affectedFiles.push(f);
+  }
+  return out;
 }

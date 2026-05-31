@@ -102,6 +102,20 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Owner-configured audit log retention policy. When `auditDays` is set
+   * and > 0, audit entries scoped to this workspace that are older than
+   * `auditDays` are hidden from every read path (listAudit, CSV export,
+   * the /audit UI). The underlying hash-chained JSONL files are not
+   * physically rewritten so the tamper-evident chain remains intact and
+   * verifiable; this is access-layer enforcement that satisfies GDPR
+   * data-minimisation while keeping SOC2 immutability. Owner only.
+   */
+  retention?: {
+    auditDays: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export interface InviteRecord {
@@ -288,6 +302,53 @@ export async function setSsoConfig(
   ws.sso = cfg ?? null;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
+}
+
+// Bounds for workspace audit retention. 0 means "keep forever / no
+// retention limit from this workspace".
+export const RETENTION_BOUNDS = {
+  auditDays: { min: 1, max: 3650 },
+} as const;
+
+export function sanitizeRetention(
+  input: unknown,
+): { auditDays: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  const raw = o.auditDays;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  const n = Math.floor(raw);
+  if (n <= 0) return { auditDays: 0 };
+  const { min, max } = RETENTION_BOUNDS.auditDays;
+  return { auditDays: Math.min(Math.max(n, min), max) };
+}
+
+export async function setRetention(
+  ws: WorkspaceRecord,
+  policy: { auditDays: number } | null,
+  updatedBy: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || policy.auditDays === 0) {
+    ws.retention = null;
+  } else {
+    ws.retention = {
+      auditDays: policy.auditDays,
+      updatedAt: Date.now(),
+      updatedBy,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Cutoff timestamp (ms) below which audit entries for this workspace must
+ * be hidden. Returns null if no retention is configured.
+ */
+export function retentionCutoffMs(ws: WorkspaceRecord, now = Date.now()): number | null {
+  const days = ws.retention?.auditDays;
+  if (!days || days <= 0) return null;
+  return now - days * 86400 * 1000;
 }
 
 // Bounds for workspace session policy values. 0 means "unlimited / no
