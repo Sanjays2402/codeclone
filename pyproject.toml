@@ -64,7 +64,7 @@ cuda = [
   "accelerate>=0.31.0",
   "bitsandbytes>=0.43.0; sys_platform != 'darwin'",
   "trl>=1.5.1",
-  "safetensors>=0.4.3",
+  "safetensors>=0.7.0",
 ]
 dev = [
   "pytest>=8.2.0",
