@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { wipeAll } from "../../../../lib/settings";
+import { tryRecordAudit } from "../../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../../lib/auth";
 
 export const dynamic = "force-dynamic";
 
@@ -20,6 +22,14 @@ export async function POST(req: NextRequest) {
   }
   try {
     const result = await wipeAll();
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    await tryRecordAudit(req, {
+      action: "settings.wipe",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "settings" },
+      meta: result as unknown as Record<string, unknown>,
+    });
     return NextResponse.json({ ok: true, ...result });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

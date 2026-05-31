@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { tryRecordAudit } from "../../../lib/audit";
 import {
   createWorkspace,
   listWorkspacesForUser,
@@ -40,6 +41,14 @@ export async function POST(req: Request) {
   }
   try {
     const ws = await createWorkspace({ name, ownerId: user.id, ownerEmail: user.email });
+    await tryRecordAudit(req, {
+      action: "workspace.create",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      diff: { after: { name: ws.name, slug: ws.slug } },
+    });
     return NextResponse.json({ workspace: ws }, { status: 201 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { tryRecordAudit } from "../../../lib/audit";
 import {
   createSnippet,
   listSnippets,
@@ -47,6 +48,13 @@ export async function POST(req: Request) {
       language: typeof b.language === "string" ? b.language : "",
       body: typeof b.body === "string" ? b.body : "",
       tags: Array.isArray(b.tags) ? (b.tags as unknown[]) as string[] : [],
+    });
+    await tryRecordAudit(req, {
+      action: "snippet.create",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "snippet", id: rec.id, label: rec.title },
+      diff: { after: { title: rec.title, language: rec.language, tags: rec.tags } },
     });
     return NextResponse.json({ snippet: rec }, { status: 201 });
   } catch (err) {

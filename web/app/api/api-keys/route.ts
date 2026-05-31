@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createKey, listKeys } from "../../../lib/api-keys";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { tryRecordAudit } from "../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,6 +45,13 @@ export async function POST(req: Request) {
       userId: user.id,
       expiresInDays: body.expiresInDays,
       scopes: body.scopes,
+    });
+    await tryRecordAudit(req, {
+      action: "api_key.create",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "api_key", id: record.id, label: record.label },
+      diff: { after: { label: record.label, scopes: record.scopes, expiresAt: record.expiresAt } },
     });
     return NextResponse.json({ key: record, plaintext }, { status: 201 });
   } catch (e) {

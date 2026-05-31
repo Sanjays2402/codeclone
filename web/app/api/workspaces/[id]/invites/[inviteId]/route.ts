@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../../../lib/auth";
+import { tryRecordAudit } from "../../../../../../lib/audit";
 import { getWorkspace, canInvite, revokeInvite } from "../../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -17,5 +18,12 @@ export async function DELETE(
   if (!canInvite(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const ok = await revokeInvite(inviteId);
   if (!ok) return NextResponse.json({ error: "not_found_or_consumed" }, { status: 404 });
+  await tryRecordAudit(req, {
+    action: "workspace.invite_revoke",
+    actorId: user.id,
+    actorEmail: user.email,
+    workspaceId: ws.id,
+    target: { type: "workspace_invite", id: inviteId },
+  });
   return NextResponse.json({ ok: true });
 }

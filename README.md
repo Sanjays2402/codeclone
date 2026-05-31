@@ -34,6 +34,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Collections at `/collections`: group any number of saved `/r/<id>` comparisons under a single title and ship one public URL (`/c/<id>`) you can hand a teammate. Browse with live search (title + description), sort by last updated, created, title, or item count (asc/desc), and paginate through 20 at a time. Build a collection from the dropdown on any share page, or paste `/r/<id>` URLs straight into the manage view. Rename, edit description, remove items, or delete the whole collection inline. Public view is read-only, deleted shares are flagged inline (no broken links), and everything persists as one JSON per collection at `CODECLONE_COLLECTIONS_DIR` (defaults to `../collections`). The list endpoint accepts `?q=`, `?sort=updated|created|title|count`, `?dir=asc|desc`, `?limit=`, `?offset=`.
 - Team workspaces at `/workspaces`: create a workspace, invite teammates by email with a role of `editor` or `viewer`, and accept via a signed `/workspaces/invite/<token>` link. Owners change roles and remove members; editors can also send invites; viewers are read-only. Invite tokens are single-use, expire in 14 days, and only the SHA-256 hash is persisted. Workspaces, the userId->workspace index, and pending invites live under `CODECLONE_WORKSPACES_DIR` (defaults to `../workspaces`). Sole-owner demotion and self-removal of the last owner are refused.
 - Mobile-responsive shell: at 375px the dashboard collapses its 18 nav items behind an accessible hamburger that opens a left-side drawer with route-aware highlighting, focus-trap close on Escape, body-scroll lock, and a backdrop tap-to-dismiss. The top status strip becomes horizontally scrollable, the page gutter tightens from 28px to 16px, and the desktop nav re-emerges at `lg` (1024px+). Every existing page (compare, history, batch, api-keys, webhooks, usage, workspaces, settings) is now reachable on a phone without horizontal scroll on the chrome.
+- Interactive API reference at `/docs`: every public `/v1` endpoint (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) is documented in-product with method, path, required scope, parameter table, copy-paste curl example, and a sample JSON response. The page also includes a **Try it** panel that posts the request straight from the browser using your pasted API key, shows the HTTP status, round-trip latency, and pretty-printed response body, and warns you when none of your saved keys carry the scope an endpoint requires. The spec is driven from a single typed module (`web/lib/api-spec.ts`) that the test suite validates against the real route files, so the docs cannot drift from the implementation.
 
 ### Try it: download a PDF report of a saved comparison
 
@@ -43,6 +44,18 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
    curl -OJ http://localhost:3000/api/share/<id>/pdf
    ```
 3. Open the resulting `codeclone-<id>.pdf` to see the full clone-analysis report.
+
+### Try it: explore the v1 API from the dashboard
+
+1. `cd web && npm install && npm run dev`, sign in at [http://localhost:3000/signin](http://localhost:3000/signin), and create a key at [http://localhost:3000/api-keys](http://localhost:3000/api-keys) with the `compare:write` scope.
+2. Open [http://localhost:3000/docs](http://localhost:3000/docs), paste the `cc_live_...` value into the API key field (it stays in your browser only), expand `POST /v1/compare`, edit the sample body if you like, and click **send request** to see status, latency, and the live JSON response.
+3. Or skip the UI and run it straight from a terminal:
+   ```bash
+   curl -sS http://localhost:3000/v1/compare \
+     -H "Authorization: Bearer $CODECLONE_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"a":"def add(a,b):\n    return a+b\n","b":"def sum_two(x,y):\n    return x+y\n","language":"python"}'
+   ```
 
 ### Try it: pull your saved comparisons over the API
 

@@ -4,6 +4,8 @@ import {
   expandCollection,
   updateCollection,
 } from "../../../../lib/collections";
+import { tryRecordAudit } from "../../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -54,6 +56,14 @@ export async function PATCH(
     if (!rec) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    await tryRecordAudit(req, {
+      action: "collection.update",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "collection", id },
+      diff: { after: { title: (rec as { title?: string }).title } },
+    });
     return NextResponse.json(rec);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "failed to update";
@@ -62,7 +72,7 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
@@ -70,5 +80,12 @@ export async function DELETE(
   if (!ok) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "collection.delete",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "collection", id },
+  });
   return NextResponse.json({ ok: true });
 }

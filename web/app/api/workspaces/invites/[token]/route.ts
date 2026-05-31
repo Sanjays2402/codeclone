@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../../lib/auth";
 import { acceptInvite, lookupInvite } from "../../../../../lib/workspaces";
+import { tryRecordAudit } from "../../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,5 +30,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await acceptInvite({ token, userId: user.id, userEmail: user.email });
   if (!ws) return NextResponse.json({ error: "invalid_or_email_mismatch" }, { status: 400 });
+  await tryRecordAudit(req, {
+    action: "workspace.invite_accept",
+    actorId: user.id,
+    actorEmail: user.email,
+    workspaceId: ws.id,
+    target: { type: "workspace", id: ws.id, label: ws.name },
+  });
   return NextResponse.json({ workspaceId: ws.id });
 }

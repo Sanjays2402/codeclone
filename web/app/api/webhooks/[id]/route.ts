@@ -5,6 +5,8 @@ import {
   loadWebhook,
   summarize,
 } from "../../../../lib/webhooks";
+import { tryRecordAudit } from "../../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,12 +36,26 @@ export async function PATCH(req: Request, ctx: Ctx) {
   const ok = await setDisabled(id, body.disabled);
   if (!ok) return NextResponse.json({ error: "Not found." }, { status: 404 });
   const rec = await loadWebhook(id);
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: body.disabled ? "webhook.disable" : "webhook.enable",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "webhook", id },
+  });
   return NextResponse.json(rec ? summarize(rec) : { ok: true });
 }
 
-export async function DELETE(_req: Request, ctx: Ctx) {
+export async function DELETE(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;
   const ok = await deleteWebhook(id);
   if (!ok) return NextResponse.json({ error: "Not found." }, { status: 404 });
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "webhook.delete",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "webhook", id },
+  });
   return NextResponse.json({ ok: true });
 }

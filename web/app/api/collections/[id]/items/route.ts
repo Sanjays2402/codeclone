@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { addItem, removeItem } from "../../../../../lib/collections";
+import { tryRecordAudit } from "../../../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +35,13 @@ export async function POST(
     if (!rec) {
       return NextResponse.json({ error: "not found" }, { status: 404 });
     }
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    await tryRecordAudit(req, {
+      action: "collection.item_add",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "collection", id, label: shareId },
+    });
     return NextResponse.json(rec);
   } catch (err) {
     const msg = err instanceof Error ? err.message : "failed to add";
@@ -58,5 +67,12 @@ export async function DELETE(
   if (!rec) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "collection.item_remove",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "collection", id, label: shareId },
+  });
   return NextResponse.json(rec);
 }

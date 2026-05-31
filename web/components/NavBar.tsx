@@ -22,6 +22,7 @@ const items = [
   { href: "/datasets", label: "datasets" },
   { href: "/models",   label: "models" },
   { href: "/api-keys", label: "api keys" },
+  { href: "/docs",     label: "api docs" },
   { href: "/usage",    label: "usage" },
   { href: "/webhooks", label: "webhooks" },
   { href: "/notifications", label: "inbox" },

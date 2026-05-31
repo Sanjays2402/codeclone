@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { deleteKey, loadKey, revokeKey } from "../../../../lib/api-keys";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,6 +40,12 @@ export async function PATCH(
   const { id } = await ctx.params;
   const ok = await revokeKey(id, user.id);
   if (!ok) return notFound();
+  await tryRecordAudit(req, {
+    action: "api_key.revoke",
+    actorId: user.id,
+    actorEmail: user.email,
+    target: { type: "api_key", id },
+  });
   return NextResponse.json({ id, revoked: true });
 }
 
@@ -51,5 +58,11 @@ export async function DELETE(
   const { id } = await ctx.params;
   const ok = await deleteKey(id, user.id);
   if (!ok) return notFound();
+  await tryRecordAudit(req, {
+    action: "api_key.delete",
+    actorId: user.id,
+    actorEmail: user.email,
+    target: { type: "api_key", id },
+  });
   return NextResponse.json({ id, deleted: true });
 }

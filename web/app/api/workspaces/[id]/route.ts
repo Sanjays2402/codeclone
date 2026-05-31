@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { tryRecordAudit } from "../../../../lib/audit";
 import {
   getWorkspace,
   getMember,
@@ -48,7 +49,17 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  if (!canManage(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canManage(ws, user.id)) {
+    await tryRecordAudit(req, {
+      action: "workspace.update",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      status: "denied",
+    });
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   let body: PatchBody = {};
   try { body = await req.json(); } catch { /* empty */ }
   try {
@@ -62,6 +73,14 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       }
       await setMemberRole(ws, body.member.userId, role as Role);
     }
+    await tryRecordAudit(req, {
+      action: "workspace.update",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      diff: { after: { name: ws.name, member: body.member ?? undefined } },
+    });
     return NextResponse.json({ workspace: publicWorkspace(ws, user.id) });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -82,15 +101,39 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
   if (!targetUserId || targetUserId === user.id) {
     try {
       await removeMember(ws, user.id);
+      await tryRecordAudit(req, {
+        action: "workspace.member_leave",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "workspace_member", id: user.id, label: user.email },
+      });
       return NextResponse.json({ ok: true });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       return NextResponse.json({ error: msg }, { status: 400 });
     }
   }
-  if (!canManage(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canManage(ws, user.id)) {
+    await tryRecordAudit(req, {
+      action: "workspace.member_remove",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace_member", id: targetUserId },
+      status: "denied",
+    });
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   try {
     await removeMember(ws, targetUserId);
+    await tryRecordAudit(req, {
+      action: "workspace.member_remove",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace_member", id: targetUserId },
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

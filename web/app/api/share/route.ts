@@ -3,6 +3,7 @@ import { createShare, listSharesPage, MAX_SNIPPET_BYTES } from "../../../lib/sha
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { emitNotification } from "../../../lib/notifications";
+import { tryRecordAudit } from "../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -142,6 +143,13 @@ export async function POST(req: Request) {
         meta: { language, shingleJaccard: scores.shingleJaccard },
       });
     }
+    await tryRecordAudit(req, {
+      action: "share.create",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "share", id: rec.id, label: typeof raw.title === "string" ? raw.title : undefined },
+      diff: { after: { language, bytes: { a: a.length, b: b.length }, score: scores.shingleJaccard } },
+    });
     return NextResponse.json({ id: rec.id, url: `/r/${rec.id}` }, { status: 201 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

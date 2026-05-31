@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { tryRecordAudit } from "../../../../lib/audit";
 import {
   loadSnippet,
   updateSnippet,
@@ -44,6 +45,7 @@ export async function PATCH(
   }
   const b = (body ?? {}) as Record<string, unknown>;
   try {
+    const before = await loadSnippet(user.id, id);
     const rec = await updateSnippet(user.id, id, {
       title: typeof b.title === "string" ? b.title : undefined,
       language: typeof b.language === "string" ? b.language : undefined,
@@ -51,6 +53,16 @@ export async function PATCH(
       tags: Array.isArray(b.tags) ? (b.tags as string[]) : undefined,
     });
     if (!rec) return NextResponse.json({ error: "not found" }, { status: 404 });
+    await tryRecordAudit(req, {
+      action: "snippet.update",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "snippet", id: rec.id, label: rec.title },
+      diff: {
+        before: before ? { title: before.title, language: before.language, tags: before.tags } : null,
+        after: { title: rec.title, language: rec.language, tags: rec.tags },
+      },
+    });
     return NextResponse.json({ snippet: rec });
   } catch (err) {
     if (err instanceof SnippetError) {
@@ -69,7 +81,15 @@ export async function DELETE(
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const { id } = await ctx.params;
+  const before = await loadSnippet(user.id, id);
   const ok = await deleteSnippet(user.id, id);
   if (!ok) return NextResponse.json({ error: "not found" }, { status: 404 });
+  await tryRecordAudit(req, {
+    action: "snippet.delete",
+    actorId: user.id,
+    actorEmail: user.email,
+    target: { type: "snippet", id, label: before?.title },
+    diff: { before: before ? { title: before.title, language: before.language } : null },
+  });
   return NextResponse.json({ ok: true });
 }

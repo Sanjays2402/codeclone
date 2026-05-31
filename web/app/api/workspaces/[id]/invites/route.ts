@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader, normalizeEmail } from "../../../../../lib/auth";
+import { tryRecordAudit } from "../../../../../lib/audit";
 import {
   getWorkspace,
   canInvite,
@@ -33,7 +34,17 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  if (!canInvite(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!canInvite(ws, user.id)) {
+    await tryRecordAudit(req, {
+      action: "workspace.invite_create",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace", id: ws.id, label: ws.name },
+      status: "denied",
+    });
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
 
   let body: CreateInviteBody = {};
   try { body = await req.json(); } catch { /* empty */ }
@@ -51,6 +62,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       role,
       invitedBy: user.id,
       origin,
+    });
+    await tryRecordAudit(req, {
+      action: "workspace.invite_create",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: ws.id,
+      target: { type: "workspace_invite", id: issued.record.id, label: email },
+      diff: { after: { email, role } },
     });
     return NextResponse.json(
       {

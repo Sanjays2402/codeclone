@@ -5,6 +5,8 @@ import {
   parseSortKey,
   parseSortDir,
 } from "../../../lib/collections";
+import { tryRecordAudit } from "../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -55,6 +57,14 @@ export async function POST(req: Request) {
       shareIds: Array.isArray(input.shareIds)
         ? (input.shareIds as string[])
         : undefined,
+    });
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    await tryRecordAudit(req, {
+      action: "collection.create",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "collection", id: (rec as { id?: string }).id, label: (rec as { title?: string }).title },
+      diff: { after: { title: (rec as { title?: string }).title } },
     });
     return NextResponse.json(rec, { status: 201 });
   } catch (err) {
