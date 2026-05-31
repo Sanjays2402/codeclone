@@ -69,7 +69,9 @@ export function normalizeRpm(input: unknown): number | undefined {
   return r;
 }
 
-export function effectiveRpm(rec: KeyLike | null | undefined): number {
+export function effectiveRpm(
+  rec: { rateLimit?: { rpm: number } } | null | undefined,
+): number {
   const rpm = rec?.rateLimit?.rpm;
   if (typeof rpm === "number" && rpm >= MIN_RPM && rpm <= MAX_RPM) return Math.floor(rpm);
   return DEFAULT_RPM;
