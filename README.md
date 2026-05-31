@@ -30,6 +30,27 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
 - Snippets library at `/snippets`: save the code you keep comparing against (canonical implementations, suspected sources, internal templates) as titled, tagged, language-typed snippets. One click loads any snippet into the left or right pane of `/compare`, so returning users skip the copy-paste step. Backed by a per-user JSON store at `CODECLONE_SNIPPETS_DIR` (defaults to `../snippets`) with full CRUD, search across title, body, and tags, and a 64KB-per-snippet cap.
 - Collections at `/collections`: group any number of saved `/r/<id>` comparisons under a single title and ship one public URL (`/c/<id>`) you can hand a teammate. Build a collection from the dropdown on any share page, or paste `/r/<id>` URLs straight into the manage view. Rename, edit description, remove items, or delete the whole collection inline. Public view is read-only, deleted shares are flagged inline (no broken links), and everything persists as one JSON per collection at `CODECLONE_COLLECTIONS_DIR` (defaults to `../collections`).
+- Team workspaces at `/workspaces`: create a workspace, invite teammates by email with a role of `editor` or `viewer`, and accept via a signed `/workspaces/invite/<token>` link. Owners change roles and remove members; editors can also send invites; viewers are read-only. Invite tokens are single-use, expire in 14 days, and only the SHA-256 hash is persisted. Workspaces, the userId->workspace index, and pending invites live under `CODECLONE_WORKSPACES_DIR` (defaults to `../workspaces`). Sole-owner demotion and self-removal of the last owner are refused.
+
+### Try it: invite a teammate to a workspace
+
+1. `cd web && npm install && npm run dev`, sign in at [http://localhost:3000/signin](http://localhost:3000/signin) with your email and click the dev magic link.
+2. Open [http://localhost:3000/workspaces](http://localhost:3000/workspaces), click **new workspace**, name it (e.g. `Backend platform`).
+3. On the workspace page, enter a teammate email, pick `editor` or `viewer`, click **send invite**. Copy the printed invite URL.
+4. Open the URL in an incognito window, sign in as the invited email, and click **accept invite**. The new member shows up immediately on the workspace page.
+5. Programmatic:
+
+   ```bash
+   # As an authenticated owner (cookie required):
+   curl -X POST http://localhost:3000/api/workspaces \
+     -H 'Content-Type: application/json' -b "$COOKIE_JAR" \
+     -d '{"name":"Backend platform"}'
+
+   curl -X POST http://localhost:3000/api/workspaces/<wsId>/invites \
+     -H 'Content-Type: application/json' -b "$COOKIE_JAR" \
+     -d '{"email":"teammate@example.com","role":"editor"}'
+   ```
+
 
 ### Try it: ship a collection of duplicates
 

@@ -23,6 +23,7 @@ const items = [
   { href: "/usage",    label: "usage" },
   { href: "/webhooks", label: "webhooks" },
   { href: "/notifications", label: "inbox" },
+  { href: "/workspaces", label: "team" },
   { href: "/settings", label: "settings" },
 ];
 
