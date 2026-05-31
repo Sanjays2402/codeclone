@@ -111,7 +111,8 @@ export default function AuditPage() {
       <p className="text-[14px] text-[var(--color-ink-2)] -mt-3 mb-6 max-w-2xl">
         Every mutating action across snippets, collections, API keys, webhooks, workspaces, and
         settings is recorded with the actor, IP, request id, and a before / after diff. The log is
-        append-only on disk and never edited by the app.
+        append-only on disk and never edited by the app. You see entries from workspaces you
+        belong to plus your own account events; other tenants are filtered out at the query layer.
       </p>
 
       <form

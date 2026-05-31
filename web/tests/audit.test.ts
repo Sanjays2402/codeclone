@@ -139,3 +139,58 @@ test("audit: storage is append-only JSONL by UTC day", async () => {
     assert.match(p.action, /^[a-z][a-z0-9_]*(\.[a-z][a-z0-9_]*){1,3}$/);
   }
 });
+
+test("audit: allowedWorkspaceIds enforces cross-tenant isolation", async () => {
+  await recordAudit(fakeReq({ "x-workspace-id": "ws_acme" }), {
+    action: "snippet.create",
+    actorId: "user_alice",
+    actorEmail: "alice@example.com",
+    target: { type: "snippet", id: "s_acme_1" },
+  });
+  await recordAudit(fakeReq({ "x-workspace-id": "ws_globex" }), {
+    action: "snippet.create",
+    actorId: "user_bob",
+    actorEmail: "bob@example.com",
+    target: { type: "snippet", id: "s_globex_1" },
+  });
+  // A null-workspace event by alice (e.g. sign-in) should still be visible to alice
+  await recordAudit(fakeReq(), {
+    action: "session.sign_in",
+    actorId: "user_alice",
+    actorEmail: "alice@example.com",
+    target: { type: "session" },
+  });
+
+  // Alice is only a member of ws_acme; she must not see ws_globex entries
+  const aliceView = await listAudit({
+    allowedWorkspaceIds: new Set(["ws_acme"]),
+    selfActorId: "user_alice",
+    limit: 500,
+  });
+  for (const e of aliceView) {
+    if (e.workspaceId) {
+      assert.equal(e.workspaceId, "ws_acme", "cross-tenant audit leak");
+    } else {
+      assert.equal(e.actorId, "user_alice", "null-ws entry leaked another actor");
+    }
+  }
+  assert.ok(
+    aliceView.some((e) => e.target?.id === "s_acme_1"),
+    "alice should see her workspace entry",
+  );
+  assert.ok(
+    !aliceView.some((e) => e.target?.id === "s_globex_1"),
+    "alice must not see globex entry",
+  );
+
+  // Empty membership = no workspace entries at all
+  const stranger = await listAudit({
+    allowedWorkspaceIds: new Set<string>(),
+    selfActorId: "user_carol",
+    limit: 500,
+  });
+  for (const e of stranger) {
+    assert.equal(e.workspaceId, null, "stranger should never see workspace-scoped audit");
+    assert.equal(e.actorId, "user_carol");
+  }
+});

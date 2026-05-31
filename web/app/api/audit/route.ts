@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { listAudit, toCsv, tryRecordAudit, MAX_LIST } from "../../../lib/audit";
+import { listWorkspacesForUser, getWorkspace, getMember } from "../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,9 +46,40 @@ export async function GET(req: Request) {
   const validStatus =
     status === "ok" || status === "denied" || status === "error" ? status : undefined;
 
+  // Tenant scoping: a signed-in caller may only read audit entries from
+  // workspaces they are a member of, plus their own null-workspace events
+  // (for example sign-in / session events). If a specific workspaceId is
+  // requested it must be one they belong to; otherwise refuse with 403 and
+  // record a denied audit entry so the attempt itself is auditable.
+  const memberWorkspaces = await listWorkspacesForUser(user.id);
+  const allowedWorkspaceIds = new Set(memberWorkspaces.map((w) => w.id));
+
+  const requestedWorkspaceId = sp.get("workspaceId") ?? undefined;
+  if (requestedWorkspaceId) {
+    const ws = await getWorkspace(requestedWorkspaceId);
+    const isMember = ws ? !!getMember(ws, user.id) : false;
+    if (!isMember) {
+      await tryRecordAudit(req, {
+        action: "audit.read.denied",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: requestedWorkspaceId,
+        target: { type: "audit_log", id: requestedWorkspaceId },
+        status: "denied",
+        meta: { reason: "not_a_member" },
+      });
+      return NextResponse.json(
+        { error: "forbidden", message: "not a member of that workspace" },
+        { status: 403 },
+      );
+    }
+  }
+
   const entries = await listAudit({
     actorId: sp.get("actorId") ?? undefined,
-    workspaceId: sp.get("workspaceId") ?? undefined,
+    workspaceId: requestedWorkspaceId,
+    allowedWorkspaceIds,
+    selfActorId: user.id,
     action: sp.get("action") ?? undefined,
     targetType: sp.get("targetType") ?? undefined,
     targetId: sp.get("targetId") ?? undefined,

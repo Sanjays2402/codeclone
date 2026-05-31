@@ -146,6 +146,17 @@ export async function recordAudit(
 export interface ListAuditOptions {
   actorId?: string;
   workspaceId?: string;
+  /**
+   * Tenant scoping. When provided, only entries whose workspaceId is in the
+   * set are returned. Entries with a null workspaceId are also returned only
+   * if the caller is also the actor (for example, sign-in events that have no
+   * workspace context). This is the primary cross-tenant isolation guard for
+   * the audit log read path; routes must pass this for any signed-in caller
+   * that is not a platform admin.
+   */
+  allowedWorkspaceIds?: Set<string>;
+  /** Used together with allowedWorkspaceIds to admit a user's own null-workspace events. */
+  selfActorId?: string;
   action?: string; // exact match or prefix with trailing "."
   targetType?: string;
   targetId?: string;
@@ -189,6 +200,14 @@ export async function listAudit(opts: ListAuditOptions = {}): Promise<AuditEntry
       }
       if (opts.actorId && entry.actorId !== opts.actorId) continue;
       if (opts.workspaceId && entry.workspaceId !== opts.workspaceId) continue;
+      if (opts.allowedWorkspaceIds) {
+        if (entry.workspaceId) {
+          if (!opts.allowedWorkspaceIds.has(entry.workspaceId)) continue;
+        } else {
+          // null workspace: only visible to the actor themself
+          if (!opts.selfActorId || entry.actorId !== opts.selfActorId) continue;
+        }
+      }
       if (opts.action) {
         if (opts.action.endsWith(".")) {
           if (!entry.action.startsWith(opts.action)) continue;
