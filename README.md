@@ -10,6 +10,30 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace Data Processing Agreement (DPA) acceptance gate. Enterprise procurement and security reviews block onboarding until the vendor can produce a defensible record that an authorized representative accepted the DPA / Terms before any production data flowed through the platform (SOC 2 CC1.1, ISO 27001 A.5.20, most vendor questionnaires). codeclone now requires every workspace owner to accept the current version (`DPA_CURRENT_VERSION` in `web/lib/dpa.ts`) before `/v1/compare` and `/v1/batch` will process snippets. The acceptance record pins the version string, the signatory's user id and email, the server-stamped timestamp, and the source IP. Bumping the version invalidates every older acceptance and forces a fresh re-accept on the next dashboard visit and the next `/v1` call. Owners review and toggle acceptance under the workspace settings DPA panel; the endpoint is `GET/POST/DELETE /api/workspaces/:id/dpa` with owner-only writes, MFA step-up when the workspace MFA policy is on, and the version explicitly echoed in the POST body so a stale tab cannot silently accept a newer revision. Every accept, re-accept, and withdrawal lands in the tamper-evident audit log; every `/v1` rejection records `workspace.dpa_block` with the route, the current version, and the pinned version so a security team can pivot from the audit log to the offending key. Cross-tenant isolation: an acceptance recorded on workspace A never satisfies workspace B's gate, proved in `web/tests/workspaces-dpa.test.ts`.
+
+### Try it: accept the DPA and unblock /v1 calls
+
+```bash
+# Check the gate status (any active member):
+curl -s http://localhost:3000/api/workspaces/$WS_ID/dpa -H "cookie: $COOKIE"
+# => { "status": { "currentVersion": "2025-01-01", "accepted": false, "required": true, ... }, "canEdit": true }
+
+# Without acceptance, /v1/compare refuses with 403 dpa_required:
+curl -s -X POST http://localhost:3000/v1/compare \
+  -H "authorization: Bearer $CC_KEY" -H "content-type: application/json" \
+  -d '{"a":"x=1","b":"x=2"}'
+# => { "error": { "type": "dpa_required", "current_version": "2025-01-01", ... } }
+
+# Owner accepts (must echo the current version explicitly):
+curl -s -X POST http://localhost:3000/api/workspaces/$WS_ID/dpa \
+  -H "cookie: $OWNER_COOKIE" -H "content-type: application/json" \
+  -d '{"version":"2025-01-01"}'
+# => { "status": { "accepted": true, "acceptance": { "acceptedByEmail": "owner@example.com", ... } } }
+
+# /v1/compare now succeeds normally.
+```
+
 - Dual-control approvals (separation of duties / four-eyes) for the most destructive workspace actions. Enterprise procurement teams refuse to sign without this: a single compromised owner credential should not be enough to hand the workspace to an attacker or wipe it. Workspace owners opt in per operation under Settings -> Dual-control approvals; today the gated operations are `workspace.wipe` and `workspace.transfer_ownership`. When the policy is on, the destructive endpoint refuses the call with HTTP 403 `approval_required` unless the body carries a fresh `approval_token` minted by a *different* owner. Tokens are single-use, expire in 30 minutes, are bound by SHA-256 hash to the exact request payload (an approval for "transfer to Alice" cannot be replayed to transfer to Eve), are constant-time compared, and are stored only as their hash so a leak of the approvals.json cannot mint authority. Every state transition (request, approve, cancel, consume, denied) writes to the tamper-evident audit chain. Approvals live under `$CODECLONE_APPROVALS_DIR` (defaults to `$CODECLONE_WORKSPACES_DIR/_approvals/<workspaceId>/`) so cross-tenant queries are not representable at the storage layer. Maps to SOC 2 CC6.3, ISO 27001 A.5.3, NIST 800-53 AC-5. Regression coverage in `web/tests/workspaces-dual-control.test.ts` proves cross-tenant isolation (a token approved in workspace A cannot be consumed in workspace B even when slugs collide), self-approval rejection, payload binding, single-use semantics, and cancel-invalidates-approved-token.
 
 ### Try it: require a second owner to approve a workspace wipe

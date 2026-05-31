@@ -346,6 +346,22 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+  /**
+   * Workspace acceptance of the Data Processing Agreement / Terms of
+   * Service. Procurement teams require a defensible record that an
+   * authorized owner accepted the current DPA before any data flowed
+   * through the platform. We pin the version string the user saw, who
+   * accepted, when, and the source IP. Bumping `DPA_CURRENT_VERSION` in
+   * lib/dpa.ts immediately invalidates older acceptances and forces a
+   * fresh re-accept before /v1 calls can proceed.
+   */
+  dpa?: {
+    version: string;
+    acceptedAt: number;
+    acceptedByUserId: string;
+    acceptedByEmail: string;
+    acceptedFromIp: string | null;
+  } | null;
 }
 
 export type ResidencyRegion = "us" | "eu" | "apac" | "global";
@@ -983,6 +999,20 @@ export function payloadPolicyLimit(
   const n = ws?.payloadPolicy?.maxBodyBytes;
   if (!n || n <= 0) return null;
   return n;
+}
+
+/**
+ * Persist (or clear) the workspace DPA acceptance. The shape lives on
+ * lib/dpa.ts; this helper is the only writer so workspace I/O stays
+ * funnelled through workspaces.ts. Caller writes the audit entry.
+ */
+export async function setDpa(
+  ws: WorkspaceRecord,
+  acceptance: WorkspaceRecord["dpa"] | null,
+): Promise<WorkspaceRecord> {
+  ws.dpa = acceptance ?? null;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
 }
 
 export function sanitizeApiKeyPolicy(

@@ -17,6 +17,7 @@ import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
+import { enforceWorkspaceDpaForKey } from "../../../../lib/dpa-enforce";
 import {
   enforcePayloadPolicyHeaderForKey,
   enforcePayloadPolicyBodyForKey,
@@ -79,6 +80,8 @@ export async function POST(req: Request) {
   if (residencyBlocked) return residencyBlocked;
   const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
   if (policyBlocked) return policyBlocked;
+  const dpaBlocked = await enforceWorkspaceDpaForKey(req, key, { route: "/v1/batch" });
+  if (dpaBlocked) return dpaBlocked;
 
   const payloadHeader = await enforcePayloadPolicyHeaderForKey(req, key, { route: "/v1/batch" });
   if (payloadHeader.response) return payloadHeader.response;

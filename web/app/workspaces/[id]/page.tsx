@@ -25,6 +25,7 @@ import { WebhookDomainAllowlistEditor } from "../../../components/WebhookDomainA
 import { SessionPolicyEditor } from "../../../components/SessionPolicyEditor";
 import { ApiKeyPolicyEditor } from "../../../components/ApiKeyPolicyEditor";
 import { PayloadPolicyEditor } from "../../../components/PayloadPolicyEditor";
+import { DpaEditor } from "../../../components/DpaEditor";
 import { SecretScanPolicyEditor } from "../../../components/SecretScanPolicyEditor";
 import { MfaPolicyEditor } from "../../../components/MfaPolicyEditor";
 import { DualControlEditor } from "../../../components/DualControlEditor";
@@ -461,6 +462,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <ApiKeyPolicyEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <DpaEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (
