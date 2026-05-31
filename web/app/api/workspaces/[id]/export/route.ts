@@ -16,7 +16,7 @@ import { tryRecordAudit } from "../../../../../lib/audit";
 import { toCsv } from "../../../../../lib/audit";
 import {
   getWorkspace,
-  getMember,
+  getActiveMember,
   exportWorkspace,
 } from "../../../../../lib/workspaces";
 
@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const member = getMember(ws, user.id);
+  const member = getActiveMember(ws, user.id);
   if (!member || member.role !== "owner") {
     await tryRecordAudit(req, {
       action: "workspace.export",

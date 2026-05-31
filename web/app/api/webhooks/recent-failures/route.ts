@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { collectRecentFailures } from "../../../../lib/recent-failures";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
-import { getWorkspace, getMember } from "../../../../lib/workspaces";
+import { getWorkspace, getActiveMember } from "../../../../lib/workspaces";
 import { validateWorkspaceId } from "../../../../lib/webhooks";
 
 export const dynamic = "force-dynamic";
@@ -34,7 +34,7 @@ export async function GET(req: NextRequest) {
     );
   }
   const ws = await getWorkspace(wsId);
-  if (!ws || !getMember(ws, user.id)) {
+  if (!ws || !getActiveMember(ws, user.id)) {
     return NextResponse.json(
       { error: { type: "forbidden", message: "You are not a member of that workspace." } },
       { status: 403 },

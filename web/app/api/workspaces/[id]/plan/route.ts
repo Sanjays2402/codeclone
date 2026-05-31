@@ -16,7 +16,7 @@ import { currentUserFromCookieHeader } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import {
   getWorkspace,
-  getMember,
+  getActiveMember,
   canManage,
   setWorkspacePlan,
 } from "../../../../../lib/workspaces";
@@ -64,7 +64,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  if (!getMember(ws, user.id)) {
+  if (!getActiveMember(ws, user.id)) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const snap = await snapshot(ws);

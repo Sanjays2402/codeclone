@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { listAudit, toCsv, tryRecordAudit, MAX_LIST } from "../../../lib/audit";
-import { listWorkspacesForUser, getWorkspace, getMember, retentionCutoffMs } from "../../../lib/workspaces";
+import { listWorkspacesForUser, getWorkspace, getActiveMember, retentionCutoffMs } from "../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,7 +67,7 @@ export async function GET(req: Request) {
   const requestedWorkspaceId = sp.get("workspaceId") ?? undefined;
   if (requestedWorkspaceId) {
     const ws = await getWorkspace(requestedWorkspaceId);
-    const isMember = ws ? !!getMember(ws, user.id) : false;
+    const isMember = ws ? !!getActiveMember(ws, user.id) : false;
     if (!isMember) {
       await tryRecordAudit(req, {
         action: "audit.read.denied",

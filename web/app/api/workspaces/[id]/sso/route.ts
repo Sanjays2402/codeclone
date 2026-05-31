@@ -22,7 +22,7 @@ import { currentUserFromCookieHeader } from "../../../../../lib/auth";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import {
   getWorkspace,
-  getMember,
+  getActiveMember,
   canManage,
   setSsoConfig,
   type WorkspaceRecord,
@@ -50,7 +50,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
   if (!user) return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
-  if (!getMember(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!getActiveMember(ws, user.id)) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const origin = new URL(req.url).origin;
   return NextResponse.json({
     sso: publicSsoConfig(ws),

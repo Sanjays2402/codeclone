@@ -6,7 +6,7 @@ import {
 } from "../../../lib/webhooks";
 import { tryRecordAudit } from "../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
-import { getWorkspace, getMember } from "../../../lib/workspaces";
+import { getWorkspace, getActiveMember } from "../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,7 +39,7 @@ async function resolveWorkspaceForUser(req: Request, workspaceIdRaw: unknown) {
   if (!wsId) return { error: badWorkspace() };
   const ws = await getWorkspace(wsId);
   if (!ws) return { error: forbidden() };
-  const member = getMember(ws, user.id);
+  const member = getActiveMember(ws, user.id);
   if (!member) return { error: forbidden() };
   return { user, ws, member };
 }

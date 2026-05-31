@@ -31,6 +31,28 @@ export interface Member {
   email: string;
   role: Role;
   joinedAt: number;
+  /**
+   * Member account status. "active" (or undefined for legacy records) means
+   * normal access. "suspended" means the member is retained on the workspace
+   * roster for audit/forensic continuity but has no effective access: every
+   * membership check (`canInvite`, `canManage`, route gates) treats them as a
+   * non-member. Suspending also revokes all of the user's active sessions and
+   * disables their workspace-scoped API keys. Reinstating restores membership
+   * but does not auto-restore revoked sessions or keys; users must sign back
+   * in and owners may rotate keys explicitly.
+   */
+  status?: "active" | "suspended";
+  suspendedAt?: number;
+  suspendedBy?: string; // userId of the owner who suspended
+  suspendedReason?: string;
+}
+
+export function isMemberSuspended(m: Member | null | undefined): boolean {
+  return !!m && m.status === "suspended";
+}
+
+export function isMemberActive(m: Member | null | undefined): boolean {
+  return !!m && m.status !== "suspended";
 }
 
 export interface WorkspaceRecord {
@@ -341,18 +363,35 @@ export async function listWorkspacesForUser(userId: string): Promise<WorkspaceRe
   return out;
 }
 
+/**
+ * Returns the member record (including suspended members) so callers that
+ * need raw roster info (audit log render, owner-only views) can still see
+ * them. Access-gating callers MUST additionally check `isMemberActive` or
+ * use the `getActiveMember` helper below.
+ */
 export function getMember(ws: WorkspaceRecord, userId: string): Member | null {
   return ws.members.find((m) => m.userId === userId) ?? null;
 }
 
+/**
+ * Access-gating lookup. Returns the member only when their status is active
+ * (or undefined / legacy). Suspended members are excluded so every route
+ * that previously called `getMember(...)` to authorise an action keeps the
+ * same behaviour by switching to `getActiveMember(...)`.
+ */
+export function getActiveMember(ws: WorkspaceRecord, userId: string): Member | null {
+  const m = ws.members.find((x) => x.userId === userId);
+  return isMemberActive(m) ? m! : null;
+}
+
 export function canInvite(ws: WorkspaceRecord, userId: string): boolean {
-  const m = getMember(ws, userId);
+  const m = getActiveMember(ws, userId);
   if (!m) return false;
   return m.role === "owner" || m.role === "editor";
 }
 
 export function canManage(ws: WorkspaceRecord, userId: string): boolean {
-  const m = getMember(ws, userId);
+  const m = getActiveMember(ws, userId);
   return m?.role === "owner";
 }
 
@@ -795,6 +834,65 @@ export async function transferOwnership(
   if (!to) throw new Error("not_member");
   to.role = "owner";
   from.role = "editor";
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Suspend a member. Preserves the roster entry (and therefore the audit
+ * trail association) but flips `status` to "suspended" so every gating
+ * helper treats them as a non-member. Owners cannot be suspended if they
+ * are the sole owner (mirrors `removeMember` / role-demotion rules) so the
+ * workspace always has at least one acting owner.
+ *
+ * Throws:
+ *   - `not_member` userId is not on the roster
+ *   - `only_owner` userId is the sole owner; transfer ownership first
+ *   - `already_suspended` userId is already suspended (caller can ignore)
+ */
+export async function suspendMember(
+  ws: WorkspaceRecord,
+  userId: string,
+  by: { actorUserId: string; reason?: string | null },
+): Promise<WorkspaceRecord> {
+  const m = ws.members.find((x) => x.userId === userId);
+  if (!m) throw new Error("not_member");
+  if (m.status === "suspended") throw new Error("already_suspended");
+  if (m.role === "owner") {
+    const activeOwners = ws.members.filter(
+      (x) => x.role === "owner" && isMemberActive(x),
+    ).length;
+    if (activeOwners <= 1) throw new Error("only_owner");
+  }
+  m.status = "suspended";
+  m.suspendedAt = Date.now();
+  m.suspendedBy = by.actorUserId;
+  const reason = typeof by.reason === "string" ? by.reason.trim().slice(0, 280) : "";
+  if (reason) m.suspendedReason = reason; else delete m.suspendedReason;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Reverse `suspendMember`. The roster entry is restored to active status;
+ * the `suspendedAt/suspendedBy/suspendedReason` fields are cleared. Sessions
+ * and API keys revoked during suspension are NOT auto-restored.
+ *
+ * Throws:
+ *   - `not_member` userId is not on the roster
+ *   - `not_suspended` member is already active (caller can ignore)
+ */
+export async function reinstateMember(
+  ws: WorkspaceRecord,
+  userId: string,
+): Promise<WorkspaceRecord> {
+  const m = ws.members.find((x) => x.userId === userId);
+  if (!m) throw new Error("not_member");
+  if (m.status !== "suspended") throw new Error("not_suspended");
+  m.status = "active";
+  delete m.suspendedAt;
+  delete m.suspendedBy;
+  delete m.suspendedReason;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }

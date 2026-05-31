@@ -15,6 +15,8 @@ import {
   Eye,
   PaperPlaneTilt,
   SignOut,
+  Pause,
+  Play,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow } from "../../../components/States";
@@ -37,6 +39,10 @@ interface Member {
   email: string;
   role: Role;
   joinedAt: number;
+  status?: "active" | "suspended";
+  suspendedAt?: number;
+  suspendedBy?: string;
+  suspendedReason?: string;
 }
 interface Workspace {
   id: string;
@@ -182,6 +188,50 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
     await refresh();
   }
 
+  async function suspendMember(userId: string, email: string) {
+    const reason = window.prompt(
+      `Suspend ${email}? Their sessions and API keys will be revoked. Optional reason:`,
+      "",
+    );
+    if (reason === null) return;
+    const r = await fetch(
+      `/api/workspaces/${id}/members/${encodeURIComponent(userId)}/suspend`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ reason }),
+      },
+    );
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401 && j?.error === "mfa_required") {
+        setError("MFA required. Verify your code in Settings then try again.");
+        return;
+      }
+      setError(j?.error || `HTTP ${r.status}`);
+      return;
+    }
+    await refresh();
+  }
+
+  async function reinstateMember(userId: string, email: string) {
+    if (!confirm(`Reinstate ${email}? They will be able to sign in again.`)) return;
+    const r = await fetch(
+      `/api/workspaces/${id}/members/${encodeURIComponent(userId)}/suspend`,
+      { method: "DELETE" },
+    );
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 401 && j?.error === "mfa_required") {
+        setError("MFA required. Verify your code in Settings then try again.");
+        return;
+      }
+      setError(j?.error || `HTTP ${r.status}`);
+      return;
+    }
+    await refresh();
+  }
+
   async function leaveWorkspace() {
     if (!confirm("Leave this workspace?")) return;
     const r = await fetch(`/api/workspaces/${id}`, { method: "DELETE" });
@@ -269,14 +319,29 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
       <section className="mb-6">
         <div className="mono text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] mb-2">members</div>
         <div className="ruled rounded-md overflow-hidden">
-          {ws.members.map((m, i) => (
-            <div key={m.userId} className={`px-4 py-3 flex items-center gap-3 ${i > 0 ? "border-t border-[var(--color-rule)]" : ""}`}>
+          {ws.members.map((m, i) => {
+            const suspended = m.status === "suspended";
+            return (
+            <div key={m.userId} className={`px-4 py-3 flex items-center gap-3 ${i > 0 ? "border-t border-[var(--color-rule)]" : ""} ${suspended ? "opacity-60" : ""}`}>
               <UsersThree weight="duotone" size={16} className="text-[var(--color-ink-3)] shrink-0" />
               <div className="flex-1 min-w-0">
-                <div className="text-[13.5px] truncate">{m.email}</div>
-                <div className="mono text-[10.5px] text-[var(--color-ink-4)]">joined {fmtTs(m.joinedAt)}</div>
+                <div className="text-[13.5px] truncate flex items-center gap-2">
+                  <span className={suspended ? "line-through" : ""}>{m.email}</span>
+                  {suspended && (
+                    <span
+                      className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)]"
+                      title={m.suspendedReason ? `Reason: ${m.suspendedReason}` : undefined}
+                    >
+                      suspended
+                    </span>
+                  )}
+                </div>
+                <div className="mono text-[10.5px] text-[var(--color-ink-4)]">
+                  joined {fmtTs(m.joinedAt)}
+                  {suspended && m.suspendedAt ? ` · suspended ${fmtTs(m.suspendedAt)}` : ""}
+                </div>
               </div>
-              {canManage && m.role !== "owner" ? (
+              {canManage && m.role !== "owner" && !suspended ? (
                 <select
                   value={m.role}
                   onChange={(e) => changeRole(m.userId, e.target.value as Role)}
@@ -291,10 +356,22 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
                   {roleIcon(m.role)} {m.role}
                 </span>
               )}
-              {canManage && m.role !== "owner" && (
+              {canManage && m.role !== "owner" && !suspended && (
                 <button onClick={() => transferOwnership(m.userId, m.email)} type="button"
                   className="p-1.5 rounded hover:bg-[var(--color-paper-2)] text-[var(--color-ink-3)]" aria-label="transfer ownership" title="Transfer ownership">
                   <CrownSimple weight="duotone" size={14} />
+                </button>
+              )}
+              {canManage && m.role !== "owner" && !suspended && (
+                <button onClick={() => suspendMember(m.userId, m.email)} type="button"
+                  className="p-1.5 rounded hover:bg-[var(--color-paper-2)] text-[var(--color-ink-3)]" aria-label="suspend member" title="Suspend member">
+                  <Pause weight="duotone" size={14} />
+                </button>
+              )}
+              {canManage && suspended && (
+                <button onClick={() => reinstateMember(m.userId, m.email)} type="button"
+                  className="p-1.5 rounded hover:bg-[var(--color-paper-2)] text-[var(--color-ink-3)]" aria-label="reinstate member" title="Reinstate member">
+                  <Play weight="duotone" size={14} />
                 </button>
               )}
               {canManage && m.role !== "owner" && (
@@ -304,7 +381,8 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
                 </button>
               )}
             </div>
-          ))}
+          );
+          })}
         </div>
       </section>
 

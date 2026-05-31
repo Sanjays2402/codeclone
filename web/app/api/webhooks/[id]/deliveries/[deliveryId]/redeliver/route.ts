@@ -5,7 +5,7 @@ import {
 } from "../../../../../../../lib/webhooks";
 import { tryRecordAudit } from "../../../../../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../../../../../lib/auth";
-import { getWorkspace, getMember } from "../../../../../../../lib/workspaces";
+import { getWorkspace, getActiveMember } from "../../../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,7 +35,7 @@ export async function POST(req: Request, ctx: Ctx) {
   if (!ws) {
     return NextResponse.json({ error: { type: "not_found", message: "Workspace not found." } }, { status: 404 });
   }
-  const member = getMember(ws, user.id);
+  const member = getActiveMember(ws, user.id);
   if (!member) {
     return NextResponse.json(
       { error: { type: "forbidden", message: "You are not a member of that workspace." } },

@@ -5,7 +5,7 @@ import {
   validateWorkspaceId,
 } from "../../../../../lib/webhooks";
 import { currentUserFromCookieHeader } from "../../../../../lib/auth";
-import { getWorkspace, getMember } from "../../../../../lib/workspaces";
+import { getWorkspace, getActiveMember } from "../../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,7 +32,7 @@ export async function GET(req: Request, ctx: Ctx) {
     );
   }
   const ws = await getWorkspace(wsId);
-  if (!ws || !getMember(ws, user.id)) {
+  if (!ws || !getActiveMember(ws, user.id)) {
     return NextResponse.json(
       { error: { type: "forbidden", message: "You are not a member of that workspace." } },
       { status: 403 },

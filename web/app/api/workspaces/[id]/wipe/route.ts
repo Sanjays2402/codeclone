@@ -22,7 +22,7 @@ import { tryRecordAudit } from "../../../../../lib/audit";
 import { requireStepUp } from "../../../../../lib/mfa";
 import {
   getWorkspace,
-  getMember,
+  getActiveMember,
   deleteWorkspace,
   isOnLegalHold,
 } from "../../../../../lib/workspaces";
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const ws = await getWorkspace(id);
   if (!ws) return NextResponse.json({ error: "not_found" }, { status: 404 });
 
-  const member = getMember(ws, user.id);
+  const member = getActiveMember(ws, user.id);
   if (!member || member.role !== "owner") {
     await tryRecordAudit(req, {
       action: "workspace.wipe",

@@ -10,6 +10,38 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace member suspension on `/workspaces/<id>`: owners can pause a member's access without losing the audit trail. The roster row stays put with `status: "suspended"` so every historical event keeps its actor link, but every gating helper (`getActiveMember`, `canInvite`, `canManage`) treats the user as a non-member. On suspend the server also revokes every active session for that user (`revokeAllSessions`) and revokes every API key they own (`listKeys` then `revokeKey`), and the audit log captures both counts. Owner-only `POST /api/workspaces/:id/members/:userId/suspend` (with MFA step-up) does the suspension; `DELETE` on the same path reinstates the member. Sole-owner self-suspend is blocked (`only_owner`) and owners cannot suspend themselves (`cannot_suspend_self`); reinstating does not auto-restore the revoked sessions or keys. Cross-tenant isolation, audit-row preservation, and the sole-owner safety check are pinned by `web/tests/workspaces-suspend.test.ts`.
+
+### Try it: suspend a departing teammate
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# 1. Sign in as the workspace owner and open
+#    http://localhost:3000/workspaces/<id>. Each member row now has a pause
+#    button next to the trash icon. Click it, enter an optional reason
+#    ("offboarded 2026-05-31"), and confirm. After MFA step-up the row dims,
+#    a "suspended" badge appears, and their email is struck through.
+#
+# 2. Same flow over the API (owner cookie, MFA-stepped-up session):
+curl -X POST http://localhost:3000/api/workspaces/$WS/members/$UID/suspend \
+  -H 'content-type: application/json' \
+  -b cookies.txt \
+  -d '{"reason":"offboarded"}'
+# => {"ok":true,"suspended":true,"sessionsRevoked":2,"apiKeysRevoked":1}
+#
+# 3. The audit log records `workspace.member_suspend` with sessionsRevoked,
+#    apiKeysRevoked, and the reason. The user's existing browser session
+#    starts failing on the next request (cookie jti is in the revoked set)
+#    and any API key they were carrying returns 401 invalid_key.
+#
+# 4. Reinstating restores access. Sessions and keys stay revoked so the
+#    user must sign back in fresh.
+curl -X DELETE http://localhost:3000/api/workspaces/$WS/members/$UID/suspend \
+  -b cookies.txt
+# => {"ok":true,"suspended":false}
+```
+
 - Workspace webhook destination domain allowlist on `/workspaces/<id>`: owners can restrict which hostnames any webhook in the workspace may target, using exact hosts (`hooks.partner.com`) or wildcard suffixes (`*.partner.com`). Enforced at two points so the policy is real: `POST /api/webhooks` rejects a new webhook whose URL host is not in the list with a 400 and a descriptive error, and the dispatcher re-checks on every attempt of `dispatchEvent` and `redeliverDelivery` so tightening the policy immediately blocks in-flight deliveries to a now-disallowed host (the delivery is logged with `blocked: "<host>" not in workspace webhook domain allowlist` and `fetch` is never called). SSRF rules (no loopback / RFC1918 / link-local / cloud metadata) still apply on top. Sanitisation rejects IP literals, schemes, paths, and labels without an alphabetic TLD so junk inputs never widen the policy. Owner-only PUT `/api/workspaces/:id/webhook-domains` records full before/after diffs in the tamper-evident audit chain as `workspace.webhook_domains_update`; non-owner PUTs are logged as `status: denied`. Cross-tenant isolation and the late-tightening delivery block are pinned by `web/tests/workspaces-webhook-domains.test.ts`.
 
 ### Try it: lock webhooks to a vendor domain
