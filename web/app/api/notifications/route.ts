@@ -6,6 +6,7 @@
  */
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { tryRecordAudit } from "../../../lib/audit";
 import {
   clearAll,
   countUnread,
@@ -60,10 +61,24 @@ export async function POST(req: Request) {
   try {
     if (action === "mark-all-read") {
       const updated = await markAllRead(user.id);
+      await tryRecordAudit(req, {
+        action: "notification.mark_all_read",
+        actorId: user.id,
+        actorEmail: user.email,
+        target: { type: "notification" },
+        meta: { updated },
+      });
       return NextResponse.json({ updated });
     }
     if (action === "clear") {
       const removed = await clearAll(user.id);
+      await tryRecordAudit(req, {
+        action: "notification.clear_all",
+        actorId: user.id,
+        actorEmail: user.email,
+        target: { type: "notification" },
+        meta: { removed },
+      });
       return NextResponse.json({ removed });
     }
     return NextResponse.json(

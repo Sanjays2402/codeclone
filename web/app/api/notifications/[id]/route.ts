@@ -4,6 +4,7 @@
  */
 import { NextResponse } from "next/server";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { tryRecordAudit } from "../../../../lib/audit";
 import { deleteNotification, isNotificationId, markRead } from "../../../../lib/notifications";
 
 export const runtime = "nodejs";
@@ -35,6 +36,12 @@ export async function PATCH(
   try {
     const rec = await markRead(user.id, id, read);
     if (!rec) return NextResponse.json({ error: "Not found." }, { status: 404 });
+    await tryRecordAudit(req, {
+      action: read ? "notification.mark_read" : "notification.mark_unread",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "notification", id },
+    });
     return NextResponse.json({ item: rec });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -57,6 +64,12 @@ export async function DELETE(
   try {
     const ok = await deleteNotification(user.id, id);
     if (!ok) return NextResponse.json({ error: "Not found." }, { status: 404 });
+    await tryRecordAudit(req, {
+      action: "notification.delete",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "notification", id },
+    });
     return NextResponse.json({ ok: true });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

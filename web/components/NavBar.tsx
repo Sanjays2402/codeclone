@@ -27,6 +27,7 @@ const items = [
   { href: "/webhooks", label: "webhooks" },
   { href: "/notifications", label: "inbox" },
   { href: "/workspaces", label: "team" },
+  { href: "/audit", label: "audit" },
   { href: "/settings", label: "settings" },
 ];
 

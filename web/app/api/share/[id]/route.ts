@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { loadShare, updateShare, deleteShare } from "../../../../lib/share";
+import { tryRecordAudit } from "../../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,10 +49,19 @@ export async function PATCH(
     return NextResponse.json({ error: "Provide title or tags to update." }, { status: 400 });
   }
   try {
+    const before = await loadShare(id);
     const rec = await updateShare(id, patch);
     if (!rec) {
       return NextResponse.json({ error: "Share not found." }, { status: 404 });
     }
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    await tryRecordAudit(req, {
+      action: "share.update",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      target: { type: "share", id, label: rec.title ?? undefined },
+      diff: { before: before ? { title: before.title, tags: before.tags } : null, after: patch },
+    });
     return NextResponse.json(rec);
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
@@ -59,13 +70,22 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
+  const before = await loadShare(id);
   const ok = await deleteShare(id);
   if (!ok) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "share.delete",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "share", id, label: before?.title ?? undefined },
+    diff: { before: before ? { title: before.title, tags: before.tags } : null },
+  });
   return NextResponse.json({ ok: true });
 }

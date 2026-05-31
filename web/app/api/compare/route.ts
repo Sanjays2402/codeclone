@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
+import { tryRecordAudit } from "../../../lib/audit";
+import { currentUserFromCookieHeader } from "../../../lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +45,20 @@ export async function POST(req: Request) {
   const alignment = alignLines(parsed.a, parsed.b);
   const clone = classifyClone(parsed.a, parsed.b, scores);
   const latencyMs = performance.now() - started;
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  await tryRecordAudit(req, {
+    action: "compare.run",
+    actorId: user?.id ?? null,
+    actorEmail: user?.email ?? null,
+    target: { type: "compare" },
+    meta: {
+      language: parsed.language,
+      bytes_a: Buffer.byteLength(parsed.a, "utf-8"),
+      bytes_b: Buffer.byteLength(parsed.b, "utf-8"),
+      jaccard: scores.jaccard,
+      clone_type: clone.type,
+    },
+  });
   return NextResponse.json({
     language: parsed.language,
     bytes: { a: Buffer.byteLength(parsed.a, "utf-8"), b: Buffer.byteLength(parsed.b, "utf-8") },

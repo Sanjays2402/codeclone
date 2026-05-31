@@ -34,6 +34,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Collections at `/collections`: group any number of saved `/r/<id>` comparisons under a single title and ship one public URL (`/c/<id>`) you can hand a teammate. Browse with live search (title + description), sort by last updated, created, title, or item count (asc/desc), and paginate through 20 at a time. Build a collection from the dropdown on any share page, or paste `/r/<id>` URLs straight into the manage view. Rename, edit description, remove items, or delete the whole collection inline. Public view is read-only, deleted shares are flagged inline (no broken links), and everything persists as one JSON per collection at `CODECLONE_COLLECTIONS_DIR` (defaults to `../collections`). The list endpoint accepts `?q=`, `?sort=updated|created|title|count`, `?dir=asc|desc`, `?limit=`, `?offset=`.
 - Team workspaces at `/workspaces`: create a workspace, invite teammates by email with a role of `editor` or `viewer`, and accept via a signed `/workspaces/invite/<token>` link. Owners change roles and remove members; editors can also send invites; viewers are read-only. Invite tokens are single-use, expire in 14 days, and only the SHA-256 hash is persisted. Workspaces, the userId->workspace index, and pending invites live under `CODECLONE_WORKSPACES_DIR` (defaults to `../workspaces`). Sole-owner demotion and self-removal of the last owner are refused.
 - Mobile-responsive shell: at 375px the dashboard collapses its 18 nav items behind an accessible hamburger that opens a left-side drawer with route-aware highlighting, focus-trap close on Escape, body-scroll lock, and a backdrop tap-to-dismiss. The top status strip becomes horizontally scrollable, the page gutter tightens from 28px to 16px, and the desktop nav re-emerges at `lg` (1024px+). Every existing page (compare, history, batch, api-keys, webhooks, usage, workspaces, settings) is now reachable on a phone without horizontal scroll on the chrome.
+- Enterprise audit log at `/audit`: every mutating action across snippets, collections, API keys, webhooks, workspaces, share creation, and settings is recorded with actor id, actor email, IP, request id, user agent, optional workspace id, and a trimmed before/after diff. Storage is append-only JSONL by UTC day under `CODECLONE_AUDIT_DIR` (defaults to `../audit`); the app never updates or deletes entries. The page filters by action prefix, actor, workspace, and status (ok/denied/error), and a single click streams a CSV export. Denied permission checks (for example a non-owner trying to rename a workspace) are recorded alongside successes so security review can prove enforcement, not just intent. Reading and exporting the log are themselves audited.
 - Interactive API reference at `/docs`: every public `/v1` endpoint (`POST /v1/compare`, `POST /v1/batch`, `GET /v1/shares`, `GET /v1/shares/{id}`) is documented in-product with method, path, required scope, parameter table, copy-paste curl example, and a sample JSON response. The page also includes a **Try it** panel that posts the request straight from the browser using your pasted API key, shows the HTTP status, round-trip latency, and pretty-printed response body, and warns you when none of your saved keys carry the scope an endpoint requires. The spec is driven from a single typed module (`web/lib/api-spec.ts`) that the test suite validates against the real route files, so the docs cannot drift from the implementation.
 
 ### Try it: download a PDF report of a saved comparison
@@ -44,6 +45,17 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
    curl -OJ http://localhost:3000/api/share/<id>/pdf
    ```
 3. Open the resulting `codeclone-<id>.pdf` to see the full clone-analysis report.
+
+### Try it: review the enterprise audit log
+
+1. `cd web && npm install && npm run dev`, then sign in at [http://localhost:3000/signin](http://localhost:3000/signin).
+2. Do anything that mutates state: create a snippet at `/snippets`, rotate a key at `/api-keys`, rename a workspace at `/workspaces/<id>`.
+3. Open [http://localhost:3000/audit](http://localhost:3000/audit) and the action will be there with actor email, IP, and a before/after diff. Filter to `api_key.` to see only key activity, or click **csv** to export.
+4. From the command line, while signed in (replace `<cookie>` with your `cc_session` cookie):
+   ```bash
+   curl -s -H "cookie: cc_session=<cookie>" \
+     "http://localhost:3000/api/audit?action=api_key.&status=ok&limit=50" | jq
+   ```
 
 ### Try it: explore the v1 API from the dashboard
 

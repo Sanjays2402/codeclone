@@ -8,6 +8,7 @@
  * shares/ and api-keys/ so it lives or dies with the rest of the runtime data.
  */
 import { NextResponse } from "next/server";
+import { tryRecordAudit } from "../../../lib/audit";
 import {
   clearSamples,
   dismissOnboarding,
@@ -78,5 +79,10 @@ export async function POST(req: Request) {
     );
   }
   const state = await getOnboarding();
+  await tryRecordAudit(req, {
+    action: `onboarding.${action.replace(/-/g, "_")}`,
+    target: { type: "onboarding" },
+    meta: extra,
+  });
   return NextResponse.json({ ...state, ...extra }, { headers: { "cache-control": "no-store" } });
 }

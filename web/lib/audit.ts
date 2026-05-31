@@ -135,7 +135,7 @@ export async function recordAudit(
     ip: clientIp(req),
     userAgent: getHeader(req, "user-agent"),
     requestId: getHeader(req, "x-request-id"),
-    diff: trimDiff(input.diff),
+    diff: trimDiff(input.diff) as AuditEntry["diff"],
     meta: input.meta ?? null,
   };
   const file = pathForDay(dayKey(ts));

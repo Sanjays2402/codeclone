@@ -12,6 +12,7 @@ import {
   issueMagicLink,
   isProdSecret,
 } from "../../../../lib/auth";
+import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -47,6 +48,12 @@ export async function POST(req: Request) {
   console.error(`[codeclone:auth] magic link for ${email}: ${link.url}`);
 
   const devMode = !isProdSecret() || process.env.CODECLONE_AUTH_DEV === "1";
+  await tryRecordAudit(req, {
+    action: "auth.magic_link_requested",
+    actorEmail: email,
+    target: { type: "user", id: email, label: email },
+    meta: { redirect },
+  });
   return NextResponse.json({
     ok: true,
     email,
