@@ -97,6 +97,8 @@ tmp/
 .scratch/
 uv.lock
 shares/
+!web/app/api/v1/shares/
+!web/app/api/v1/shares/**
 api-keys/
 webhooks/
 !web/app/api/webhooks/
