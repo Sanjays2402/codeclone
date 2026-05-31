@@ -10,6 +10,30 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Read-only key introspection at `GET /v1/whoami`. Customers running codeclone in CI need a cheap way to confirm a Bearer token is the one they think it is, see which scopes it carries, and check how close they are to their per-minute and monthly limits, without burning a rate-limit slot or a billable usage event. The endpoint is authenticated by the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires no scope (any valid key may introspect itself, mirroring OIDC `/userinfo`), and runs the standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy). The rate-limit window is *peeked*, not incremented, so a CI health check can run every minute without touching the customer budget. Every call writes a `v1.whoami.read` row to the tamper-evident audit chain and refreshes `recordUse` so leaked-key triage stays accurate. The response is derived strictly from the authenticated key record so the endpoint cannot be coaxed into echoing another tenant's metadata. Pinned by `web/tests/v1-whoami.test.ts` (cross-tenant lookup isolation, revoked + expired rejection, peek() never consumes a slot, route wires the full enforcement chain and never calls `logUsage`).
+
+### Try it: introspect a key without burning a slot
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Create a key on /api-keys, then:
+curl -sS http://localhost:3000/api/v1/whoami \
+  -H "Authorization: Bearer $CODECLONE_KEY" -i
+
+# Response includes X-RateLimit-* headers and:
+# {
+#   "key":        { "id": "...", "label": "...", "prefix": "cc_live_...",
+#                   "scopes": ["compare:write"], "revoked": false,
+#                   "workspace_id": null, "ip_allowlist_count": 0, ... },
+#   "workspace":  null,
+#   "rate_limit": { "limit": 60, "remaining": 60, "reset_at": 1735689600, "window_seconds": 60 },
+#   "plan":       null,
+#   "request_ip": "203.0.113.7",
+#   "server_time": 1735689553000
+# }
+```
+
 - Public `DELETE /v1/shares/:id` with dry-run preview. The public API can now permanently remove a saved comparison record under a new `shares:write` scope, separate from `shares:read`, so a key that lists shares cannot also destroy them. Every call (live or preview) runs the full auth, IP allowlist, residency, lockdown, API-key-policy, and per-key rate-limit chain that the other `/v1` routes run, and writes a `v1.shares.delete` (or `v1.shares.delete.dry_run`) entry to the tamper-evident audit chain with the API key id, actor id, source IP, share id, language, and original creation timestamp. Passing `?dry_run=true` (or `{ "dry_run": true }` in a JSON body) returns the same shape a live delete would return, including the `x-codeclone-dry-run: true` header and the same `X-RateLimit-*` budget headers, but never touches storage and never bumps usage. Customers can wire deletion into CI pipelines and confirm contract shape end to end without burning real records. The `/api-keys` issuer surfaces the new scope as a separate checkbox so an owner can grant read-only or write-only access deliberately. Pinned by `web/tests/v1-shares.test.ts` (`shares:write is a registered scope`, `DELETE requires shares:write scope (RBAC)`, `dry_run preview leaves the share intact`).
 
 ### Try it: dry-run a share deletion without losing the record

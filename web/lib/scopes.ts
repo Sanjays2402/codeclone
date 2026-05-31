@@ -11,6 +11,7 @@ export const ALL_SCOPES = [
   "compare:write",
   "batch:write",
   "shares:read",
+  "shares:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -18,4 +19,5 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "compare:write": "Call POST /v1/compare on two snippets.",
   "batch:write": "Call POST /v1/batch for bulk pairwise comparisons.",
   "shares:read": "List and fetch saved comparison results via /v1/shares.",
+  "shares:write": "Delete saved comparison results via DELETE /v1/shares/:id.",
 };

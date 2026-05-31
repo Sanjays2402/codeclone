@@ -180,6 +180,40 @@ export async function enforce(
   return { response: null, headers };
 }
 
+/**
+ * Read the current rate-limit decision WITHOUT incrementing the counter.
+ *
+ * Used by read-only introspection endpoints (e.g. GET /v1/whoami) so
+ * customers can probe their key state from CI without burning a slot
+ * in their per-minute window. The returned `allowed` reflects whether
+ * a *future* increment would land under the cap.
+ */
+export async function peek(
+  keyId: string,
+  rpm: number,
+  now: number = Date.now(),
+): Promise<RateLimitDecision> {
+  await ensureDir();
+  const file = counterFile(keyId);
+  const existing = await readCounter(file);
+  let windowStart = existing?.windowStart ?? now;
+  let count = existing?.count ?? 0;
+  if (now - windowStart >= WINDOW_MS) {
+    windowStart = now;
+    count = 0;
+  }
+  const resetAt = windowStart + WINDOW_MS;
+  const remaining = Math.max(0, rpm - count);
+  const retryAfter = Math.max(1, Math.ceil((resetAt - now) / 1000));
+  return {
+    allowed: count < rpm,
+    limit: rpm,
+    remaining,
+    resetAt,
+    retryAfter,
+  };
+}
+
 /** Test helper: clear the on-disk counter for a key. */
 export async function _resetForTest(keyId: string): Promise<void> {
   try {
