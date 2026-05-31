@@ -31,7 +31,7 @@ const MAX_BODY_PREVIEW = 2048;
 const DELIVERY_TIMEOUT_MS = 5000;
 const RETRY_BACKOFF_MS = [0, 500, 2000]; // 3 attempts total
 
-export const SUPPORTED_EVENTS = ["compare.completed"] as const;
+export const SUPPORTED_EVENTS = ["compare.completed", "batch.completed"] as const;
 export type WebhookEvent = (typeof SUPPORTED_EVENTS)[number];
 
 export interface WebhookRecord {

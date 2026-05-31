@@ -24,7 +24,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - Batch `/batch` page: up to twelve snippets in one shot, pairwise NxN similarity matrix rendered as a heatmap with click-to-inspect cells that expand to the clone-type verdict and a side-by-side diff for the selected pair (powered by `/api/batch`)
 - Shareable result links: every `/compare` run can be saved to a public, read-only `/r/<id>` page with OG metadata, copy-link button, and a one-click "open in compare" entry. Snippets and scores round-trip from a versioned JSON store under `shares/` (override with `CODECLONE_SHARES_DIR`). The score is recomputed server-side at save time so the URL can't lie about similarity.
 - Saved comparisons in `/history`: every share you create shows up in a browsable list with rename, tagging, JSON download, and delete. Search by title, id, language, or clone label; filter by tag. All writes go to the same on-disk store as `/r/<id>`, so links and history stay in sync.
-- Public `/v1/compare` API with per-key auth: generate keys in the `/api-keys` page, copy-paste the curl example, call from anywhere. Each key shows its prefix, total calls, and last-used timestamp, with one-click revoke and delete. Only the SHA-256 hash of each key is persisted (override the on-disk location with `CODECLONE_KEYS_DIR`).
+- Public `/v1/compare` and `/v1/batch` API with per-key auth: generate keys in the `/api-keys` page, copy-paste the curl example, call from anywhere. `/v1/batch` runs a full pairwise similarity matrix over 2 to 12 snippets in one authenticated request and fires a `batch.completed` webhook on completion. Each key shows its prefix, total calls, and last-used timestamp, with one-click revoke and delete. Only the SHA-256 hash of each key is persisted (override the on-disk location with `CODECLONE_KEYS_DIR`).
 - Outbound webhooks via `/webhooks`: register a URL, receive a real signed POST every time `/v1/compare` finishes. Each delivery retries up to three times with backoff, includes an HMAC-SHA256 signature (`X-CodeClone-Signature: t=<ts>,v1=<mac>`), and lands in a per-endpoint delivery log (last 50) you can browse from the dashboard. Pause, resume, or delete endpoints inline. Override the on-disk location with `CODECLONE_WEBHOOKS_DIR`.
 - Per-key usage and quota on `/usage`: every authenticated `/v1/compare` call is logged with timestamp, key id, byte count, and latency. The page shows month-to-date calls against a free-tier cap (default 1000, override with `CODECLONE_FREE_TIER_MONTHLY`), a daily bar chart for 7/30/90 day windows, and a per-key breakdown. When the cap is hit the API returns HTTP 429 with `Retry-After` and a structured `quota_exceeded` error, and every 200 response carries `x-codeclone-quota-limit` and `x-codeclone-quota-remaining` headers so clients can rate-limit themselves.
 - Account `/settings`: pick a default language and clone threshold, set retention, toggle alerts, download every share and key record as one JSON file (GDPR export), and wipe everything from a confirmed danger-zone action. Preferences are persisted to a versioned JSON store at `CODECLONE_SETTINGS_FILE` (defaults to `../settings.json`).
@@ -101,6 +101,36 @@ curl -sS -X POST http://localhost:3000/v1/compare \
 # -> "Type-2 clone (renamed)"
 # -> 0.176
 ```
+
+### Try it: bulk compare via /v1/batch
+
+```bash
+cd web && npm run dev      # http://localhost:3000/api-keys
+
+# Send 2-12 snippets in one authenticated call. Returns a full pairwise
+# similarity matrix plus per-pair clone classifications. Counts as one
+# request against the free-tier quota and fires a 'batch.completed'
+# webhook event.
+curl -sS -X POST http://localhost:3000/v1/batch \
+  -H "Authorization: Bearer $CODECLONE_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "language": "python",
+    "snippets": [
+      {"id":"a","code":"def add(a,b):\n    return a+b\n"},
+      {"id":"b","code":"def sum(x,y):\n    return x+y\n"},
+      {"id":"c","code":"def mul(a,b):\n    return a*b\n"}
+    ]
+  }' | jq '.n, .matrix, .cells[0].clone.type'
+# -> 3
+# -> [[1,0.17,0.08],[0.17,1,0.07],[0.08,0.07,1]]
+# -> "type-2"
+
+# Discover endpoints:
+curl -sS http://localhost:3000/v1| jq .endpoints
+```
+
+Limits: at most 12 snippets, 32 KiB per snippet, 192 KiB total. Quota headers (`x-codeclone-quota-limit`, `x-codeclone-quota-remaining`) and the same `quota_exceeded` 429 contract as `/v1/compare`.
 
 ### Try it: share a comparison
 

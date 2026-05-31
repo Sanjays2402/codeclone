@@ -1,0 +1,138 @@
+/**
+ * Public /v1/batch API. Authenticated via Bearer token (or x-api-key)
+ * and enforces the same free-tier quota as /v1/compare. Lets customers
+ * run a pairwise similarity matrix over up to 12 snippets in one call.
+ *
+ * Counts as a single billable request even though it runs n*(n-1)/2
+ * pair comparisons internally, which matches how the UI page treats it.
+ */
+import { NextResponse } from "next/server";
+import {
+  extractBearer,
+  findByPlaintext,
+  recordUse,
+} from "../../../../lib/api-keys";
+import { dispatchEvent } from "../../../../lib/webhooks";
+import { logUsage, quotaCheck } from "../../../../lib/usage";
+import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+function unauthorized(message: string) {
+  return NextResponse.json(
+    { error: { type: "unauthorized", message } },
+    { status: 401, headers: { "WWW-Authenticate": "Bearer" } },
+  );
+}
+
+function badRequest(message: string) {
+  return NextResponse.json(
+    { error: { type: "invalid_request", message } },
+    { status: 400 },
+  );
+}
+
+export async function POST(req: Request) {
+  const token = extractBearer(req);
+  if (!token) {
+    return unauthorized("Missing API key. Pass 'Authorization: Bearer <key>'.");
+  }
+  const key = await findByPlaintext(token);
+  if (!key) {
+    return unauthorized("Invalid or revoked API key.");
+  }
+
+  const quota = await quotaCheck();
+  if (!quota.allowed) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "quota_exceeded",
+          message: `Free tier monthly quota of ${quota.limit} requests reached. Upgrade to keep calling /v1/batch.`,
+        },
+        quota: {
+          monthToDate: quota.monthToDate,
+          limit: quota.limit,
+          remaining: 0,
+        },
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": "3600",
+          "x-codeclone-quota-limit": String(quota.limit),
+          "x-codeclone-quota-remaining": "0",
+        },
+      },
+    );
+  }
+
+  let raw: BatchInput;
+  try {
+    raw = (await req.json()) as BatchInput;
+  } catch {
+    return badRequest("Body must be JSON.");
+  }
+
+  const parsed = parseBatch(raw);
+  if (!parsed.ok) return badRequest(parsed.error);
+
+  const totalBytes = parsed.snippets.reduce(
+    (sum, s) => sum + Buffer.byteLength(s.code, "utf-8"),
+    0,
+  );
+
+  const result = runBatch(parsed.snippets, parsed.language);
+
+  void recordUse(key.id);
+  void logUsage({
+    ts: Date.now(),
+    keyId: key.id,
+    endpoint: "/v1/batch",
+    bytes: totalBytes,
+    latencyMs: result.latency_ms,
+  });
+
+  void dispatchEvent({
+    event: "batch.completed",
+    payload: {
+      key_id: key.id,
+      language: result.language,
+      n: result.n,
+      total_bytes: totalBytes,
+      latency_ms: result.latency_ms,
+    },
+  }).catch(() => {});
+
+  return NextResponse.json(result, {
+    headers: {
+      "x-codeclone-key-id": key.id,
+      "x-codeclone-key-prefix": key.prefix,
+      "x-codeclone-quota-limit": String(quota.limit),
+      "x-codeclone-quota-remaining": String(Math.max(0, quota.remaining - 1)),
+    },
+  });
+}
+
+export async function GET() {
+  return NextResponse.json({
+    name: "codeclone",
+    version: "v1",
+    endpoint: {
+      method: "POST",
+      path: "/v1/batch",
+      auth: "Bearer <api-key>",
+      body: {
+        snippets:
+          "array of { id?: string, label?: string, code: string }, 2 to 12 items",
+        language: "string (optional, default 'auto')",
+      },
+      limits: {
+        max_snippets: 12,
+        max_bytes_each: 32 * 1024,
+        max_bytes_total: 192 * 1024,
+      },
+    },
+  });
+}

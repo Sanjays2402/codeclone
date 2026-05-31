@@ -168,6 +168,16 @@ export async function GET() {
         auth: "Bearer <api-key>",
         body: { a: "string", b: "string", language: "string (optional)" },
       },
+      batch: {
+        method: "POST",
+        path: "/v1/batch",
+        auth: "Bearer <api-key>",
+        body: {
+          snippets:
+            "array of { id?: string, label?: string, code: string }, 2 to 12 items",
+          language: "string (optional)",
+        },
+      },
     },
   });
 }
