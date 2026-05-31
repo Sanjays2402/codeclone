@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Per-workspace request payload size policy on /v1. Owners can now cap the maximum request body in bytes for any /v1 call made with an API key bound to their workspace. The policy lives on the workspace record as `payloadPolicy.maxBodyBytes` (bounds: 1 KiB to 10 MiB, 0 clears) and is enforced twice in `web/lib/payload-policy-enforce.ts` on every /v1 request: pre-parse via the inbound `Content-Length` header so the server never has to hold an over-limit body in memory, and post-parse against the serialized JSON payload as defence in depth for chunked requests where `Content-Length` is missing or understated. Over-limit requests return HTTP 413 with a structured `payload_too_large` error that echoes `limit_bytes` and `claimed_bytes` so SDKs can surface a precise message, and every rejection writes a `v1.payload_blocked` audit entry tagged with the route (`/v1/compare` or `/v1/batch`), claimed bytes, configured limit, and detection source. Wired into `/v1/compare` and `/v1/batch`; `/v1/shares` is read-only. Owner-only `GET/PUT/DELETE /api/workspaces/:id/payload-policy` writes `workspace.payload_policy_update` audit entries with a before/after diff. The workspace settings page surfaces a dedicated editor with live KiB/MiB formatting; non-owners see it disabled. Five regression tests in `web/tests/workspaces-payload-policy.test.ts` cover the sanitiser bounds and 0-clears, persistence round-trip, cross-tenant isolation (a workspace A 2 KiB cap rejects payloads that workspace B's 1 MiB cap accepts, and clearing B does not loosen A), and the under/over body-size decision used by the enforcer.
+
+### Try it: cap /v1 request bodies at 8 KiB for a workspace
+
+```bash
+# Owner sets a 8 KiB cap on the workspace.
+curl -i -b cc_session=... -H 'content-type: application/json' \
+  -X PUT 'http://localhost:3000/api/workspaces/<ws_id>/payload-policy' \
+  -d '{"maxBodyBytes":8192}'
+
+# Caller sends a 50 KiB compare body with a key bound to that workspace.
+# Pre-parse Content-Length check fires; the server never reads the body.
+BIG=$(python3 -c 'print("x"*50000)')
+curl -i -H "authorization: Bearer cc_live_..." -H 'content-type: application/json' \
+  -X POST http://localhost:3000/v1/compare \
+  -d "{\"a\":\"$BIG\",\"b\":\"$BIG\"}"
+# HTTP/1.1 413 Payload Too Large
+# {"error":{"type":"payload_too_large","limit_bytes":8192,"claimed_bytes":...}}
+```
+
+The rejection lands in the audit log as `v1.payload_blocked` with the route, claimed bytes, and configured limit. `DELETE /api/workspaces/<ws_id>/payload-policy` clears the cap.
+
 - Secret-scan DLP policy on every snippet. Workspace owners can now require codeclone to scan every code snippet submitted to compare and batch for hardcoded credentials (AWS keys, GitHub PATs, Stripe keys, JWTs, PEM private keys, Slack/SendGrid/Twilio tokens, npm tokens, and more) before any similarity work runs. The policy lives on the workspace record as `secretScanPolicy` with four modes: `off` (default, zero added latency), `warn` (return findings on the response without altering behaviour), `redact` (replace each match with `[REDACTED:<rule>]` so similarity is scored against the post-redaction text), and `block` (reject the request with HTTP 422 `secrets_detected` and never persist the snippet, fire webhooks, or charge quota). Enforcement is centralised in `web/lib/secret-scan-enforce.ts` and wired into every customer-facing snippet route: `/api/compare`, `/v1/compare`, and `/v1/batch`; the dashboard `/api/compare` path uses the strictest policy across the signed-in user's workspaces so a member of a `block` workspace can't bypass it by running compare without selecting that workspace. Pattern rules are vendor-prefix anchored (AKIA, ghp_, sk-ant-, AIza, xox[abprs]-, SG., etc.) to keep false-positive rate low on real source code, and findings carry only rule id, label, span, and last-4 of the matched value, so neither the 422 body nor the audit row ever echoes the raw secret. Every non-empty finding set lands in the tamper-evident audit chain as `compare.secrets_detected` / `v1.compare.secrets_detected` / `v1.batch.secrets_detected` (or `*.secrets_blocked` when the request was refused) with the rule ids and the chosen mode, so a SOC2 reviewer can pivot from any audit row back to which workspace policy fired. Responses carry `x-codeclone-secret-scan-mode` and `x-codeclone-secret-scan-findings` headers plus an embedded `secret_scan` block so SDK clients can surface the DLP outcome without parsing audit logs. The owner-only editor at `/workspaces/<id>` exposes the four modes, the in-force mode, and a coverage list of every detection rule by id and label; non-owners see the section disabled. Ten regression tests in `web/tests/secret-scan.test.ts` pin the contract (pattern coverage and de-overlap on overlapping rules, no false positives on plain source, exact redaction substitution, mode semantics for off/warn/redact/block, policy round-trip including the sanitiser's strictest-mode fallback, source-grep proof that every snippet-accepting route imports `scanInputs` so a new compare-like route added later fails the test on day one, and a check that the blocked response shape never leaks the raw matched value). Endpoints: `GET/PUT/DELETE /api/workspaces/:id/secret-scan-policy`. Covers the standard procurement ask (SOC 2 CC6.7, ISO 27001 A.8.12, NIST 800-53 SC-28): "sensitive information transmitted to or stored by third-party services must be protected from inadvertent disclosure."
 
 ### Try it: block AWS keys from leaving your laptop

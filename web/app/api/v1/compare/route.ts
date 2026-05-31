@@ -9,6 +9,10 @@ import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
+import {
+  enforcePayloadPolicyHeaderForKey,
+  enforcePayloadPolicyBodyForKey,
+} from "../../../../lib/payload-policy-enforce";
 import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
@@ -75,6 +79,9 @@ export async function POST(req: Request) {
   const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
   if (policyBlocked) return policyBlocked;
 
+  const payloadHeader = await enforcePayloadPolicyHeaderForKey(req, key, { route: "/v1/compare" });
+  if (payloadHeader.response) return payloadHeader.response;
+
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;
 
@@ -140,6 +147,8 @@ export async function POST(req: Request) {
   } catch {
     return badRequest("Body must be JSON.");
   }
+  const payloadBody = await enforcePayloadPolicyBodyForKey(req, key, raw, payloadHeader.limit, { route: "/v1/compare" });
+  if (payloadBody) return payloadBody;
   const dryRun = isDryRun(req, raw);
   const a = typeof raw.a === "string" ? raw.a : "";
   const b = typeof raw.b === "string" ? raw.b : "";

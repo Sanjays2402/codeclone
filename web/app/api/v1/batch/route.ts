@@ -17,6 +17,10 @@ import { enforce as enforceRateLimit } from "../../../../lib/rate-limit";
 import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../../lib/ip-allowlist-enforce";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
+import {
+  enforcePayloadPolicyHeaderForKey,
+  enforcePayloadPolicyBodyForKey,
+} from "../../../../lib/payload-policy-enforce";
 import { dispatchEvent } from "../../../../lib/webhooks";
 import { logUsage, quotaCheck } from "../../../../lib/usage";
 import { parseBatch, runBatch, type BatchInput } from "../../../../lib/batch";
@@ -74,6 +78,9 @@ export async function POST(req: Request) {
   if (residencyBlocked) return residencyBlocked;
   const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
   if (policyBlocked) return policyBlocked;
+
+  const payloadHeader = await enforcePayloadPolicyHeaderForKey(req, key, { route: "/v1/batch" });
+  if (payloadHeader.response) return payloadHeader.response;
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;
@@ -137,6 +144,8 @@ export async function POST(req: Request) {
   } catch {
     return badRequest("Body must be JSON.");
   }
+  const payloadBody = await enforcePayloadPolicyBodyForKey(req, key, raw, payloadHeader.limit, { route: "/v1/batch" });
+  if (payloadBody) return payloadBody;
   const dryRun = isDryRun(req, raw);
 
   const parsed = parseBatch(raw);

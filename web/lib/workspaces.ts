@@ -304,6 +304,23 @@ export interface WorkspaceRecord {
     updatedAt: number;
     updatedBy: string;
   } | null;
+
+  /**
+   * Owner-configured maximum request body size in bytes for /v1 routes
+   * bound to this workspace via an API key. Acts as a workspace-level
+   * DoS guardrail above the per-route hardcoded ceilings. When unset
+   * (or 0), only the per-route hardcoded ceilings apply.
+   *
+   * Enforced pre-JSON-parse by inspecting Content-Length and the
+   * already-parsed payload byte size. Violations return HTTP 413 with a
+   * structured `payload_too_large` error and are written to the audit
+   * log as `v1.payload_blocked` so security teams can spot abuse.
+   */
+  payloadPolicy?: {
+    maxBodyBytes: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
 }
 
 export type ResidencyRegion = "us" | "eu" | "apac" | "global";
@@ -883,6 +900,65 @@ export async function setSessionPolicy(
 export const API_KEY_POLICY_BOUNDS = {
   maxAgeDays: { min: 1, max: 365 },
 } as const;
+
+/**
+ * Bounds for the workspace payload size policy. 1 KiB minimum keeps the
+ * policy from accidentally bricking the API; 10 MiB maximum mirrors the
+ * largest payload any /v1 endpoint accepts today and matches typical
+ * reverse-proxy defaults (nginx client_max_body_size 10m).
+ */
+export const PAYLOAD_POLICY_BOUNDS = {
+  maxBodyBytes: { min: 1024, max: 10 * 1024 * 1024 },
+} as const;
+
+export function sanitizePayloadPolicy(
+  input: { maxBodyBytes?: unknown } | null | undefined,
+): { maxBodyBytes: number } | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as Record<string, unknown>).maxBodyBytes;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n)) return null;
+  if (n <= 0) return { maxBodyBytes: 0 };
+  const clamped = Math.min(
+    PAYLOAD_POLICY_BOUNDS.maxBodyBytes.max,
+    Math.max(PAYLOAD_POLICY_BOUNDS.maxBodyBytes.min, Math.floor(n)),
+  );
+  return { maxBodyBytes: clamped };
+}
+
+/**
+ * Replace the workspace payload size policy. Pass null or 0 to clear.
+ * Caller must enforce owner-only permission and write the audit entry.
+ */
+export async function setPayloadPolicy(
+  ws: WorkspaceRecord,
+  policy: { maxBodyBytes: number } | null,
+  actor: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || policy.maxBodyBytes === 0) {
+    ws.payloadPolicy = null;
+  } else {
+    ws.payloadPolicy = {
+      maxBodyBytes: policy.maxBodyBytes,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * The maximum request body size (bytes) for a given workspace, or null
+ * if no policy is configured.
+ */
+export function payloadPolicyLimit(
+  ws: WorkspaceRecord | null | undefined,
+): number | null {
+  const n = ws?.payloadPolicy?.maxBodyBytes;
+  if (!n || n <= 0) return null;
+  return n;
+}
 
 export function sanitizeApiKeyPolicy(
   input: { maxAgeDays?: unknown } | null | undefined,
