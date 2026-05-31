@@ -12,6 +12,7 @@ import {
   User,
   Clock,
   Tag,
+  LinkSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -59,6 +60,34 @@ export default function AuditPage() {
   const [workspaceId, setWorkspaceId] = useState("");
   const [status, setStatus] = useState<"" | "ok" | "denied" | "error">("");
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [verifying, setVerifying] = useState(false);
+  const [verifyResult, setVerifyResult] = useState<{
+    ok: boolean;
+    totalEntries: number;
+    chainedEntries: number;
+    legacyEntries: number;
+    brokenAt: { day: string; seq: number; id: string; reason: string } | null;
+    lastHash: string | null;
+  } | null>(null);
+  const [verifyError, setVerifyError] = useState<string | null>(null);
+
+  const verifyChain = useCallback(async () => {
+    setVerifying(true);
+    setVerifyError(null);
+    try {
+      const r = await fetch("/api/audit/verify", { cache: "no-store" });
+      const j = await r.json();
+      if (r.status === 401) {
+        setVerifyError("sign in to verify");
+        return;
+      }
+      setVerifyResult(j);
+    } catch (e) {
+      setVerifyError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setVerifying(false);
+    }
+  }, []);
 
   const buildQuery = useCallback(() => {
     const q = new URLSearchParams();
@@ -191,8 +220,65 @@ export default function AuditPage() {
           >
             <DownloadSimple size={14} weight="duotone" /> csv
           </a>
+          <button
+            type="button"
+            onClick={() => void verifyChain()}
+            disabled={verifying}
+            className="inline-flex items-center gap-1.5 mono text-[12px] px-3 py-1.5 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] disabled:opacity-50"
+            title="Verify the on-disk audit hash chain"
+          >
+            <LinkSimple size={14} weight="duotone" /> verify chain
+          </button>
         </div>
       </form>
+
+      {(verifyResult || verifyError) && (
+        <div
+          className={`ruled rounded-md p-3 mb-5 text-[12.5px] flex items-start gap-2 ${
+            verifyError
+              ? "text-[var(--color-neg)]"
+              : verifyResult && verifyResult.ok
+                ? "text-[var(--color-pos)]"
+                : "text-[var(--color-neg)]"
+          }`}
+          role="status"
+          aria-live="polite"
+        >
+          {verifyError ? (
+            <>
+              <WarningCircle size={16} weight="duotone" />
+              <span>verify failed: {verifyError}</span>
+            </>
+          ) : verifyResult && verifyResult.ok ? (
+            <>
+              <CheckCircle size={16} weight="duotone" />
+              <div className="flex-1 min-w-0">
+                <div>
+                  chain intact: {verifyResult.chainedEntries} chained
+                  {verifyResult.legacyEntries > 0
+                    ? `, ${verifyResult.legacyEntries} legacy pre-chain`
+                    : ""}
+                </div>
+                {verifyResult.lastHash && (
+                  <div className="mono text-[10.5px] text-[var(--color-ink-3)] truncate">
+                    head: {verifyResult.lastHash}
+                  </div>
+                )}
+              </div>
+            </>
+          ) : verifyResult ? (
+            <>
+              <XCircle size={16} weight="duotone" />
+              <div>
+                <div>chain broken at day {verifyResult.brokenAt?.day}, seq {verifyResult.brokenAt?.seq}</div>
+                <div className="mono text-[10.5px] text-[var(--color-ink-3)]">
+                  reason: {verifyResult.brokenAt?.reason}
+                </div>
+              </div>
+            </>
+          ) : null}
+        </div>
+      )}
 
       {authed === false ? (
         <Empty

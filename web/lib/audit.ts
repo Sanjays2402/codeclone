@@ -45,6 +45,19 @@ export interface AuditEntry {
   requestId: string | null;
   diff?: { before?: unknown; after?: unknown } | null;
   meta?: Record<string, unknown> | null;
+  /**
+   * Tamper-evident hash chain fields. `seq` is a per-day monotonic counter
+   * starting at 1. `prevHash` is the sha256 hex of the previous entry in the
+   * chain (the last entry of the previous day for seq=1, otherwise the prior
+   * entry of the same day). `hash` is sha256 over the canonical JSON of the
+   * entry with `hash` itself excluded. Verifying these fields against the
+   * stored JSONL detects any insertion, deletion, or edit by an operator with
+   * raw file access. Older entries written before this field existed are
+   * treated as legacy (verify reports `legacy: true`).
+   */
+  seq?: number;
+  prevHash?: string;
+  hash?: string;
 }
 
 export interface RecordAuditInput {
@@ -108,6 +121,83 @@ function clientIp(req: Request | undefined): string | null {
   return null;
 }
 
+/**
+ * Canonical JSON: sorts object keys recursively so the hash is stable across
+ * runtimes and key-insertion orders. Arrays preserve order. Used as the input
+ * to the sha256 chain hash. Excludes the `hash` field itself by convention.
+ */
+function canonicalize(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return "[" + value.map(canonicalize).join(",") + "]";
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).filter((k) => k !== "hash").sort();
+  return (
+    "{" +
+    keys
+      .map((k) => JSON.stringify(k) + ":" + canonicalize(obj[k]))
+      .join(",") +
+    "}"
+  );
+}
+
+function hashEntry(entry: AuditEntry): string {
+  return crypto.createHash("sha256").update(canonicalize(entry)).digest("hex");
+}
+
+const GENESIS_HASH = "0".repeat(64);
+
+async function readLastChainState(
+  beforeDay: string,
+): Promise<{ prevHash: string; lastDay: string | null }> {
+  // Find most recent prior day file and read its tail line for chain link.
+  let files: string[];
+  try {
+    files = (await fs.readdir(AUDIT_DIR))
+      .filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+      .map((f) => f.replace(".jsonl", ""))
+      .filter((d) => d < beforeDay)
+      .sort();
+  } catch {
+    return { prevHash: GENESIS_HASH, lastDay: null };
+  }
+  for (let i = files.length - 1; i >= 0; i--) {
+    const day = files[i]!;
+    const raw = await fs.readFile(pathForDay(day), "utf8").catch(() => "");
+    const lines = raw.split("\n").filter(Boolean);
+    for (let j = lines.length - 1; j >= 0; j--) {
+      try {
+        const e = JSON.parse(lines[j]!) as AuditEntry;
+        if (e.hash) return { prevHash: e.hash, lastDay: day };
+      } catch {
+        continue;
+      }
+    }
+  }
+  return { prevHash: GENESIS_HASH, lastDay: null };
+}
+
+async function readTodayChainTail(
+  day: string,
+): Promise<{ prevHash: string | null; seq: number }> {
+  // Returns the last hash + seq for `day`, or null if no chained entries today.
+  const raw = await fs.readFile(pathForDay(day), "utf8").catch(() => "");
+  const lines = raw.split("\n").filter(Boolean);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    try {
+      const e = JSON.parse(lines[i]!) as AuditEntry;
+      if (e.hash && typeof e.seq === "number") {
+        return { prevHash: e.hash, seq: e.seq };
+      }
+    } catch {
+      continue;
+    }
+  }
+  return { prevHash: null, seq: 0 };
+}
+
+// Serialize appends so concurrent recordAudit calls produce a valid chain.
+let writeChain: Promise<unknown> = Promise.resolve();
+
 export async function recordAudit(
   req: Request | undefined,
   input: RecordAuditInput,
@@ -122,7 +212,8 @@ export async function recordAudit(
   }
   await ensureDir(AUDIT_DIR);
   const ts = Date.now();
-  const entry: AuditEntry = {
+  const day = dayKey(ts);
+  const baseEntry: AuditEntry = {
     v: 1,
     id: crypto.randomUUID(),
     ts,
@@ -138,10 +229,167 @@ export async function recordAudit(
     diff: trimDiff(input.diff) as AuditEntry["diff"],
     meta: input.meta ?? null,
   };
-  const file = pathForDay(dayKey(ts));
-  await fs.appendFile(file, JSON.stringify(entry) + "\n", "utf8");
-  return entry;
+
+  const run = writeChain.then(async () => {
+    const tail = await readTodayChainTail(day);
+    let prevHash: string;
+    let seq: number;
+    if (tail.prevHash) {
+      prevHash = tail.prevHash;
+      seq = tail.seq + 1;
+    } else {
+      const prior = await readLastChainState(day);
+      prevHash = prior.prevHash;
+      seq = 1;
+    }
+    const entry: AuditEntry = { ...baseEntry, seq, prevHash };
+    entry.hash = hashEntry(entry);
+    await fs.appendFile(pathForDay(day), JSON.stringify(entry) + "\n", "utf8");
+    return entry;
+  });
+  // Keep chain serial but don't poison it on errors.
+  writeChain = run.catch(() => undefined);
+  return run;
 }
+
+export interface VerifyResult {
+  ok: boolean;
+  totalEntries: number;
+  chainedEntries: number;
+  legacyEntries: number;
+  brokenAt: { day: string; seq: number; id: string; reason: string } | null;
+  firstDay: string | null;
+  lastDay: string | null;
+  lastHash: string | null;
+}
+
+/**
+ * Walk every audit file in order and verify each entry's hash matches
+ * sha256(canonical(entry-without-hash)) and that prevHash matches the prior
+ * entry's hash. Legacy entries without `hash` are counted but not chained;
+ * verify still succeeds as long as all chained entries are intact.
+ */
+export async function verifyAuditChain(): Promise<VerifyResult> {
+  await ensureDir(AUDIT_DIR);
+  let files: string[] = [];
+  try {
+    files = (await fs.readdir(AUDIT_DIR))
+      .filter((f) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(f))
+      .sort();
+  } catch {
+    return {
+      ok: true,
+      totalEntries: 0,
+      chainedEntries: 0,
+      legacyEntries: 0,
+      brokenAt: null,
+      firstDay: null,
+      lastDay: null,
+      lastHash: null,
+    };
+  }
+  let prevHash = GENESIS_HASH;
+  let total = 0;
+  let chained = 0;
+  let legacy = 0;
+  let lastChainedHash: string | null = null;
+  let firstDay: string | null = null;
+  let lastDay: string | null = null;
+  let dayLocalSeq = 0;
+  let dayCursor: string | null = null;
+  for (const f of files) {
+    const day = f.replace(".jsonl", "");
+    if (!firstDay) firstDay = day;
+    lastDay = day;
+    if (day !== dayCursor) {
+      dayCursor = day;
+      dayLocalSeq = 0;
+    }
+    const raw = await fs.readFile(path.join(AUDIT_DIR, f), "utf8").catch(() => "");
+    const lines = raw.split("\n").filter(Boolean);
+    for (const line of lines) {
+      total++;
+      let entry: AuditEntry;
+      try {
+        entry = JSON.parse(line) as AuditEntry;
+      } catch {
+        return {
+          ok: false,
+          totalEntries: total,
+          chainedEntries: chained,
+          legacyEntries: legacy,
+          brokenAt: { day, seq: -1, id: "?", reason: "invalid_json" },
+          firstDay,
+          lastDay,
+          lastHash: lastChainedHash,
+        };
+      }
+      if (!entry.hash || typeof entry.seq !== "number") {
+        legacy++;
+        continue;
+      }
+      dayLocalSeq++;
+      if (entry.seq !== dayLocalSeq) {
+        return {
+          ok: false,
+          totalEntries: total,
+          chainedEntries: chained,
+          legacyEntries: legacy,
+          brokenAt: {
+            day,
+            seq: entry.seq,
+            id: entry.id,
+            reason: `seq_out_of_order expected ${dayLocalSeq}`,
+          },
+          firstDay,
+          lastDay,
+          lastHash: lastChainedHash,
+        };
+      }
+      if (entry.prevHash !== prevHash) {
+        return {
+          ok: false,
+          totalEntries: total,
+          chainedEntries: chained,
+          legacyEntries: legacy,
+          brokenAt: { day, seq: entry.seq, id: entry.id, reason: "prev_hash_mismatch" },
+          firstDay,
+          lastDay,
+          lastHash: lastChainedHash,
+        };
+      }
+      const expected = hashEntry(entry);
+      if (expected !== entry.hash) {
+        return {
+          ok: false,
+          totalEntries: total,
+          chainedEntries: chained,
+          legacyEntries: legacy,
+          brokenAt: { day, seq: entry.seq, id: entry.id, reason: "hash_mismatch" },
+          firstDay,
+          lastDay,
+          lastHash: lastChainedHash,
+        };
+      }
+      chained++;
+      prevHash = entry.hash;
+      lastChainedHash = entry.hash;
+    }
+  }
+  return {
+    ok: true,
+    totalEntries: total,
+    chainedEntries: chained,
+    legacyEntries: legacy,
+    brokenAt: null,
+    firstDay,
+    lastDay,
+    lastHash: lastChainedHash,
+  };
+}
+
+export const _internals = { hashEntry, canonicalize, GENESIS_HASH };
+
 
 export interface ListAuditOptions {
   actorId?: string;
