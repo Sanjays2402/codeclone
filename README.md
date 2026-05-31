@@ -19,6 +19,7 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 - OpenAI-compatible serve: `/v1/models`, `/v1/chat/completions`, `/v1/completions`, SSE streaming, API key auth, `/healthz`, `/readyz`, `/metrics`
 - Recipe YAMLs (`quick`, `small`, `standard`, `full`, `python_only`, `ts_js_only`, `cuda_overnight`)
 - Next.js 15 dashboard: pairs list with search + lang filter, pair detail with shiki diff viewer, datasets browse, models/adapters registry, eval grid with Recharts sparklines, serve health probe
+- Interactive `/compare` page: paste two snippets, see token + shingle Jaccard, containment, shared identifiers, a side-by-side diff, and a line-level alignment heatmap that flags exact and moved blocks
 - Prometheus metrics, OTEL hooks, structlog JSON logs
 
 ## Stack
@@ -164,6 +165,23 @@ Repo scripts: `scripts/smoke_e2e.sh`, `scripts/docker_smoke.sh`, `scripts/test.s
 Web (`web/package.json`): `dev`, `build`, `start`, `lint`, `typecheck`, `seed` (`node scripts/seed-fixtures.mjs`).
 
 ## API
+
+### Try `/compare` locally
+
+```
+cd web && npm run dev
+open http://127.0.0.1:3000/compare
+```
+
+The page ships with three preloaded samples (renamed variables, partial overlap, distinct). Click one and hit compare. For a scripted call:
+
+```
+curl -sS -X POST http://127.0.0.1:3000/api/compare \
+  -H 'content-type: application/json' \
+  -d '{"a":"def f(x):\n  return x+1","b":"def g(y):\n  return y+1","language":"python"}'
+```
+
+Response includes the three Jaccard-family scores, shared identifiers, and a `alignment` block with per-line best matches plus moved-block flags. The same payload powers the heatmap above the diff viewer.
 
 ### Serve (FastAPI, `services/serve/codeclone_serve/app.py`)
 

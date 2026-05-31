@@ -3,14 +3,16 @@
 import { useCallback, useMemo, useState } from "react";
 import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
+import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
 import { COMPARE_LANGUAGES, COMPARE_SAMPLES } from "../../lib/compare-samples";
-import { labelForScore, type SimilarityScores } from "../../lib/similarity";
+import { labelForScore, type SimilarityScores, type LineAlignment } from "../../lib/similarity";
 
 interface CompareResponse {
   language: string;
   bytes: { a: number; b: number };
   scores: SimilarityScores;
+  alignment: LineAlignment;
   latency_ms: number;
   method: string;
 }
@@ -221,6 +223,11 @@ export default function ComparePage() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <div className="eyebrow flex items-center gap-2"><GitDiff weight="duotone" size={13} /> line alignment · best-match map</div>
+            <AlignmentMap alignment={result.alignment} a={a} b={b} />
           </div>
 
           <div className="flex flex-col gap-2">

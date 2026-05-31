@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { compareCode } from "../../../lib/similarity";
+import { compareCode, alignLines } from "../../../lib/similarity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,12 +40,14 @@ export async function POST(req: Request) {
   }
   const started = performance.now();
   const scores = compareCode(parsed.a, parsed.b);
+  const alignment = alignLines(parsed.a, parsed.b);
   const latencyMs = performance.now() - started;
   return NextResponse.json({
     language: parsed.language,
     bytes: { a: Buffer.byteLength(parsed.a, "utf-8"), b: Buffer.byteLength(parsed.b, "utf-8") },
     scores,
+    alignment,
     latency_ms: Number(latencyMs.toFixed(3)),
-    method: "exact-jaccard+5gram-shingles",
+    method: "exact-jaccard+5gram-shingles+line-align",
   });
 }
