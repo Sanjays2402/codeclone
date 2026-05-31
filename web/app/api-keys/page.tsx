@@ -23,9 +23,11 @@ interface ApiKeySummary {
   lastUsedAt?: number;
   usageCount: number;
   revoked?: boolean;
+  expiresAt?: number;
+  expired?: boolean;
 }
 
-type Status = "loading" | "ready" | "error";
+type Status = "loading" | "ready" | "error" | "signedout";
 
 const CURL_EXAMPLE = (token: string) =>
   `curl -X POST http://localhost:3000/v1/compare \\
@@ -65,6 +67,7 @@ export default function ApiKeysPage() {
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState("");
   const [label, setLabel] = useState("");
+  const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [creating, setCreating] = useState(false);
   const [reveal, setReveal] = useState<{ id: string; plaintext: string } | null>(null);
   const [busy, setBusy] = useState("");
@@ -72,9 +75,13 @@ export default function ApiKeysPage() {
   const refresh = useCallback(async () => {
     try {
       const res = await fetch("/api/api-keys", { cache: "no-store" });
+      if (res.status === 401) {
+        setStatus("signedout");
+        return;
+      }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `Request failed (${res.status}).`);
+        throw new Error(j.error?.message ?? j.error ?? `Request failed (${res.status}).`);
       }
       const j = (await res.json()) as { items: ApiKeySummary[] };
       setItems(j.items ?? []);
@@ -93,14 +100,26 @@ export default function ApiKeysPage() {
     setCreating(true);
     setError("");
     try {
+      const expRaw = expiresInDays.trim();
+      const expNum = expRaw ? Number(expRaw) : undefined;
+      if (expRaw && (!Number.isFinite(expNum) || (expNum as number) <= 0 || (expNum as number) > 365)) {
+        throw new Error("Expiry must be 1 to 365 days, or blank for never.");
+      }
       const res = await fetch("/api/api-keys", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ label: label.trim() || "Untitled key" }),
+        body: JSON.stringify({
+          label: label.trim() || "Untitled key",
+          ...(expNum ? { expiresInDays: expNum } : {}),
+        }),
       });
+      if (res.status === 401) {
+        setStatus("signedout");
+        return;
+      }
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
-        throw new Error(j.error ?? `Request failed (${res.status}).`);
+        throw new Error(j.error?.message ?? j.error ?? `Request failed (${res.status}).`);
       }
       const j = (await res.json()) as {
         key: ApiKeySummary;
@@ -108,13 +127,14 @@ export default function ApiKeysPage() {
       };
       setReveal({ id: j.key.id, plaintext: j.plaintext });
       setLabel("");
+      setExpiresInDays("");
       await refresh();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }
-  }, [label, refresh]);
+  }, [label, expiresInDays, refresh]);
 
   const onRevoke = useCallback(
     async (id: string) => {
@@ -199,6 +219,18 @@ export default function ApiKeysPage() {
               if (e.key === "Enter") void onCreate();
             }}
           />
+          <input
+            type="number"
+            value={expiresInDays}
+            onChange={(e) => setExpiresInDays(e.target.value)}
+            placeholder="Expires (days, blank = never)"
+            min={1}
+            max={365}
+            className="sm:w-44 bg-transparent outline-none text-[13.5px] px-2 py-1.5 border border-[var(--color-rule)] rounded-sm focus:border-[var(--color-accent)]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void onCreate();
+            }}
+          />
           <button
             type="button"
             onClick={onCreate}
@@ -214,6 +246,12 @@ export default function ApiKeysPage() {
       <H2 eyebrow="keys">Your keys</H2>
       {error && <div className="mb-4"><ErrorBlock message={error} /></div>}
 
+      {status === "signedout" && (
+        <Empty
+          title="Sign in to manage API keys."
+          hint="API keys are scoped to your account so usage and revocation stay isolated. Visit /signin to create one."
+        />
+      )}
       {status === "loading" && <LoadingRow rows={3} />}
       {status === "ready" && items.length === 0 && (
         <Empty
@@ -241,6 +279,19 @@ export default function ApiKeysPage() {
                 {k.revoked && (
                   <span className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-neg)] bg-[var(--color-neg-soft)]">
                     revoked
+                  </span>
+                )}
+                {k.expired && !k.revoked && (
+                  <span className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-neg)] bg-[var(--color-neg-soft)]">
+                    expired
+                  </span>
+                )}
+                {!k.expired && !k.revoked && k.expiresAt && (
+                  <span
+                    title={`Expires ${fmtTs(k.expiresAt)}`}
+                    className="mono text-[9.5px] uppercase tracking-[0.14em] px-1.5 py-px rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]"
+                  >
+                    exp {fmtTs(k.expiresAt)}
                   </span>
                 )}
               </div>

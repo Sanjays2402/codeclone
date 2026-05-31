@@ -33,6 +33,8 @@ export interface ApiKeyRecord {
   lastUsedAt?: number;
   usageCount: number;
   revoked?: boolean;
+  userId?: string; // owning user; absent on legacy/unscoped records
+  expiresAt?: number; // optional epoch ms; absent means never expires
 }
 
 export interface ApiKeySummary {
@@ -43,6 +45,24 @@ export interface ApiKeySummary {
   lastUsedAt?: number;
   usageCount: number;
   revoked?: boolean;
+  userId?: string;
+  expiresAt?: number;
+  expired?: boolean;
+}
+
+const MAX_EXPIRES_DAYS = 365;
+
+function normalizeExpiresInDays(input: unknown): number | undefined {
+  if (input === undefined || input === null || input === "") return undefined;
+  const n = typeof input === "number" ? input : Number(input);
+  if (!Number.isFinite(n)) return undefined;
+  if (n <= 0) return undefined;
+  const days = Math.min(Math.floor(n), MAX_EXPIRES_DAYS);
+  return Date.now() + days * 24 * 60 * 60 * 1000;
+}
+
+function isExpired(rec: { expiresAt?: number }): boolean {
+  return typeof rec.expiresAt === "number" && rec.expiresAt <= Date.now();
 }
 
 function isKeyId(id: string): boolean {
@@ -76,6 +96,9 @@ export function summarize(rec: ApiKeyRecord): ApiKeySummary {
     lastUsedAt: rec.lastUsedAt,
     usageCount: rec.usageCount,
     revoked: rec.revoked,
+    userId: rec.userId,
+    expiresAt: rec.expiresAt,
+    expired: isExpired(rec),
   };
 }
 
@@ -84,7 +107,12 @@ export interface CreatedKey {
   plaintext: string;
 }
 
-export async function createKey(label: unknown): Promise<CreatedKey> {
+export interface CreateOptions {
+  userId?: string;
+  expiresInDays?: unknown;
+}
+
+export async function createKey(label: unknown, opts: CreateOptions = {}): Promise<CreatedKey> {
   await ensureDir();
   for (let attempt = 0; attempt < 4; attempt++) {
     const id = crypto.randomBytes(8).toString("base64url").slice(0, ID_LEN);
@@ -106,6 +134,11 @@ export async function createKey(label: unknown): Promise<CreatedKey> {
       createdAt: Date.now(),
       usageCount: 0,
     };
+    if (opts.userId && typeof opts.userId === "string") {
+      rec.userId = opts.userId;
+    }
+    const exp = normalizeExpiresInDays(opts.expiresInDays);
+    if (exp) rec.expiresAt = exp;
     await fs.writeFile(file, JSON.stringify(rec), "utf-8");
     return { record: summarize(rec), plaintext };
   }
@@ -124,16 +157,22 @@ export async function loadKey(id: string): Promise<ApiKeyRecord | null> {
   }
 }
 
-export async function revokeKey(id: string): Promise<boolean> {
+export async function revokeKey(id: string, userId?: string): Promise<boolean> {
   const rec = await loadKey(id);
   if (!rec) return false;
+  if (userId !== undefined && rec.userId && rec.userId !== userId) return false;
   if (rec.revoked) return true;
   rec.revoked = true;
   await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
   return true;
 }
 
-export async function deleteKey(id: string): Promise<boolean> {
+export async function deleteKey(id: string, userId?: string): Promise<boolean> {
+  if (userId !== undefined) {
+    const rec = await loadKey(id);
+    if (!rec) return false;
+    if (rec.userId && rec.userId !== userId) return false;
+  }
   if (!isKeyId(id)) return false;
   try {
     await fs.unlink(keyFile(id));
@@ -143,7 +182,7 @@ export async function deleteKey(id: string): Promise<boolean> {
   }
 }
 
-export async function listKeys(): Promise<ApiKeySummary[]> {
+export async function listKeys(userId?: string): Promise<ApiKeySummary[]> {
   await ensureDir();
   let names: string[];
   try {
@@ -158,6 +197,10 @@ export async function listKeys(): Promise<ApiKeySummary[]> {
     if (!isKeyId(id)) continue;
     const rec = await loadKey(id);
     if (!rec) continue;
+    if (userId !== undefined) {
+      // Scoped listing: only owned records, never legacy/unowned.
+      if (rec.userId !== userId) continue;
+    }
     out.push(summarize(rec));
   }
   out.sort((a, b) => b.createdAt - a.createdAt);
@@ -185,6 +228,7 @@ export async function findByPlaintext(plain: string): Promise<ApiKeyRecord | nul
     if (!isKeyId(id)) continue;
     const rec = await loadKey(id);
     if (!rec || rec.revoked) continue;
+    if (isExpired(rec)) continue;
     const recBuf = Buffer.from(rec.hash, "hex");
     if (recBuf.length !== targetBuf.length) continue;
     if (crypto.timingSafeEqual(recBuf, targetBuf)) return rec;
