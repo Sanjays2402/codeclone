@@ -239,6 +239,26 @@ export interface WorkspaceRecord {
     caseRef?: string | null;
   } | null;
   /**
+   * Owner-controlled break-glass lockdown. When `active` is true, every
+   * /v1 API call presenting a key bound to this workspace is refused
+   * with HTTP 423 `workspace_locked` and audited. Dashboard sessions
+   * keep working so an owner can lift the lockdown, rotate keys, and
+   * inspect the audit trail; mutating dashboard routes that would
+   * widen access (members, invites, sso, api-key-policy, allowlists)
+   * SHOULD additionally consult `isWorkspaceLocked` but lockdown's
+   * primary contract is to halt programmatic API traffic immediately
+   * during a suspected key compromise or active incident. Lifting the
+   * lockdown is itself an audited owner act and requires typing the
+   * workspace slug as confirmation, matching the legal-hold pattern.
+   */
+  lockdown?: {
+    active: true;
+    reason: string;
+    placedAt: number;
+    placedBy: string;
+    caseRef?: string | null;
+  } | null;
+  /**
    * Owner-configured data residency policy. Enterprise buyers in regulated
    * sectors (EU healthcare, APAC finance, US-only public sector) require a
    * contractual guarantee that workspace data is processed only in named
@@ -489,6 +509,54 @@ export async function placeLegalHold(
 
 export async function releaseLegalHold(ws: WorkspaceRecord): Promise<WorkspaceRecord> {
   ws.legalHold = null;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+export interface LockdownInput {
+  reason: string;
+  caseRef?: string | null;
+}
+
+export function sanitizeLockdown(input: unknown): LockdownInput | null {
+  if (!input || typeof input !== "object") return null;
+  const o = input as Record<string, unknown>;
+  const reason = typeof o.reason === "string" ? o.reason.trim() : "";
+  if (reason.length < 3 || reason.length > 500) return null;
+  let caseRef: string | null = null;
+  if (typeof o.caseRef === "string") {
+    const t = o.caseRef.trim();
+    if (t.length > 0 && t.length <= 120 && /^[A-Za-z0-9 _\-./#:]+$/.test(t)) {
+      caseRef = t;
+    } else if (t.length > 0) {
+      return null;
+    }
+  }
+  return { reason, caseRef };
+}
+
+export function isWorkspaceLocked(ws: WorkspaceRecord | null | undefined): boolean {
+  return !!(ws && ws.lockdown && ws.lockdown.active === true);
+}
+
+export async function placeLockdown(
+  ws: WorkspaceRecord,
+  input: LockdownInput,
+  placedBy: string,
+): Promise<WorkspaceRecord> {
+  ws.lockdown = {
+    active: true,
+    reason: input.reason,
+    placedAt: Date.now(),
+    placedBy,
+    caseRef: input.caseRef ?? null,
+  };
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+export async function releaseLockdown(ws: WorkspaceRecord): Promise<WorkspaceRecord> {
+  ws.lockdown = null;
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }

@@ -32,6 +32,7 @@ import { DualControlEditor } from "../../../components/DualControlEditor";
 import { RetentionEditor } from "../../../components/RetentionEditor";
 import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
+import { LockdownEditor } from "../../../components/LockdownEditor";
 import { SupportAccessEditor } from "../../../components/SupportAccessEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
 import { InviteDomainAllowlistEditor } from "../../../components/InviteDomainAllowlistEditor";
@@ -493,7 +494,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
       )}
 
       {ws.myRole && (
-        <LegalHoldEditor workspaceId={ws.id} workspaceSlug={ws.slug} />
+        <>
+          <LegalHoldEditor workspaceId={ws.id} workspaceSlug={ws.slug} />
+          <LockdownEditor workspaceId={ws.id} workspaceSlug={ws.slug} />
+        </>
       )}
 
       {ws.myRole && (

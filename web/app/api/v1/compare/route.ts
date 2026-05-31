@@ -10,6 +10,7 @@ import { enforceWorkspaceAllowlistForKey, enforceKeyAllowlist } from "../../../.
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceDpaForKey } from "../../../../lib/dpa-enforce";
+import { enforceWorkspaceLockdownForKey } from "../../../../lib/lockdown-enforce";
 import {
   enforcePayloadPolicyHeaderForKey,
   enforcePayloadPolicyBodyForKey,
@@ -72,6 +73,8 @@ export async function POST(req: Request) {
     );
   }
 
+  const lockdownBlocked = await enforceWorkspaceLockdownForKey(req, key, { route: "/v1/compare" });
+  if (lockdownBlocked) return lockdownBlocked;
   const blocked = await enforceWorkspaceAllowlistForKey(req, key);
   if (blocked) return blocked;
   const keyBlocked = await enforceKeyAllowlist(req, key);
