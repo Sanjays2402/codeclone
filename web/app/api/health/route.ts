@@ -1,9 +1,10 @@
 import { NextResponse } from "next/server";
 import { loadEvalHealth } from "../../../lib/data";
+import { instrument } from "../../../lib/instrument";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export const GET = instrument("/api/health", async () => {
   const base = process.env.CODECLONE_SERVE_URL || "http://127.0.0.1:7461";
   const health = await loadEvalHealth();
   let serve: { status: string; model?: string } = { status: "down" };
@@ -15,4 +16,4 @@ export async function GET() {
     if (r.ok) serve = await r.json();
   } catch {}
   return NextResponse.json({ ...health, serve });
-}
+});

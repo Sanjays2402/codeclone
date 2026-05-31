@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
 import { tryRecordAudit } from "../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { instrument } from "../../../lib/instrument";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,7 +30,7 @@ function parseBody(body: CompareBody): { a: string; b: string; language: string 
   return { a, b, language };
 }
 
-export async function POST(req: Request) {
+export const POST = instrument("/api/compare", async function POST(req) {
   let raw: CompareBody;
   try {
     raw = (await req.json()) as CompareBody;
@@ -68,4 +69,4 @@ export async function POST(req: Request) {
     latency_ms: Number(latencyMs.toFixed(3)),
     method: "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
   });
-}
+});

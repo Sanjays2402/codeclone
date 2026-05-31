@@ -194,11 +194,13 @@ export interface SessionPayload {
   uid: string;
   iat: number;
   exp: number;
+  jti?: string;
 }
 
-export function signSession(uid: string, ttlSec = SESSION_TTL_SEC): string {
+export function signSession(uid: string, ttlSec = SESSION_TTL_SEC, jti?: string): string {
   const now = Math.floor(Date.now() / 1000);
   const payload: SessionPayload = { uid, iat: now, exp: now + ttlSec };
+  if (jti) payload.jti = jti;
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const sig = crypto
     .createHmac("sha256", getSecret())
@@ -250,10 +252,55 @@ export function clearedCookieAttributes(): string {
 export async function currentUserFromCookieHeader(
   cookieHeader: string | null | undefined,
 ): Promise<UserRecord | null> {
+  const ctx = await currentSessionFromCookieHeader(cookieHeader);
+  return ctx?.user ?? null;
+}
+
+export interface SessionContext {
+  user: UserRecord;
+  jti: string | null;
+  payload: SessionPayload;
+}
+
+/**
+ * Like currentUserFromCookieHeader but also returns the session id (jti)
+ * and checks the server-side revocation list. Callers that need to revoke
+ * the current session (signout) or pass it through audit logs should use
+ * this.
+ */
+let ctxHeaders: Headers | null = null;
+
+/** Optional: callers that have a Request can pass headers so touch() captures IP/UA. */
+export function withRequestHeaders<T>(headers: Headers, fn: () => Promise<T>): Promise<T> {
+  const prev = ctxHeaders;
+  ctxHeaders = headers;
+  return fn().finally(() => {
+    ctxHeaders = prev;
+  });
+}
+
+export async function currentSessionFromCookieHeader(
+  cookieHeader: string | null | undefined,
+): Promise<SessionContext | null> {
   if (!cookieHeader) return null;
   const m = cookieHeader.match(new RegExp(`(?:^|; )${COOKIE_NAME}=([^;]+)`));
   if (!m) return null;
   const payload = verifySession(decodeURIComponent(m[1]));
   if (!payload) return null;
-  return getUser(payload.uid);
+  if (payload.jti) {
+    // Lazy require to avoid a circular import at module init.
+    const { isRevoked, getSession, touchSession, clientIpFromHeaders } = await import("./sessions");
+    if (await isRevoked(payload.jti)) return null;
+    const rec = await getSession(payload.uid, payload.jti);
+    if (rec && rec.revokedAt) return null;
+    // best-effort touch using cookie-header's request when possible
+    if (rec) {
+      const ip = ctxHeaders ? clientIpFromHeaders(ctxHeaders) : null;
+      const ua = ctxHeaders?.get("user-agent") ?? null;
+      void touchSession(payload.uid, payload.jti, ip, ua);
+    }
+  }
+  const user = await getUser(payload.uid);
+  if (!user) return null;
+  return { user, jti: payload.jti ?? null, payload };
 }

@@ -1,8 +1,8 @@
 /**
  * GET /api/auth/verify?token=<id>.<secret>&redirect=/path
  *
- * Consumes the magic token, sets the session cookie, and redirects to
- * the post-login destination (defaults to "/").
+ * Consumes the magic token, creates a tracked server-side session, sets the
+ * signed cookie, and redirects to the post-login destination.
  */
 import { NextResponse } from "next/server";
 import {
@@ -11,6 +11,13 @@ import {
   COOKIE_NAME,
   sessionCookieAttributes,
 } from "../../../../lib/auth";
+import {
+  createSession,
+  newJti,
+  clientIpFromHeaders,
+  getUserTtl,
+} from "../../../../lib/sessions";
+import { tryRecordAudit } from "../../../../lib/audit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,11 +38,24 @@ export async function GET(req: Request) {
     return NextResponse.redirect(back, { status: 303 });
   }
 
-  const cookie = signSession(user.id);
+  const jti = newJti();
+  const ttlSec = await getUserTtl(user.id);
+  const ip = clientIpFromHeaders(req.headers);
+  const ua = req.headers.get("user-agent");
+  await createSession({ userId: user.id, jti, ttlSec, ip, userAgent: ua });
+
+  const cookie = signSession(user.id, ttlSec, jti);
   const res = NextResponse.redirect(new URL(redirect, url.origin), { status: 303 });
   res.headers.append(
     "Set-Cookie",
-    `${COOKIE_NAME}=${encodeURIComponent(cookie)}; ${sessionCookieAttributes()}`,
+    `${COOKIE_NAME}=${encodeURIComponent(cookie)}; ${sessionCookieAttributes(ttlSec)}`,
   );
+  await tryRecordAudit(req, {
+    action: "auth.signin",
+    actorId: user.id,
+    actorEmail: user.email,
+    target: { type: "session", id: jti },
+    meta: { ttlSec },
+  });
   return res;
 }
