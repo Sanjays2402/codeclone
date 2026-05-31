@@ -123,6 +123,17 @@ export interface WorkspaceRecord {
   autoJoinDomains?: string[];
   autoJoinRole?: Exclude<Role, "owner">;
   /**
+   * Owner-configured allowlist of email domains permitted to be added to
+   * this workspace as members, by ANY path: manual invite issuance,
+   * invite acceptance, domain auto-join, SCIM user provisioning, and SSO
+   * just-in-time provisioning. Absent or empty array means no
+   * restriction (legacy behavior). Domains are stored bare and
+   * lowercased (no leading @). Enforced everywhere a member email enters
+   * the workspace so that tightening the policy immediately blocks
+   * outstanding-but-unaccepted invites whose recipient is now off-list.
+   */
+  inviteDomainAllowlist?: string[];
+  /**
    * Owner-configured allowlist of webhook destination domains. When the
    * list is non-empty, every webhook URL created in this workspace must
    * have a hostname that matches one of the entries (exact host, or a
@@ -1259,6 +1270,72 @@ export async function setAutoJoin(
 }
 
 /**
+ * Sanitize a raw owner-supplied list of email domains for the invite
+ * allowlist. Identical rules as `sanitizeAutoJoinDomains`: strip
+ * surrounding whitespace, leading `@`, lowercase, dedupe, validate
+ * shape and length.
+ */
+export function sanitizeInviteDomainAllowlist(
+  input: unknown,
+): { ok: string[]; rejected: string[] } {
+  // Reuse the same rules as auto-join. Keep this as a separate function
+  // so callers don't accidentally couple the two policies.
+  return sanitizeAutoJoinDomains(input);
+}
+
+/**
+ * Returns the configured invite domain allowlist, or null if the
+ * workspace has no policy (legacy/unrestricted).
+ */
+export function inviteDomainAllowlist(
+  ws: WorkspaceRecord | null | undefined,
+): string[] | null {
+  if (!ws) return null;
+  const list = ws.inviteDomainAllowlist;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  return list;
+}
+
+/**
+ * Decide whether a given email address is permitted to become a member
+ * of `ws` under the current invite-domain allowlist policy. Returns
+ * true when no policy is set, when the email's domain matches an entry
+ * (case-insensitive), or when the email already belongs to an existing
+ * member (so policy changes never lock out current members).
+ *
+ * Owners always pass: an owner is, by definition, allowed on their own
+ * workspace, and we never want a misconfigured policy to wedge the
+ * owner out of membership.
+ */
+export function isEmailAllowedForWorkspace(
+  ws: WorkspaceRecord | null | undefined,
+  email: string | null | undefined,
+): boolean {
+  if (!ws) return false;
+  const list = inviteDomainAllowlist(ws);
+  if (!list) return true;
+  if (typeof email !== "string") return false;
+  const e = email.trim().toLowerCase();
+  if (!e) return false;
+  // Existing members are always allowed (policy was set after they joined).
+  if (ws.members.some((m) => m.email.toLowerCase() === e)) return true;
+  const at = e.lastIndexOf("@");
+  if (at < 0) return false;
+  const domain = e.slice(at + 1);
+  if (!domain) return false;
+  return list.includes(domain);
+}
+
+export async function setInviteDomainAllowlist(
+  ws: WorkspaceRecord,
+  domains: string[],
+): Promise<WorkspaceRecord> {
+  ws.inviteDomainAllowlist = domains;
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
  * Apply domain auto-join for a freshly-signed-in user. Scans every
  * workspace, adds the user as a member of each workspace whose
  * `autoJoinDomains` contains the user's email domain, and returns the
@@ -1290,6 +1367,12 @@ export async function applyAutoJoinForUser(opts: {
       continue;
     }
     if (ws.members.some((m) => m.userId === opts.userId)) continue;
+    // Honor the workspace invite-domain allowlist if set. Auto-join
+    // candidates are by-domain already, but the allowlist is a hard
+    // gate: if the owner tightens the policy, auto-join must respect
+    // it even when autoJoinDomains still mentions the candidate's
+    // domain (e.g. for a transitional rollout).
+    if (!isEmailAllowedForWorkspace(ws, opts.email)) continue;
     const role: Role = ws.autoJoinRole === "editor" ? "editor" : "viewer";
     ws.members.push({
       userId: opts.userId,
@@ -1339,6 +1422,9 @@ export async function issueInvite(opts: {
 }): Promise<IssuedInvite> {
   const { workspace, email, role, invitedBy, origin } = opts;
   if (role !== "editor" && role !== "viewer") throw new Error("invalid_role");
+  if (!isEmailAllowedForWorkspace(workspace, email)) {
+    throw new Error("invite_domain_not_allowed");
+  }
   if (workspace.members.some((m) => m.email === email)) {
     throw new Error("already_member");
   }
@@ -1404,6 +1490,8 @@ export async function acceptInvite(opts: {
   const { workspace, invite } = looked;
   // Email gating: the invite is bound to a specific email.
   if (invite.email !== opts.userEmail) return null;
+  // Domain allowlist may have tightened since the invite was issued.
+  if (!isEmailAllowedForWorkspace(workspace, opts.userEmail)) return null;
   if (!workspace.members.some((m) => m.userId === opts.userId)) {
     workspace.members.push({
       userId: opts.userId,

@@ -32,6 +32,7 @@ import { ResidencyEditor } from "../../../components/ResidencyEditor";
 import { LegalHoldEditor } from "../../../components/LegalHoldEditor";
 import { SupportAccessEditor } from "../../../components/SupportAccessEditor";
 import { AutoJoinEditor } from "../../../components/AutoJoinEditor";
+import { InviteDomainAllowlistEditor } from "../../../components/InviteDomainAllowlistEditor";
 import { SsoEditor } from "../../../components/SsoEditor";
 import { SsoGroupMappingEditor } from "../../../components/SsoGroupMappingEditor";
 import { ScimEditor } from "../../../components/ScimEditor";
@@ -495,6 +496,10 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
 
       {ws.myRole && (
         <AutoJoinEditor workspaceId={ws.id} />
+      )}
+
+      {ws.myRole && (
+        <InviteDomainAllowlistEditor workspaceId={ws.id} />
       )}
 
       {ws.myRole && (

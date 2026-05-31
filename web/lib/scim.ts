@@ -42,6 +42,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { getWorkspace, isEmailAllowedForWorkspace } from "./workspaces.ts";
 
 const CWD = process.cwd();
 
@@ -410,6 +411,28 @@ export async function createUser(opts: {
   if (dup) throw new ScimError(409, "userName already exists", "uniqueness");
 
   const emails = normalizeEmails(opts.body.emails);
+  // Enforce the workspace invite-domain allowlist. The IdP-supplied
+  // userName is normally an email; if any email (userName or emails[])
+  // is off-policy we refuse the provisioning request with a SCIM 400.
+  const ws = await getWorkspace(opts.workspaceId);
+  if (ws) {
+    const candidates: string[] = [];
+    if (userName) candidates.push(userName);
+    if (Array.isArray(emails)) {
+      for (const e of emails) {
+        if (e && typeof e.value === "string") candidates.push(e.value);
+      }
+    }
+    for (const c of candidates) {
+      if (c.includes("@") && !isEmailAllowedForWorkspace(ws, c)) {
+        throw new ScimError(
+          400,
+          "email domain not permitted by workspace invite domain allowlist",
+          "invalidValue",
+        );
+      }
+    }
+  }
   const externalId = normalizeString(opts.body.externalId, 200);
   const name = normalizeName(opts.body.name);
   const displayName = normalizeString(opts.body.displayName, 200);

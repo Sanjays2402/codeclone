@@ -10,6 +10,33 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Workspace invite-domain allowlist. Owners can restrict which email domains may join a workspace, enforced on every member entry path: manual invite issuance (`POST /api/workspaces/:id/invites` returns 403 `invite_domain_not_allowed`), invite acceptance (a token issued before the policy tightened can no longer be redeemed if the recipient is now off-list), domain auto-join (an SSO sign-in whose email matches `autoJoinDomains` but not the stricter allowlist is skipped), and SCIM 2.0 user provisioning (`POST /scim/v2/<wsId>/Users` with an off-policy `userName` returns SCIM 400 `invalidValue`). Existing members are never evicted by a policy change. Managed via `GET/PUT /api/workspaces/:id/invite-domain-allowlist`; every mutation lands in the audit log as `workspace.invite_domain_allowlist_update` with a before/after diff and every denied invite as `workspace.invite_create` with status `denied`. The workspace settings page surfaces a dedicated editor; non-owners see it read-only. Seven regression tests in `web/tests/workspaces-invite-domain-allowlist.test.ts` cover sanitiser normalisation, all four enforcement paths, the existing-member carve-out, and cross-tenant isolation (a policy on workspace A never constrains workspace B). Closes the standard SOC2 / ISO 27001 procurement ask: "the customer must be able to restrict access to corporate identity domains only."
+
+### Try it: lock a workspace to your corporate email domain
+
+```bash
+# Owner sets the allowlist.
+curl -i -b cc_session=... -H 'content-type: application/json' \
+  -X PUT 'http://localhost:3000/api/workspaces/<ws_id>/invite-domain-allowlist' \
+  -d '{"domains":["acme.com"]}'
+# {"domains":["acme.com"],"rejected":[]}
+
+# A manual invite to an off-policy address is refused with 403.
+curl -i -b cc_session=... -H 'content-type: application/json' \
+  -X POST 'http://localhost:3000/api/workspaces/<ws_id>/invites' \
+  -d '{"email":"intruder@evil.com","role":"viewer"}'
+# HTTP/1.1 403 Forbidden
+# {"error":"invite_domain_not_allowed","message":"This workspace restricts member email domains. The invitee's domain is not on the allowlist."}
+
+# An on-policy invite issues normally.
+curl -i -b cc_session=... -H 'content-type: application/json' \
+  -X POST 'http://localhost:3000/api/workspaces/<ws_id>/invites' \
+  -d '{"email":"alice@acme.com","role":"viewer"}'
+# HTTP/1.1 201 Created
+```
+
+The denied attempt is preserved in the audit log as `workspace.invite_create` with status `denied` and reason `invite_domain_not_allowed`. Pass an empty `domains` array to disable enforcement.
+
 - Per-workspace request payload size policy on /v1. Owners can now cap the maximum request body in bytes for any /v1 call made with an API key bound to their workspace. The policy lives on the workspace record as `payloadPolicy.maxBodyBytes` (bounds: 1 KiB to 10 MiB, 0 clears) and is enforced twice in `web/lib/payload-policy-enforce.ts` on every /v1 request: pre-parse via the inbound `Content-Length` header so the server never has to hold an over-limit body in memory, and post-parse against the serialized JSON payload as defence in depth for chunked requests where `Content-Length` is missing or understated. Over-limit requests return HTTP 413 with a structured `payload_too_large` error that echoes `limit_bytes` and `claimed_bytes` so SDKs can surface a precise message, and every rejection writes a `v1.payload_blocked` audit entry tagged with the route (`/v1/compare` or `/v1/batch`), claimed bytes, configured limit, and detection source. Wired into `/v1/compare` and `/v1/batch`; `/v1/shares` is read-only. Owner-only `GET/PUT/DELETE /api/workspaces/:id/payload-policy` writes `workspace.payload_policy_update` audit entries with a before/after diff. The workspace settings page surfaces a dedicated editor with live KiB/MiB formatting; non-owners see it disabled. Five regression tests in `web/tests/workspaces-payload-policy.test.ts` cover the sanitiser bounds and 0-clears, persistence round-trip, cross-tenant isolation (a workspace A 2 KiB cap rejects payloads that workspace B's 1 MiB cap accepts, and clearing B does not loosen A), and the under/over body-size decision used by the enforcer.
 
 ### Try it: cap /v1 request bodies at 8 KiB for a workspace

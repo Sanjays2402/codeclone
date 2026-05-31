@@ -86,6 +86,25 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
+    if (msg === "invite_domain_not_allowed") {
+      await tryRecordAudit(req, {
+        action: "workspace.invite_create",
+        actorId: user.id,
+        actorEmail: user.email,
+        workspaceId: ws.id,
+        target: { type: "workspace", id: ws.id, label: ws.name },
+        status: "denied",
+        diff: { after: { email, role, reason: "invite_domain_not_allowed" } },
+      });
+      return NextResponse.json(
+        {
+          error: "invite_domain_not_allowed",
+          message:
+            "This workspace restricts member email domains. The invitee's domain is not on the allowlist.",
+        },
+        { status: 403 },
+      );
+    }
     const status = msg === "already_member" || msg === "invalid_role" ? 400 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
