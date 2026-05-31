@@ -7,6 +7,9 @@ import {
   enforceSession,
   tooManyRequestsResponse,
 } from "../../../lib/session-rate-limit";
+import { listWorkspacesForUser } from "../../../lib/workspaces";
+import { scanInputs, findingsForAudit } from "../../../lib/secret-scan-enforce";
+import type { SecretScanMode } from "../../../lib/secret-scan";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,10 +66,57 @@ export const POST = instrument("/api/compare", async function POST(req) {
     return tooManyRequestsResponse(limit);
   }
   const started = performance.now();
-  const scores = compareCode(parsed.a, parsed.b);
-  const alignment = alignLines(parsed.a, parsed.b);
-  const clone = classifyClone(parsed.a, parsed.b, scores);
+  // DLP guardrail. We pick the strictest secret-scan policy across the
+  // user's workspaces so a member of a "block" workspace can't bypass
+  // it by running compare without selecting that workspace explicitly.
+  // Order: block > redact > warn > off.
+  const rank: Record<SecretScanMode, number> = { off: 0, warn: 1, redact: 2, block: 3 };
+  let strictest: import("../../../lib/workspaces").WorkspaceRecord | null = null;
+  let strictestRank = -1;
+  if (user) {
+    const ws = await listWorkspacesForUser(user.id);
+    for (const w of ws) {
+      const m = w.secretScanPolicy?.mode;
+      if (!m) continue;
+      const r = rank[m];
+      if (r > strictestRank) {
+        strictest = w;
+        strictestRank = r;
+      }
+    }
+  }
+  const scan = scanInputs({ a: parsed.a, b: parsed.b }, strictest);
+  if (!scan.ok) {
+    await tryRecordAudit(req, {
+      action: "compare.secrets_blocked",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      workspaceId: strictest?.id ?? null,
+      target: { type: "compare" },
+      meta: { language: parsed.language },
+    });
+    return scan.response;
+  }
+  const effA = scan.effective.a ?? parsed.a;
+  const effB = scan.effective.b ?? parsed.b;
+  const scores = compareCode(effA, effB);
+  const alignment = alignLines(effA, effB);
+  const clone = classifyClone(effA, effB, scores);
   const latencyMs = performance.now() - started;
+  if (scan.findings.length > 0) {
+    await tryRecordAudit(req, {
+      action: "compare.secrets_detected",
+      actorId: user?.id ?? null,
+      actorEmail: user?.email ?? null,
+      workspaceId: strictest?.id ?? null,
+      target: { type: "compare" },
+      meta: {
+        language: parsed.language,
+        mode: scan.mode,
+        findings: findingsForAudit(scan.findings),
+      },
+    });
+  }
   await tryRecordAudit(req, {
     action: "compare.run",
     actorId: user?.id ?? null,
@@ -89,7 +139,14 @@ export const POST = instrument("/api/compare", async function POST(req) {
       clone,
       latency_ms: Number(latencyMs.toFixed(3)),
       method: "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+      secret_scan: { mode: scan.mode, findings: findingsForAudit(scan.findings) },
     },
-    { headers: limit.headers },
+    {
+      headers: {
+        ...limit.headers,
+        "x-codeclone-secret-scan-mode": scan.mode,
+        "x-codeclone-secret-scan-findings": String(scan.findings.length),
+      },
+    },
   );
 });

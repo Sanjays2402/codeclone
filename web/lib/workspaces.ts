@@ -15,6 +15,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import type { PlanId } from "./plans.ts";
 import { isPlanId } from "./plans.ts";
+import { isSecretScanMode, type SecretScanMode } from "./secret-scan.ts";
 
 const CWD = process.cwd();
 
@@ -278,6 +279,28 @@ export interface WorkspaceRecord {
   mfaPolicy?: {
     requireEnrollment: boolean;
     gracePeriodDays: number;
+    updatedAt: number;
+    updatedBy: string;
+  } | null;
+  /**
+   * Owner-configured DLP guardrail on customer-submitted source code.
+   * codeclone accepts pasted snippets for similarity comparison; without
+   * a scan policy, an engineer can leak an AWS access key, GitHub PAT,
+   * or PEM private key into a hosted endpoint. When set, every snippet
+   * routed through /api/compare, /v1/compare, and /v1/batch is run
+   * through lib/secret-scan.ts before similarity work. "warn" returns
+   * findings without altering behaviour, "redact" replaces matches with
+   * a marker before scoring, "block" rejects the request with a 422
+   * `secrets_detected`. Every non-empty finding set is recorded in the
+   * tamper-evident audit log with the rule ids (never the raw value).
+   *
+   * Common procurement requirement (SOC 2 CC6.7, ISO 27001 A.8.12,
+   * NIST 800-53 SC-28): "Sensitive information transmitted to or stored
+   * by third-party services must be protected from inadvertent
+   * disclosure."
+   */
+  secretScanPolicy?: {
+    mode: SecretScanMode;
     updatedAt: number;
     updatedBy: string;
   } | null;
@@ -958,6 +981,52 @@ export async function setMfaPolicy(
   await writeJson(workspacePath(ws.id), ws);
   return ws;
 }
+
+// ---- Secret-scan DLP policy --------------------------------------------
+
+export function sanitizeSecretScanPolicy(
+  input: { mode?: unknown } | null | undefined,
+): { mode: SecretScanMode } | null {
+  if (!input || typeof input !== "object") return null;
+  const raw = (input as Record<string, unknown>).mode;
+  if (!isSecretScanMode(raw)) return { mode: "off" };
+  return { mode: raw };
+}
+
+/**
+ * Replace the workspace secret-scan DLP policy. Pass null or `mode=off`
+ * to clear it (off is the default and means "no scan"). Caller enforces
+ * owner-only permission and writes the audit entry.
+ */
+export async function setSecretScanPolicy(
+  ws: WorkspaceRecord,
+  policy: { mode: SecretScanMode } | null,
+  actor: string,
+): Promise<WorkspaceRecord> {
+  if (!policy || policy.mode === "off") {
+    ws.secretScanPolicy = null;
+  } else {
+    ws.secretScanPolicy = {
+      mode: policy.mode,
+      updatedAt: Date.now(),
+      updatedBy: actor,
+    };
+  }
+  await writeJson(workspacePath(ws.id), ws);
+  return ws;
+}
+
+/**
+ * Resolve the effective scan mode for a workspace (or a lookup-failure
+ * case). Centralized so the enforcement middleware can stay terse and
+ * we have one place to evolve the default later (e.g. plan-driven).
+ */
+export function effectiveSecretScanMode(
+  ws: WorkspaceRecord | null | undefined,
+): SecretScanMode {
+  return ws?.secretScanPolicy?.mode ?? "off";
+}
+
 
 /**
  * Resolve whether a user is past the MFA enrollment grace window of any

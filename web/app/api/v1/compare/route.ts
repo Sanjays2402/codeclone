@@ -16,6 +16,7 @@ import { tryRecordAudit } from "../../../../lib/audit";
 import { getWorkspace } from "../../../../lib/workspaces";
 import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
 import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
+import { scanInputs, findingsForAudit } from "../../../../lib/secret-scan-enforce";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -164,11 +165,45 @@ export async function POST(req: Request) {
     );
   }
 
+  // DLP guardrail: run the workspace secret-scan policy BEFORE we spend
+  // time on similarity work or fire side-effects. On block we 422 and
+  // never persist the snippet anywhere. On redact we score the redacted
+  // text so similarity reflects what would actually have been shared.
+  const scan = scanInputs({ a, b }, ws);
+  if (!scan.ok) {
+    // We deliberately don't have findings in scope here because scanInputs
+    // returns early on the first blocking input. The 422 body lists the
+    // rules for the caller; audit gets a coarse marker so security teams
+    // can pivot from the audit row to the request log.
+    void tryRecordAudit(req, {
+      action: "v1.compare.secrets_blocked",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: { language },
+    });
+    return scan.response;
+  }
+  const effA = scan.effective.a ?? a;
+  const effB = scan.effective.b ?? b;
+
   const started = performance.now();
-  const scores = compareCode(a, b);
-  const alignment = alignLines(a, b);
-  const clone = classifyClone(a, b, scores);
+  const scores = compareCode(effA, effB);
+  const alignment = alignLines(effA, effB);
+  const clone = classifyClone(effA, effB, scores);
   const latencyMs = performance.now() - started;
+
+  if (scan.findings.length > 0) {
+    void tryRecordAudit(req, {
+      action: "v1.compare.secrets_detected",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: {
+        language,
+        mode: scan.mode,
+        findings: findingsForAudit(scan.findings),
+      },
+    });
+  }
 
   if (dryRun) {
     // Sandbox mode: validation passed and we computed the real shape so
@@ -285,12 +320,18 @@ export async function POST(req: Request) {
       latency_ms: Number(latencyMs.toFixed(3)),
       method:
         "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+      secret_scan: {
+        mode: scan.mode,
+        findings: findingsForAudit(scan.findings),
+      },
     },
     {
       headers: {
         ...rl.headers,
         "x-codeclone-key-id": key.id,
         "x-codeclone-key-prefix": key.prefix,
+        "x-codeclone-secret-scan-mode": scan.mode,
+        "x-codeclone-secret-scan-findings": String(scan.findings.length),
         ...(wsQuota
           ? {
               ...planHeaders(wsQuota),

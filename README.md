@@ -10,6 +10,35 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Secret-scan DLP policy on every snippet. Workspace owners can now require codeclone to scan every code snippet submitted to compare and batch for hardcoded credentials (AWS keys, GitHub PATs, Stripe keys, JWTs, PEM private keys, Slack/SendGrid/Twilio tokens, npm tokens, and more) before any similarity work runs. The policy lives on the workspace record as `secretScanPolicy` with four modes: `off` (default, zero added latency), `warn` (return findings on the response without altering behaviour), `redact` (replace each match with `[REDACTED:<rule>]` so similarity is scored against the post-redaction text), and `block` (reject the request with HTTP 422 `secrets_detected` and never persist the snippet, fire webhooks, or charge quota). Enforcement is centralised in `web/lib/secret-scan-enforce.ts` and wired into every customer-facing snippet route: `/api/compare`, `/v1/compare`, and `/v1/batch`; the dashboard `/api/compare` path uses the strictest policy across the signed-in user's workspaces so a member of a `block` workspace can't bypass it by running compare without selecting that workspace. Pattern rules are vendor-prefix anchored (AKIA, ghp_, sk-ant-, AIza, xox[abprs]-, SG., etc.) to keep false-positive rate low on real source code, and findings carry only rule id, label, span, and last-4 of the matched value, so neither the 422 body nor the audit row ever echoes the raw secret. Every non-empty finding set lands in the tamper-evident audit chain as `compare.secrets_detected` / `v1.compare.secrets_detected` / `v1.batch.secrets_detected` (or `*.secrets_blocked` when the request was refused) with the rule ids and the chosen mode, so a SOC2 reviewer can pivot from any audit row back to which workspace policy fired. Responses carry `x-codeclone-secret-scan-mode` and `x-codeclone-secret-scan-findings` headers plus an embedded `secret_scan` block so SDK clients can surface the DLP outcome without parsing audit logs. The owner-only editor at `/workspaces/<id>` exposes the four modes, the in-force mode, and a coverage list of every detection rule by id and label; non-owners see the section disabled. Ten regression tests in `web/tests/secret-scan.test.ts` pin the contract (pattern coverage and de-overlap on overlapping rules, no false positives on plain source, exact redaction substitution, mode semantics for off/warn/redact/block, policy round-trip including the sanitiser's strictest-mode fallback, source-grep proof that every snippet-accepting route imports `scanInputs` so a new compare-like route added later fails the test on day one, and a check that the blocked response shape never leaks the raw matched value). Endpoints: `GET/PUT/DELETE /api/workspaces/:id/secret-scan-policy`. Covers the standard procurement ask (SOC 2 CC6.7, ISO 27001 A.8.12, NIST 800-53 SC-28): "sensitive information transmitted to or stored by third-party services must be protected from inadvertent disclosure."
+
+### Try it: block AWS keys from leaving your laptop
+
+```sh
+cd web && npm run dev   # http://localhost:3000
+
+# Owner turns the policy to block.
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/secret-scan-policy \
+  -H 'cookie: cc_session=...' \
+  -H 'content-type: application/json' \
+  -d '{"mode":"block"}'
+
+# Any member that POSTs a snippet containing a credential gets a 422
+# back with the rule id and the last-4 of the matched value, never
+# the raw secret.
+curl -si -X POST http://localhost:3000/v1/compare \
+  -H "authorization: Bearer $CODECLONE_API_KEY" \
+  -H 'content-type: application/json' \
+  -d '{"a":"const k = \"AKIAEXAMPLEKEY123456\"","b":"const k = \"other\"","language":"javascript"}'
+# HTTP/1.1 422 Unprocessable Entity
+# {"error":{"type":"secrets_detected","findings":[{"rule":"aws_access_key_id","label":"AWS Access Key ID","tail_4":"3456","start":11,"end":31}], ...}}
+
+# Flip to redact instead and similarity is computed against the marker.
+curl -si -X PUT http://localhost:3000/api/workspaces/$WS_ID/secret-scan-policy \
+  -H 'cookie: cc_session=...' -H 'content-type: application/json' \
+  -d '{"mode":"redact"}'
+```
+
 - SSO group to role mapping. Workspace owners can now pin an id_token claim name (e.g. `groups`, `roles`) and a table of IdP group to codeclone role rules on top of the existing OIDC config, so the user's workspace role is re-synced from their IdP on every SSO sign-in. The policy is sanitized and persisted by `setSsoGroupMappings` (web/lib/workspaces.ts): blank groups, unknown roles, overlong names, and duplicates are dropped, and the table is capped at `SSO_GROUP_MAPPINGS_MAX` so a typo can't blow up the workspace doc. The role decision lives in `resolveRoleFromSsoGroups`, which accepts both array claims (`["okta-admins", "okta-eng"]`) and OAuth-style space-separated strings, ignores everything else, and picks the highest-ranked matching role (`owner > editor > viewer`). The SSO callback (`/api/auth/sso/[workspaceId]/callback`) reloads the workspace after auto-join, calls the resolver, and only writes when the desired role differs from the current one; the change goes through `setMemberRole` so the sole-owner safeguard still rejects a demotion that would orphan a tenant. Every flip writes a `workspace.role_synced_from_sso` audit row with a before/after diff and the source claim, and rejected attempts (e.g. only-owner) write the same action with `status: "denied"` so a SOC2 reviewer can reconstruct exactly which IdP group ever flipped a role. The owner-only editor at `/workspaces/<id>` adds the claim field plus the mapping table behind RBAC, the dashboard IP allowlist, and the rest of the workspace surface; non-owners see a read-only view. Endpoints: `GET/PUT/DELETE /api/workspaces/:id/sso/groups`. Five regression tests in `web/tests/workspaces-sso-groups.test.ts` pin the contract (refusal without an SSO config, sanitization of bad mappings and the size cap, resolver coverage for array/string/miss/ranked-tie inputs, end-to-end role update with sole-owner protection, and cross-tenant isolation across two unrelated workspaces). Covers the standard procurement ask (SOC 2 CC6.3, NIST 800-53 AC-2(7)): "the application supports role provisioning from the corporate identity provider."
 
 ### Try it: map Okta groups to workspace roles

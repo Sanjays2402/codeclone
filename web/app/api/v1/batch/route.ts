@@ -24,6 +24,7 @@ import { tryRecordAudit } from "../../../../lib/audit";
 import { getWorkspace } from "../../../../lib/workspaces";
 import { workspaceQuotaCheck, planHeaders } from "../../../../lib/plans";
 import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
+import { scanInputs, findingsForAudit } from "../../../../lib/secret-scan-enforce";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -141,6 +142,43 @@ export async function POST(req: Request) {
   const parsed = parseBatch(raw);
   if (!parsed.ok) return badRequest(parsed.error);
 
+  // DLP guardrail. We scan every snippet under the workspace policy
+  // before runBatch() touches similarity; on block we reject with 422
+  // and never log usage or fire webhooks. On redact we mutate the
+  // snippets in place so the similarity matrix and the webhook payload
+  // both reflect the post-redaction text.
+  const scanInputsMap: Record<string, string> = {};
+  for (let i = 0; i < parsed.snippets.length; i++) {
+    scanInputsMap[`snippet_${i}`] = parsed.snippets[i].code;
+  }
+  const scan = scanInputs(scanInputsMap, ws);
+  if (!scan.ok) {
+    void tryRecordAudit(req, {
+      action: "v1.batch.secrets_blocked",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: { snippets: parsed.snippets.length, language: parsed.language },
+    });
+    return scan.response;
+  }
+  for (let i = 0; i < parsed.snippets.length; i++) {
+    const eff = scan.effective[`snippet_${i}`];
+    if (eff !== undefined) parsed.snippets[i].code = eff;
+  }
+  if (scan.findings.length > 0) {
+    void tryRecordAudit(req, {
+      action: "v1.batch.secrets_detected",
+      actorId: key.userId ?? null,
+      target: { type: "api_key", id: key.id, label: key.label },
+      meta: {
+        snippets: parsed.snippets.length,
+        language: parsed.language,
+        mode: scan.mode,
+        findings: findingsForAudit(scan.findings),
+      },
+    });
+  }
+
   const totalBytes = parsed.snippets.reduce(
     (sum, s) => sum + Buffer.byteLength(s.code, "utf-8"),
     0,
@@ -222,11 +260,15 @@ export async function POST(req: Request) {
     },
   }).catch(() => {});
 
-  return NextResponse.json(result, {
+  return NextResponse.json(
+    { ...result, secret_scan: { mode: scan.mode, findings: findingsForAudit(scan.findings) } },
+    {
     headers: {
       ...rl.headers,
       "x-codeclone-key-id": key.id,
       "x-codeclone-key-prefix": key.prefix,
+      "x-codeclone-secret-scan-mode": scan.mode,
+      "x-codeclone-secret-scan-findings": String(scan.findings.length),
       ...(wsQuota
         ? {
             ...planHeaders(wsQuota),
@@ -240,7 +282,8 @@ export async function POST(req: Request) {
             "x-codeclone-quota-remaining": String(Math.max(0, quota!.remaining - 1)),
           }),
     },
-  });
+    },
+  );
 }
 
 export async function GET() {
