@@ -80,6 +80,7 @@ export interface DeliveryRecord {
   error?: string;
   requestBodyPreview: string;
   responseBodyPreview?: string;
+  redeliveredFrom?: string;
 }
 
 function isId(id: string): boolean {
@@ -350,6 +351,46 @@ export async function dispatchEvent(opts: DispatchOptions): Promise<DeliveryReco
     await appendDelivery(delivery);
   }
   return out;
+}
+
+/**
+ * Manually redeliver a previously-logged delivery. Looks up the
+ * original delivery by id, replays the stored request body against the
+ * webhook URL, and appends a new delivery record. The new delivery is
+ * marked with `redeliveredFrom` so the UI can show provenance. Counters
+ * on the webhook record are updated just like a live dispatch.
+ *
+ * Returns null if the webhook or original delivery cannot be found.
+ */
+export async function redeliverDelivery(
+  webhookId: string,
+  deliveryId: string,
+  fetchImpl?: typeof fetch,
+): Promise<DeliveryRecord | null> {
+  const rec = await loadWebhook(webhookId);
+  if (!rec) return null;
+  if (typeof deliveryId !== "string" || !/^[A-Za-z0-9_-]{6,32}$/.test(deliveryId)) {
+    return null;
+  }
+  const all = await listDeliveries(webhookId);
+  const original = all.find((d) => d.id === deliveryId);
+  if (!original) return null;
+  const fetcher = fetchImpl ?? fetch;
+  const delivery = await deliverOnce(rec, original.event, original.requestBodyPreview, fetcher);
+  delivery.redeliveredFrom = original.id;
+  rec.lastDeliveryAt = delivery.attemptedAt;
+  rec.lastStatus = delivery.status;
+  if (delivery.ok) {
+    rec.successCount += 1;
+    rec.lastError = undefined;
+  } else {
+    rec.failureCount += 1;
+    rec.lastError = delivery.error;
+  }
+  rec.updatedAt = Date.now();
+  await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  await appendDelivery(delivery);
+  return delivery;
 }
 
 async function deliverOnce(

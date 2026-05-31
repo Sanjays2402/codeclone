@@ -24,6 +24,7 @@ const {
   listDeliveries,
   signPayload,
   validateUrl,
+  redeliverDelivery,
 } = await import("../lib/webhooks.ts");
 
 test("webhooks: validateUrl rejects non-http and empty", () => {
@@ -174,4 +175,67 @@ test("webhooks: signPayload is deterministic HMAC-SHA256", () => {
   assert.ok(sig1.startsWith("t=1000,v1="));
   const sig3 = signPayload("secret", 1001, "body");
   assert.notEqual(sig1, sig3);
+});
+
+test("webhooks: redeliverDelivery replays the original payload and logs a new delivery", async () => {
+  const { record } = await createWebhook({
+    label: "replay-target",
+    url: "https://example.com/replay",
+    events: ["compare.completed"],
+  });
+
+  // First delivery: fail so we have something worth replaying.
+  const failFetch = (async () => new Response("oops", { status: 503 })) as unknown as typeof fetch;
+  const first = await dispatchEvent({
+    event: "compare.completed",
+    payload: { hello: "world", n: 1 },
+    fetchImpl: failFetch,
+  });
+  const target = first.find((d) => d.webhookId === record.id);
+  assert.ok(target, "original delivery for our webhook exists");
+  assert.equal(target!.ok, false);
+
+  // Now replay with a fetch that succeeds and capture what was sent.
+  let sentBody = "";
+  let sentUrl = "";
+  let sentEventHeader = "";
+  const okFetch = (async (url: string, init: RequestInit) => {
+    sentUrl = url;
+    sentBody = (init.body as string) ?? "";
+    const headers = (init.headers ?? {}) as Record<string, string>;
+    sentEventHeader = headers["X-CodeClone-Event"] ?? "";
+    return new Response("ok", { status: 200 });
+  }) as unknown as typeof fetch;
+
+  const replay = await redeliverDelivery(record.id, target!.id, okFetch);
+  assert.ok(replay, "redelivery returned a record");
+  assert.equal(replay!.ok, true);
+  assert.equal(replay!.status, 200);
+  assert.equal(replay!.redeliveredFrom, target!.id);
+  assert.equal(replay!.webhookId, record.id);
+  assert.equal(replay!.event, "compare.completed");
+  assert.equal(sentUrl, "https://example.com/replay");
+  assert.equal(sentEventHeader, "compare.completed");
+  // The replay must reuse the original request body byte-for-byte.
+  assert.equal(sentBody, target!.requestBodyPreview);
+
+  // The new delivery is appended to the persistent log.
+  const log = await listDeliveries(record.id);
+  assert.ok(log.some((d) => d.id === replay!.id && d.redeliveredFrom === target!.id));
+
+  // Webhook counters reflect the successful replay.
+  const after = await loadWebhook(record.id);
+  assert.ok(after);
+  assert.ok((after!.successCount ?? 0) >= 1);
+});
+
+test("webhooks: redeliverDelivery returns null for unknown ids", async () => {
+  const none1 = await redeliverDelivery("nope1234", "missingid1");
+  assert.equal(none1, null);
+  const { record } = await createWebhook({
+    label: "hook for 404",
+    url: "https://example.com/h",
+  });
+  const none2 = await redeliverDelivery(record.id, "deadbeef99");
+  assert.equal(none2, null);
 });

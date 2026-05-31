@@ -48,6 +48,7 @@ interface DeliveryRecord {
   error?: string;
   requestBodyPreview: string;
   responseBodyPreview?: string;
+  redeliveredFrom?: string;
 }
 
 type Status = "loading" | "ready" | "error";
@@ -87,6 +88,8 @@ export default function WebhooksPage() {
   const [open, setOpen] = useState<string>("");
   const [deliveries, setDeliveries] = useState<Record<string, DeliveryRecord[]>>({});
   const [delivStatus, setDelivStatus] = useState<Record<string, Status>>({});
+  const [redelivering, setRedelivering] = useState<string>("");
+  const [redeliverErr, setRedeliverErr] = useState<string>("");
 
   const refresh = useCallback(async () => {
     try {
@@ -186,6 +189,30 @@ export default function WebhooksPage() {
       setDelivStatus((s) => ({ ...s, [id]: "error" }));
     }
   }, []);
+
+  const redeliver = useCallback(
+    async (webhookId: string, deliveryId: string) => {
+      setRedeliverErr("");
+      setRedelivering(deliveryId);
+      try {
+        const res = await fetch(
+          `/api/webhooks/${webhookId}/deliveries/${deliveryId}/redeliver`,
+          { method: "POST" },
+        );
+        if (!res.ok) {
+          const j = (await res.json().catch(() => ({}))) as { error?: string };
+          throw new Error(j.error ?? `Redelivery failed (${res.status}).`);
+        }
+        await loadDeliveries(webhookId);
+        await refresh();
+      } catch (e) {
+        setRedeliverErr(e instanceof Error ? e.message : "Redelivery failed.");
+      } finally {
+        setRedelivering("");
+      }
+    },
+    [loadDeliveries, refresh],
+  );
 
   const toggleOpen = useCallback(
     (id: string) => {
@@ -373,8 +400,32 @@ export default function WebhooksPage() {
                             <span className="mono text-[11px] text-[var(--color-ink-3)]">{d.attempts}× / {Math.round(d.durationMs)}ms</span>
                             <span className="mono text-[11px] text-[var(--color-ink-3)]">{fmtTs(d.attemptedAt)}</span>
                             {d.error && <span className="mono text-[11px] text-[var(--color-neg)] truncate">{d.error}</span>}
+                            {d.redeliveredFrom && (
+                              <span
+                                className="mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)]"
+                                title={`Replay of ${d.redeliveredFrom}`}
+                              >
+                                replay
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => void redeliver(w.id, d.id)}
+                              disabled={redelivering === d.id}
+                              className="ml-auto inline-flex items-center gap-1.5 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] disabled:opacity-50 disabled:cursor-not-allowed"
+                              aria-label="Redeliver this webhook payload"
+                              title="Resend this exact payload to the endpoint. Useful for testing receiver fixes."
+                            >
+                              <ArrowClockwise size={12} weight="duotone" />
+                              {redelivering === d.id ? "Sending" : "Redeliver"}
+                            </button>
                           </div>
                         ))}
+                      </div>
+                    )}
+                    {redeliverErr && (
+                      <div className="mt-2 mono text-[11px] text-[var(--color-neg)]" role="alert">
+                        {redeliverErr}
                       </div>
                     )}
                   </div>
