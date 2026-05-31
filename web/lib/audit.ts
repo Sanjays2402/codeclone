@@ -245,6 +245,14 @@ export async function recordAudit(
     const entry: AuditEntry = { ...baseEntry, seq, prevHash };
     entry.hash = hashEntry(entry);
     await fs.appendFile(pathForDay(day), JSON.stringify(entry) + "\n", "utf8");
+    // Fire-and-forget fan-out to workspace `audit.recorded` webhooks so
+    // customers can stream their SOC2 trail to a SIEM in real time.
+    // Scoped strictly to the entry's workspaceId; entries without a
+    // workspace (e.g. anonymous sign-in attempts) are not forwarded so
+    // we never leak cross-tenant audit events.
+    if (entry.workspaceId) {
+      void forwardAuditEntry(entry).catch(() => undefined);
+    }
     return entry;
   });
   // Keep chain serial but don't poison it on errors.
@@ -607,4 +615,50 @@ export async function previewWorkspaceRetention(
     if (fileAffected) out.affectedFiles.push(f);
   }
   return out;
+}
+
+/**
+ * Forward an audit entry to every `audit.recorded` webhook subscribed in
+ * the entry's workspace. Uses a dynamic import to avoid a hard cycle with
+ * webhooks.ts (which loads workspaces.ts lazily for the same reason) and
+ * a fire-and-forget caller so audit writes never block on webhook I/O.
+ *
+ * Tenant scoping is enforced by passing the entry's workspaceId straight
+ * through to dispatchEvent, which already filters webhooks to that
+ * workspace. Tests pin this isolation: a webhook in workspace B never
+ * receives audit events written for workspace A.
+ *
+ * Disable globally with CODECLONE_AUDIT_FORWARD=0 for air-gapped installs.
+ */
+async function forwardAuditEntry(entry: AuditEntry): Promise<void> {
+  if (process.env.CODECLONE_AUDIT_FORWARD === "0") return;
+  if (!entry.workspaceId) return;
+  try {
+    const mod = await import("./webhooks.ts");
+    await mod.dispatchEvent({
+      event: "audit.recorded",
+      workspaceId: entry.workspaceId,
+      payload: {
+        id: entry.id,
+        ts: entry.ts,
+        seq: entry.seq,
+        hash: entry.hash,
+        prevHash: entry.prevHash,
+        action: entry.action,
+        status: entry.status,
+        actorId: entry.actorId,
+        actorEmail: entry.actorEmail,
+        workspaceId: entry.workspaceId,
+        target: entry.target,
+        ip: entry.ip,
+        requestId: entry.requestId,
+        // diff and meta intentionally omitted from the streamed payload
+        // to keep SIEM volume bounded; full record is fetchable via
+        // GET /api/audit?... for follow-up investigation.
+      },
+    });
+  } catch {
+    // Swallow; delivery failures are already logged per-webhook and
+    // audit writes must never fail because of a downstream SIEM outage.
+  }
 }

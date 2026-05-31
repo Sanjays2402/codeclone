@@ -31,7 +31,15 @@ const MAX_BODY_PREVIEW = 2048;
 const DELIVERY_TIMEOUT_MS = 5000;
 const RETRY_BACKOFF_MS = [0, 500, 2000]; // 3 attempts total
 
-export const SUPPORTED_EVENTS = ["compare.completed", "batch.completed"] as const;
+export const SUPPORTED_EVENTS = [
+  "compare.completed",
+  "batch.completed",
+  // Real-time audit log forwarding for SIEM/observability tooling.
+  // Every successful audit entry written for the workspace fans out as
+  // a signed `audit.recorded` delivery, so customers can stream their
+  // SOC2 trail to Splunk/Datadog/S3 without polling /api/audit.
+  "audit.recorded",
+] as const;
 export type WebhookEvent = (typeof SUPPORTED_EVENTS)[number];
 
 export interface WebhookRecord {

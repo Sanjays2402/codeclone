@@ -95,6 +95,7 @@ export default function WebhooksPage() {
   const [error, setError] = useState("");
   const [label, setLabel] = useState("");
   const [url, setUrl] = useState("");
+  const [selectedEvents, setSelectedEvents] = useState<string[]>(["compare.completed"]);
   const [creating, setCreating] = useState(false);
   const [createErr, setCreateErr] = useState("");
   const [revealed, setRevealed] = useState<{ id: string; secret: string } | null>(null);
@@ -185,7 +186,7 @@ export default function WebhooksPage() {
           body: JSON.stringify({
             label: label.trim() || "Untitled webhook",
             url: url.trim(),
-            events: ["compare.completed"],
+            events: selectedEvents.length ? selectedEvents : ["compare.completed"],
             workspaceId: activeWs,
           }),
         });
@@ -200,6 +201,7 @@ export default function WebhooksPage() {
         setRevealed({ id: j.record.id, secret: j.secret });
         setLabel("");
         setUrl("");
+        setSelectedEvents(["compare.completed"]);
         await refresh();
       } catch (err) {
         setCreateErr(err instanceof Error ? err.message : String(err));
@@ -207,7 +209,7 @@ export default function WebhooksPage() {
         setCreating(false);
       }
     },
-    [label, url, refresh, activeWs],
+    [label, url, selectedEvents, refresh, activeWs],
   );
 
   const toggle = useCallback(
@@ -385,6 +387,34 @@ export default function WebhooksPage() {
               <Plus size={12} weight="bold" />
               {creating ? "Creating" : "Create webhook"}
             </button>
+          </div>
+          <div className="flex flex-col gap-1 md:col-span-3">
+            <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">events</span>
+            <div className="flex flex-wrap gap-3 mono text-[12px] text-[var(--color-ink-2)]">
+              {[
+                { id: "compare.completed", hint: "fires when a /v1/compare run finishes" },
+                { id: "batch.completed", hint: "fires when a /v1/batch job finishes" },
+                { id: "audit.recorded", hint: "streams every audit entry written for this workspace to your SIEM" },
+              ].map((ev) => (
+                <label key={ev.id} className="flex items-center gap-1.5 cursor-pointer" title={ev.hint}>
+                  <input
+                    type="checkbox"
+                    checked={selectedEvents.includes(ev.id)}
+                    onChange={(e) => {
+                      setSelectedEvents((prev) =>
+                        e.target.checked
+                          ? Array.from(new Set([...prev, ev.id]))
+                          : prev.filter((x) => x !== ev.id),
+                      );
+                    }}
+                  />
+                  <span>{ev.id}</span>
+                </label>
+              ))}
+            </div>
+            <span className="mono text-[10.5px] text-[var(--color-ink-3)]">
+              audit.recorded forwards every audit entry for this workspace in real time. payload omits diff and meta to keep SIEM volume bounded.
+            </span>
           </div>
         </form>
         {createErr && (

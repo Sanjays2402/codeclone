@@ -10,6 +10,44 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Stream the audit log to your SIEM in real time via `audit.recorded` webhooks. Workspace owners register an HTTPS endpoint under `/webhooks`, tick the `audit.recorded` event, and every audit entry written for that workspace is fanned out as a signed delivery (HMAC-SHA256 over `t.{body}` in `X-CodeClone-Signature`, plus `X-CodeClone-Hash` for secret pinning, with three retries on failure and the existing SSRF guardrails on the target URL). The forwarded payload includes `id`, `seq`, `hash`, `prevHash`, `action`, `status`, `actorId`, `actorEmail`, `workspaceId`, `target`, `ip`, and `requestId` so the receiving Splunk/Datadog/S3 sink can re-verify the tamper-evident chain end to end; `diff` and `meta` are omitted to keep SIEM volume bounded and are still fetchable via `GET /api/audit?id=...`. Audit entries with no workspaceId (anonymous sign-in attempts and similar) are never forwarded, and entries for workspace A never reach a webhook registered in workspace B. Forwarding is fire-and-forget so an unhealthy SIEM never blocks an audit write, and a downstream outage cannot fail an underlying mutation. Set `CODECLONE_AUDIT_FORWARD=0` for air-gapped installs. Cross-tenant isolation, payload shape, and the no-workspace skip rule are pinned by `web/tests/audit-webhook-forward.test.ts`.
+
+### Try it: stream audit events to a SIEM
+
+```sh
+pnpm dev   # web dashboard on http://localhost:3000
+
+# 1. Sign in, open http://localhost:3000/webhooks, pick a workspace, paste
+#    your SIEM URL (https://logs.example.com/codeclone), tick the
+#    `audit.recorded` checkbox, and click Create webhook. Copy the
+#    signing secret shown once.
+#
+# 2. Trigger any mutating action (create a snippet, rotate an API key,
+#    invite a teammate) and your SIEM endpoint receives a signed POST
+#    within milliseconds:
+#
+#    POST /codeclone
+#    Content-Type: application/json
+#    X-CodeClone-Event: audit.recorded
+#    X-CodeClone-Signature: t=1717196400,v1=<hmac-sha256>
+#    X-CodeClone-Hash: <first 16 hex chars of the secret hash>
+#    {
+#      "event": "audit.recorded",
+#      "created_at": 1717196400,
+#      "data": {
+#        "id": "...", "seq": 42, "hash": "...", "prevHash": "...",
+#        "action": "snippet.create", "status": "ok",
+#        "actorId": "u_...", "actorEmail": "alice@acme.com",
+#        "workspaceId": "ws_...", "target": {"type":"snippet","id":"..."},
+#        "ip": "203.0.113.7", "requestId": "req_..."
+#      }
+#    }
+#
+# 3. Verify each delivery on the receiver:
+#       hmac_sha256(secret, "<ts>.<raw_body>") == v1 in X-CodeClone-Signature
+#    and pin the webhook to your tenant by checking data.workspaceId.
+```
+
 - Per-tenant monthly request quotas on the serve API: enterprise contracts specify a calendar-month ceiling distinct from per-minute rate limits, and the serve API now enforces one. Set `CODECLONE_QUOTA_PER_TENANT_MONTHLY=100000` for a global default, or `CODECLONE_QUOTA_OVERRIDES="acme=1000000,trial=1000"` for per-tenant caps. Every authenticated response carries `X-RateLimit-Limit-Month`, `X-RateLimit-Remaining-Month`, `X-RateLimit-Reset-Month`, and `X-RateLimit-Period` so customer SDKs can render usage without a side call. Once a tenant exhausts its cap the next request gets HTTP 429 with a structured `quota_exceeded` body and a `Retry-After` pointing at the next UTC month boundary, while other tenants are unaffected. The counter is persisted at `CODECLONE_QUOTA_STATE_PATH` (defaults to `runs/quota_state.json`) via atomic file rewrites so the cap survives restarts and rolling redeploys, and rolls over automatically at the first UTC midnight of each calendar month. `GET /v1/quota` returns the caller's current period, used count, limit, remaining, and reset epoch; admin-scope holders can introspect any tenant via `?tenant=<id>`, non-admin callers cannot, so cross-tenant disclosure is blocked. Default of `0` is unlimited, so existing deployments are unaffected until an operator opts in. Cross-tenant isolation, persistence, and the admin RBAC boundary are pinned by `services/serve/tests/test_quota.py`.
 
 ### Try it: enforce a monthly request cap
