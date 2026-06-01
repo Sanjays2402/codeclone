@@ -10,6 +10,28 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic saved-share edit-in-place via `PATCH /v1/shares/{id}`, behind the workspace-scoped `shares:write` key. `POST /v1/shares` already let customers mint saved comparisons from CI and `DELETE /v1/shares/{id}` let them remove records, but the only way to relabel a record (correct a misspelled title, swap a tag like `ci` for a real case number such as `case-2025-0142`, or apply a DLP/retention category) was to delete the share and create a new one, which broke the public `/r/<id>` link and lost the original `created_at` and audit-chain attribution. `PATCH /v1/shares/{id}` closes the gap: pass `{ title?, tags? }` as JSON and the server validates, normalizes (lowercases and slugs tags, dedupes, applies the existing length and charset bounds via `lib/share.updateShare`), and rewrites the record in place. The share id, public URL, snippets, scores, and creation timestamp are preserved; `updated_at` is bumped. Passing `null` (or `""` for title) clears a field. Tenant scope is structural: the route passes `{ workspaceId: key.workspaceId, allowLegacy: !key.workspaceId }` into `loadShare` and `updateShare`, so a cross-tenant id returns 404 just like cross-tenant GET/DELETE and never leaks the other workspace's title or tags. The full `/v1` enforcement chain runs unchanged (workspace lockdown, workspace + per-key IP allowlists, residency, workspace API-key policy, DPA, per-key rate limit with the standard `X-RateLimit-*` headers). Honors `?dry_run=true` (or `{ "dry_run": true }` in the body): runs every auth/policy/quota check, audits the would-be change, returns the current record with `x-codeclone-dry-run: true` echoed back, and writes nothing. Real calls write `v1.shares.update` to the tamper-evident audit chain with a before/after diff of title and tags (and `v1.shares.update.dry_run` for previews) so SOC 2 CC6.1 / ISO 27001 A.8.2 reviewers can reconstruct exactly who relabeled which record, when, from where, and what changed. RBAC, cross-tenant isolation, input validation, and the dry-run + audit-diff wiring are pinned by `web/tests/v1-shares-update-tenant-isolation.test.ts`.
+
+  ### Try it: relabel a saved comparison from CI
+
+  ```bash
+  # Local dashboard runs at http://localhost:3000.
+  curl -sS -X PATCH "http://localhost:3000/api/v1/shares/$SHARE_ID" \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"title":"case-2025-0142 near-duplicate","tags":["case-2025-0142","soc2"]}'
+  ```
+
+  Dry-run preview (no mutation, returns the would-be diff in the audit log only):
+
+  ```bash
+  curl -sS -X PATCH "http://localhost:3000/api/v1/shares/$SHARE_ID?dry_run=true" \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"tags":["retention-90d"]}'
+  # Response includes the x-codeclone-dry-run: true header and leaves the share untouched.
+  ```
+
 - Programmatic saved-share creation via `POST /v1/shares`, behind a workspace-scoped `shares:write` key. The existing `/v1/shares` read surface let customers list and fetch saved comparisons from CI but forced them through the browser-only `/compare` UI to actually create one, so a CI pipeline that wanted to publish "here is the near-duplicate we flagged in build #4127" as a stable `/r/<id>` link had to either screen-scrape or keep a cookie session alive. `POST /v1/shares` closes that gap: pass `{a, b, language?, title?, tags?}` as JSON, the server recomputes scores, line alignment, and clone classification itself (so a leaked key cannot mint a share link that lies about a 0.42 similarity by claiming 0.97), stamps the record with the calling key's `workspaceId`, and returns the new `id`, public `url`, recomputed `scores`, `clone` label, and byte counts. The full enforcement chain that every other mutating `/v1` route runs is wired in unchanged (workspace lockdown, workspace + per-key IP allowlists, residency, workspace API-key policy, DPA, per-key rate limit with the standard `X-RateLimit-*` headers, the 4 KiB `MAX_SNIPPET_BYTES` cap that returns structured `413 payload_too_large`); keys with no workspace binding are rejected with `400 invalid_request` because a cross-tenant or unowned saved share is not a real product. Honors the standard `x-codeclone-dry-run: true` header (or `?dry_run=true`): returns the would-be scores and tenant stamp with `x-codeclone-dry-run: true` echoed back and writes nothing, so SDK CI can prove contract shape without leaving litter on disk or burning quota. Real calls write a `v1.shares.create` row to the tamper-evident audit chain with the key prefix, share id, language, recomputed shingle-Jaccard, clone label, byte counts, and tags, and log a usage event so the call shows up in `/usage` and `/v1/usage` (plan quota is intentionally not double-billed: the underlying compare already billed it). Cross-tenant isolation, RBAC separation between `shares:read` and `shares:write`, recomputed-score pinning, and the snippet size cap are pinned by `web/tests/v1-shares-create.test.ts`.
 
   ### Try it: publish a saved comparison from CI

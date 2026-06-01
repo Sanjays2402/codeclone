@@ -287,6 +287,41 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS -X POST ${host}/v1/shares \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"a":"function add(x,y){return x+y;}","b":"function add(a,b){return a+b;}","language":"javascript","title":"ci-near-dup"}'`,
   },
   {
+    id: "shares-update",
+    method: "PATCH",
+    path: "/v1/shares/{id}",
+    routeFile: "app/api/v1/shares/[id]/route.ts",
+    summary: "Edit the title and/or tags of a saved comparison in place. Does not re-run the model or rotate the share id.",
+    scope: "shares:write",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Share id returned from /v1/shares or the share UI." },
+      { name: "title", kind: "body", required: false, type: "string | null", description: "New title. Pass null or empty string to clear." },
+      { name: "tags", kind: "body", required: false, type: "string[] | null", description: "New tag set (replaces, not merges). Pass null or [] to clear. Lowercased and slugged server-side." },
+      { name: "dry_run", kind: "query", required: false, type: "boolean", description: "If true, validate and audit the call but do not mutate storage. Response includes the x-codeclone-dry-run header." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        share: {
+          id: "abc1234567",
+          created_at: 1748730000000,
+          updated_at: 1748733600000,
+          language: "javascript",
+          title: "case-2025-0142 near-duplicate",
+          tags: ["case-2025-0142", "soc2"],
+          url: "/r/abc1234567",
+        },
+        changed: true,
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X PATCH ${host}/v1/shares/abc1234567 \\
+  -H "Authorization: Bearer ${key}" \\
+  -H "Content-Type: application/json" \\
+  -d '{"title":"case-2025-0142 near-duplicate","tags":["case-2025-0142","soc2"]}'`,
+  },
+  {
     id: "audit",
     method: "GET",
     path: "/v1/audit",

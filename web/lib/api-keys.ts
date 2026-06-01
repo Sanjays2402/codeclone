@@ -67,7 +67,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "compare:write": "Call POST /v1/compare on two snippets.",
   "batch:write": "Call POST /v1/batch for bulk pairwise comparisons.",
   "shares:read": "List and fetch saved comparison results via /v1/shares.",
-  "shares:write": "Create saved comparisons via POST /v1/shares and delete via DELETE /v1/shares/:id.",
+  "shares:write": "Create saved comparisons via POST /v1/shares, edit title/tags via PATCH /v1/shares/:id, and delete via DELETE /v1/shares/:id.",
   "usage:read": "Read this workspace's /v1 usage and plan state via GET /v1/usage.",
   "audit:read": "Stream this workspace's audit log to a SIEM via GET /v1/audit.",
   "webhooks:read": "List and fetch this workspace's webhook endpoints via GET /v1/webhooks.",
