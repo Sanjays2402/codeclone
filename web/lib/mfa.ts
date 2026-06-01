@@ -263,6 +263,34 @@ export async function confirmEnrollment(
   return { backupCodes: plain };
 }
 
+/**
+ * Regenerate a fresh set of single-use backup codes for an already-enrolled
+ * user, atomically replacing any unused codes. Returns the new plaintext
+ * codes (the only time they are ever exposed by the server).
+ *
+ * Callers MUST gate this behind a step-up check so a stolen session cookie
+ * cannot silently re-issue codes and lock the legitimate owner out.
+ */
+export async function regenerateBackupCodes(
+  userId: string,
+): Promise<{ backupCodes: string[]; previousRemaining: number }> {
+  const rec = await getMfa(userId);
+  if (!rec || !rec.enrolledAt) {
+    throw new Error("MFA is not enabled for this account.");
+  }
+  const previousRemaining = rec.backupCodeHashes.length;
+  const plain: string[] = [];
+  const hashes: string[] = [];
+  for (let i = 0; i < BACKUP_CODE_COUNT; i++) {
+    const c = generateBackupCode();
+    plain.push(c);
+    hashes.push(hashBackup(c));
+  }
+  rec.backupCodeHashes = hashes;
+  await writeJson(recordPath(userId), rec);
+  return { backupCodes: plain, previousRemaining };
+}
+
 export async function disableMfa(userId: string): Promise<void> {
   try {
     await fs.unlink(recordPath(userId));

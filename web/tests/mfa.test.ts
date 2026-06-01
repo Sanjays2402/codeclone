@@ -151,3 +151,36 @@ test("destructive route gate denies user with MFA enrolled and no step-up", asyn
   const otherBlocked = await mfa.requireStepUp(user.id, otherJti);
   assert.equal(otherBlocked.allowed, false);
 });
+
+test("regenerateBackupCodes replaces all unused codes and invalidates old ones", async () => {
+  await freshEnv();
+  const mfa = await import("../lib/mfa.ts");
+  const start = await mfa.startEnrollment("u_regen", "regen@example.com");
+  const conf = await mfa.confirmEnrollment("u_regen", mfa.totp(start.secret));
+  const oldFirst = conf.backupCodes[0];
+  const oldSecond = conf.backupCodes[1];
+
+  // Burn one so previousRemaining reflects the real unused count (9).
+  const burn = await mfa.verifyAndConsume("u_regen", oldFirst);
+  assert.equal(burn.ok, true);
+
+  const out = await mfa.regenerateBackupCodes("u_regen");
+  assert.equal(out.previousRemaining, 9);
+  assert.equal(out.backupCodes.length, mfa.BACKUP_CODE_COUNT);
+
+  // A previously valid (unused) old code must no longer work.
+  const stale = await mfa.verifyAndConsume("u_regen", oldSecond);
+  assert.equal(stale.ok, false, "old unused code must be invalidated");
+
+  // A newly issued code works exactly once.
+  const fresh = out.backupCodes[0];
+  const r1 = await mfa.verifyAndConsume("u_regen", fresh);
+  assert.equal(r1.ok, true);
+  assert.equal(r1.via, "backup");
+  const r2 = await mfa.verifyAndConsume("u_regen", fresh);
+  assert.equal(r2.ok, false, "regenerated code must still be single-use");
+
+  // Regenerate refuses to run for an account without MFA.
+  await mfa.disableMfa("u_regen");
+  await assert.rejects(() => mfa.regenerateBackupCodes("u_regen"), /not enabled/);
+});

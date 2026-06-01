@@ -192,6 +192,53 @@ export default function MfaSettingsPage() {
     void navigator.clipboard.writeText(codes.join("\n"));
   }, []);
 
+  const [regenToken, setRegenToken] = useState("");
+  const [regenSubmitting, setRegenSubmitting] = useState(false);
+
+  const regenerate = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!regenToken.trim()) {
+        setError("Enter your current MFA code to regenerate backup codes.");
+        return;
+      }
+      setRegenSubmitting(true);
+      setError(null);
+      try {
+        // Step up first so the regenerate call has a fresh grant.
+        const ch = await fetch("/api/auth/mfa/challenge", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ token: regenToken.trim() }),
+        });
+        if (!ch.ok) {
+          const data = (await ch.json().catch(() => ({}))) as { error?: string };
+          setError(data.error || "Code did not match.");
+          return;
+        }
+        const res = await fetch("/api/auth/mfa/backup-codes/regenerate", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "content-type": "application/json" },
+        });
+        const data = (await res.json()) as { backupCodes?: string[]; error?: string };
+        if (!res.ok) {
+          setError(data.error || "Could not regenerate backup codes.");
+          return;
+        }
+        setBackupCodes(data.backupCodes ?? []);
+        setRegenToken("");
+        await load();
+      } catch {
+        setError("Network error regenerating backup codes.");
+      } finally {
+        setRegenSubmitting(false);
+      }
+    },
+    [regenToken, load],
+  );
+
   return (
     <main className="mx-auto max-w-3xl px-4 py-8 sm:px-6 sm:py-12">
       <div className="mb-6 flex items-center gap-3">
@@ -353,6 +400,48 @@ export default function MfaSettingsPage() {
               </button>
             </div>
           </div>
+        </section>
+      )}
+
+      {status?.enrolled && (
+        <section className="mt-4 rounded-xl border border-zinc-200 bg-white p-5 shadow-sm">
+          <H2>Regenerate backup codes</H2>
+          <p className="text-sm text-zinc-600">
+            Issue a fresh set of 10 single-use codes. Old unused codes are
+            invalidated immediately. Requires a current 6-digit code from
+            your authenticator app.
+          </p>
+          <p className="mt-1 text-xs text-zinc-500">
+            {status.backupCodesRemaining} of 10 codes remaining.
+          </p>
+          <form onSubmit={regenerate} className="mt-3 flex flex-wrap items-end gap-2">
+            <div>
+              <label
+                htmlFor="regen-token"
+                className="block text-xs font-medium uppercase tracking-wide text-zinc-500"
+              >
+                Authenticator code
+              </label>
+              <input
+                id="regen-token"
+                value={regenToken}
+                onChange={(e) => setRegenToken(e.target.value)}
+                autoComplete="one-time-code"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                className="mt-1 w-48 rounded-md border border-zinc-300 px-3 py-2 font-mono focus:border-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+                placeholder="000000"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={regenSubmitting || !regenToken.trim()}
+              className="inline-flex items-center gap-2 rounded-md bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ArrowsClockwise weight="duotone" className="size-4" />
+              {regenSubmitting ? "Regenerating..." : "Regenerate codes"}
+            </button>
+          </form>
         </section>
       )}
 
