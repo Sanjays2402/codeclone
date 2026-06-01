@@ -99,6 +99,32 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
     -H "Authorization: Bearer $CODECLONE_KEY"
   ```
 
+- Programmatic webhook signing-secret rotation via `POST /v1/webhooks/{id}/rotate` (initiate, returns the new plaintext exactly once), `PUT /v1/webhooks/{id}/rotate` (finalize, promote the pending secret to primary), and `DELETE /v1/webhooks/{id}/rotate` (cancel a pending rotation). SOC2 CC6.1 requires evidence that shared secrets are rotated on a defined cadence; the dashboard route at `/api/webhooks/{id}/rotate` covers the human path, but until this change there was no way for a SOAR or IGA pipeline to roll a webhook secret without a cookie session, so most customers either skipped the control or hand-rolled a session-impersonation shim. All three verbs accept the same Bearer (or `x-api-key`) credential as the rest of `/v1`, behind the existing `webhooks:write` scope (no new scope to provision, no new dashboard surface to learn) and the full workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, per-key rate limit). Tenant scope is structural: every store call goes through `rotateSecret(id, key.workspaceId)`, `finalizeRotation(id, key.workspaceId)`, and `cancelRotation(id, key.workspaceId)`, all of which refuse cross-tenant ids at the lib layer with a flat 404 so the existence of another workspace's webhook id cannot be probed; keys with no workspace binding get `tenant_required` instead of falling through. Initiate accepts an optional `graceMs` (1 minute to 30 days, default 24h) and seeds a pending secret that signs deliveries alongside the primary until finalize promotes it; receivers can roll forward with zero dropped events. The plaintext is returned exactly once and only a sha256 hash is persisted, matching create-time semantics. Every initiate, finalize, and cancel writes a `v1.webhooks.secret.rotate_initiate` / `_finalize` / `_cancel` row to the tamper-evident audit chain with the actor key id, target webhook id and label, workspace id, and a before/after diff of the secret prefixes and pending expiry, so a SOC2 reviewer can reconstruct the full rotation timeline of any endpoint from the audit log alone. Pinned by `web/tests/v1-webhooks-rotate-tenant-isolation.test.ts` (cross-tenant rotate, finalize, and cancel all denied at the lib level without mutating the target, same-tenant rotate + finalize round-trip succeeds, plus source-level wiring checks that fail on regression if the scope, workspace gate, audit rows, or rate-limit/IP/residency/lockdown enforcement are dropped).
+
+  ### Try it: rotate a webhook secret from a SOAR runbook
+
+  ```bash
+  # Mint a key with the webhooks:write scope from /api-keys, then resolve
+  # the webhook id you want to roll:
+  WH_ID=$(curl -sS http://localhost:3000/v1/webhooks \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq -r '.items[0].id')
+
+  # 1. Initiate a 1h rotation. Capture the new secret IMMEDIATELY; it is
+  #    never shown again. Receivers should now accept either prefix.
+  curl -sS -X POST "http://localhost:3000/v1/webhooks/$WH_ID/rotate" \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    -H 'content-type: application/json' \
+    -d '{"graceMs": 3600000}'
+
+  # 2. After your receivers are deployed with the new secret, finalize:
+  curl -sS -X PUT "http://localhost:3000/v1/webhooks/$WH_ID/rotate" \
+    -H "Authorization: Bearer $CODECLONE_KEY"
+
+  # 2'. ...or roll back if anything went wrong:
+  curl -sS -X DELETE "http://localhost:3000/v1/webhooks/$WH_ID/rotate" \
+    -H "Authorization: Bearer $CODECLONE_KEY"
+  ```
+
 - Programmatic webhook delivery log and replay via `/v1/webhooks/{id}/deliveries` and `/v1/webhooks/{id}/deliveries/{deliveryId}/redeliver`. Until this change, the only way to inspect a webhook's recent attempt history or re-fire a failed delivery was the cookie-authenticated `/api/webhooks` dashboard, which blocked SRE runbooks, SIEM forwarders, and incident-response automation from acting without a human session. `GET /v1/webhooks/{id}/deliveries` returns the newest-first attempt log (status, attempts, latency, error, request and response body previews) behind the `webhooks:read` scope; `POST /v1/webhooks/{id}/deliveries/{deliveryId}/redeliver` re-fires the recorded request body against the webhook's current URL with a fresh signature behind the `webhooks:write` scope, and supports `dry_run=true` (query or body) which runs every auth/policy/quota check then returns a preview without making a network call. Tenant scope is structural: both endpoints call `loadWebhookForWorkspace(id, key.workspaceId)` and `listDeliveriesForWorkspace(id, key.workspaceId)` / `redeliverDelivery(id, deliveryId, key.workspaceId)`, all of which refuse cross-tenant access at the lib layer; cross-tenant ids return a flat 404 so the existence of another workspace's webhook id cannot be probed. Keys with no workspace binding receive `tenant_required` instead of falling through. Every real replay and every dry-run probe writes to the tamper-evident audit chain as `v1.webhooks.redeliver` or `v1.webhooks.redeliver.dry_run` with event, status, ok, and target url, so a SOC2 reviewer can pivot from any redelivery back to which key fired it. The full `/v1` enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, rate limit) runs before the route ever touches webhook state. Pinned by `web/tests/v1-webhook-deliveries-tenant-isolation.test.ts` (cross-tenant list and redeliver denied at the lib level via a hermetic stub fetch, plus source-level wiring checks that fail on regression if the scope, workspace gate, dry-run, audit, or rate-limit/IP/residency calls are dropped).
 
   ### Try it: list and replay deliveries from a CI script
