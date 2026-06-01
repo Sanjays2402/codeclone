@@ -33,12 +33,22 @@ export interface CollectionRecord {
   shareIds: string[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * Workspace that owns this collection. Required for any record
+   * created through /v1/collections. Legacy records written before
+   * this field existed (or by the single-tenant FS dashboard path)
+   * leave it undefined and are treated as global by the legacy
+   * dashboard routes only; /v1 callers can never see records that
+   * do not match their workspace.
+   */
+  workspaceId?: string;
 }
 
 export interface CreateCollectionInput {
   title: string;
   description?: string;
   shareIds?: string[];
+  workspaceId?: string;
 }
 
 export interface UpdateCollectionInput {
@@ -129,6 +139,7 @@ export async function createCollection(
       shareIds,
       createdAt: now,
       updatedAt: now,
+      ...(input.workspaceId ? { workspaceId: input.workspaceId } : {}),
     };
     await fs.writeFile(file, JSON.stringify(rec), "utf-8");
     return rec;
@@ -261,6 +272,15 @@ export async function listCollections(opts: {
   q?: string;
   sort?: CollectionSortKey;
   dir?: CollectionSortDir;
+  /**
+   * If set, only records whose workspaceId matches are returned.
+   * If `allowLegacy` is also true, unscoped legacy records are
+   * included (used by the cookie-auth dashboard in single-tenant
+   * mode). /v1 callers should pass their workspaceId and
+   * `allowLegacy: false` for strict isolation.
+   */
+  workspaceId?: string | null;
+  allowLegacy?: boolean;
 } = {}): Promise<{
   items: CollectionSummary[];
   total: number;
@@ -289,12 +309,19 @@ export async function listCollections(opts: {
     const rec = await loadCollection(id);
     if (rec) records.push(rec);
   }
+  const scoped = opts.workspaceId === undefined
+    ? records
+    : records.filter((r) => {
+        if (r.workspaceId && r.workspaceId === opts.workspaceId) return true;
+        if (!r.workspaceId && opts.allowLegacy) return true;
+        return false;
+      });
   const filtered = q
-    ? records.filter((r) => {
+    ? scoped.filter((r) => {
         const hay = `${r.title} ${r.description ?? ""}`.toLowerCase();
         return hay.includes(q);
       })
-    : records;
+    : scoped;
   const factor = dir === "asc" ? 1 : -1;
   filtered.sort((a, b) => {
     let cmp = 0;

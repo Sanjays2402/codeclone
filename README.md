@@ -10,6 +10,29 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic share-collection management via `GET/POST /v1/collections` and `GET/PATCH/DELETE /v1/collections/{id}`. Until this change, share collections (the `/c/<id>` URLs that bundle a sprint's worth of `/r/<id>` shares) could only be assembled by a human clicking through the `/collections` dashboard with a session cookie. Customers wiring CodeClone into release engineering and CI wanted to mint a single "every near-duplicate we flagged this sprint" URL straight from a pipeline. These routes expose list/create over the same store the dashboard uses behind the `collections:read` and `collections:write` scopes, so a collection POSTed from CI shows up immediately under `/collections`. Tenant scope is structural: every store call passes `key.workspaceId` (rejected with `invalid_request` if the key has no workspace), `listCollections` is invoked with `allowLegacy: false` so unscoped single-tenant records are invisible, and the `[id]` route runs a `workspaceOwns` check that returns a flat 404 on cross-workspace ids so the existence of another workspace's collection id cannot be probed. Every mutation writes to the audit chain under stable `v1.collections.{list,create,update,delete}` action ids; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate limit with `X-RateLimit-*` and `Retry-After`) runs before any side effect. Pinned by `web/tests/v1-collections-tenant-isolation.test.ts` (live per-workspace partitioning at the lib layer plus source-level wiring checks that fail on regression if the scope, workspace gate, rate-limit, audit, IP/residency, or `allowLegacy: false` calls are dropped).
+
+  ### Try it: assemble a sprint dupes collection from CI
+
+  ```bash
+  # Mint a key with collections:read + collections:write scopes from /api-keys,
+  # then create a collection seeded with the shares CI flagged this sprint:
+  curl -sS -X POST http://localhost:3000/v1/collections \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"title":"sprint 42 near-duplicates","description":"flagged by CI 2026-05-30","shareIds":["abc1234567"]}' \
+    | jq '.collection | {id, title, items: (.shareIds | length)}'
+
+  # List every collection in the workspace, newest-first:
+  curl -sS "http://localhost:3000/v1/collections?limit=10" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq '.items[] | {id, title, count}'
+
+  # Cross-workspace ids return 404, not 403, so existence never leaks:
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    http://localhost:3000/v1/collections/someone-elses-id \
+    -H "Authorization: Bearer $CODECLONE_KEY"
+  ```
+
 - Programmatic webhook delivery log and replay via `/v1/webhooks/{id}/deliveries` and `/v1/webhooks/{id}/deliveries/{deliveryId}/redeliver`. Until this change, the only way to inspect a webhook's recent attempt history or re-fire a failed delivery was the cookie-authenticated `/api/webhooks` dashboard, which blocked SRE runbooks, SIEM forwarders, and incident-response automation from acting without a human session. `GET /v1/webhooks/{id}/deliveries` returns the newest-first attempt log (status, attempts, latency, error, request and response body previews) behind the `webhooks:read` scope; `POST /v1/webhooks/{id}/deliveries/{deliveryId}/redeliver` re-fires the recorded request body against the webhook's current URL with a fresh signature behind the `webhooks:write` scope, and supports `dry_run=true` (query or body) which runs every auth/policy/quota check then returns a preview without making a network call. Tenant scope is structural: both endpoints call `loadWebhookForWorkspace(id, key.workspaceId)` and `listDeliveriesForWorkspace(id, key.workspaceId)` / `redeliverDelivery(id, deliveryId, key.workspaceId)`, all of which refuse cross-tenant access at the lib layer; cross-tenant ids return a flat 404 so the existence of another workspace's webhook id cannot be probed. Keys with no workspace binding receive `tenant_required` instead of falling through. Every real replay and every dry-run probe writes to the tamper-evident audit chain as `v1.webhooks.redeliver` or `v1.webhooks.redeliver.dry_run` with event, status, ok, and target url, so a SOC2 reviewer can pivot from any redelivery back to which key fired it. The full `/v1` enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, rate limit) runs before the route ever touches webhook state. Pinned by `web/tests/v1-webhook-deliveries-tenant-isolation.test.ts` (cross-tenant list and redeliver denied at the lib level via a hermetic stub fetch, plus source-level wiring checks that fail on regression if the scope, workspace gate, dry-run, audit, or rate-limit/IP/residency calls are dropped).
 
   ### Try it: list and replay deliveries from a CI script
