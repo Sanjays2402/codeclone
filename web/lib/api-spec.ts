@@ -330,6 +330,42 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS ${host}/v1/webhooks \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d ${shJsonArg(webhooksCreateBody)}`,
   },
   {
+    id: "webhooks-failures",
+    method: "GET",
+    path: "/v1/webhooks/failures",
+    routeFile: "app/api/v1/webhooks/failures/route.ts",
+    summary: "Stream recent failed webhook delivery attempts across every endpoint in the calling workspace. NDJSON by default for SIEM and on-call pipelines (Datadog, Splunk, PagerDuty, Opsgenie).",
+    scope: "webhooks:read",
+    params: [
+      { name: "limit", kind: "query", required: false, type: "integer", description: "1..200, newest-first. Default 50." },
+      { name: "since", kind: "query", required: false, type: "ms epoch or ISO 8601", description: "Only failures attempted at or after this timestamp." },
+      { name: "format", kind: "query", required: false, type: "'ndjson' | 'json'", description: "Response shape. Defaults to ndjson (one failure per line) for SIEM ingestion." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        workspace_id: "ws_acme",
+        count: 1,
+        limit: 50,
+        items: [
+          {
+            webhookId: "wh_8f3e2a",
+            label: "prod pagerduty",
+            url: "https://events.pagerduty.com/x/integration/abc",
+            event: "compare.completed",
+            attemptedAt: 1717000123000,
+            status: 503,
+            attempts: 3,
+            error: "upstream 503",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS "${host}/v1/webhooks/failures?limit=100" \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "members-list",
     method: "GET",
     path: "/v1/members",

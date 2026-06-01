@@ -91,6 +91,23 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
     -H "Authorization: Bearer $CODECLONE_KEY" | jq '.delivery | {status, ok, attempts, redeliveredFrom}'
   ```
 
+- Programmatic SIEM-friendly webhook failure feed via `GET /v1/webhooks/failures`. Until this change, the only way to see which webhook deliveries had failed across the whole workspace was the cookie-authenticated `/api/webhooks/recent-failures` route powering the in-app toaster, which blocked Datadog, Splunk, PagerDuty, and Opsgenie pipelines from polling for failures without a human session. The new route returns the most recent failed delivery attempts (newest first, status, attempts, error, event, target url) across every webhook in the calling workspace as NDJSON by default so a SIEM forwarder can pipe the body straight into its ingestor, with `?format=json` available for ad-hoc curl and `?limit=`, `?since=` for cursoring. Auth is the same Bearer (or `x-api-key`) the rest of `/v1` accepts behind the `webhooks:read` scope. Tenant scope is structural: the aggregator is called with `workspaceId: key.workspaceId`, which delegates to `listWebhooksForWorkspace` and refuses to enumerate any other tenant's hooks at the lib layer; keys with no workspace receive `tenant_required` instead of falling through to a platform-wide feed. Every poll writes one `v1.webhooks.failures.read` audit row (so the SOC2 reviewer can pivot from any read back to which key polled it), increments the per-key rate-limit window, and logs one usage row but does not charge plan quota. The full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, rate limit) runs before the route ever touches webhook state. Pinned by `web/tests/v1-webhook-failures-tenant-isolation.test.ts` (live cross-tenant aggregation denied at the lib layer via a hermetic 503-stub fetch, plus source-level wiring checks that fail on regression if the scope, workspace gate, audit, NDJSON default, or rate-limit/IP/residency/lockdown calls are dropped).
+
+  ### Try it: page recent webhook failures into PagerDuty
+
+  ```bash
+  # Mint a key with webhooks:read from /api-keys, then poll on a cron:
+  curl -sS "http://localhost:3000/v1/webhooks/failures?limit=100" \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    | tee -a /var/log/codeclone-webhook-failures.ndjson \
+    | jq -r 'select(.status>=500) | "\(.attemptedAt) \(.label) \(.event) \(.status) attempts=\(.attempts)"'
+
+  # Or grab the last hour as JSON for an incident-response notebook:
+  SINCE=$(($(date +%s%3N) - 3600000))
+  curl -sS "http://localhost:3000/v1/webhooks/failures?since=$SINCE&format=json" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq '{count, items: (.items|length)}'
+  ```
+
 - Public, unauthenticated `GET /v1/discovery` manifest that lets enterprise procurement, SecOps, and SDK generators inspect the entire `/v1` surface without credentials. Returns API version and base URL, accepted auth schemes (Bearer plus `x-api-key`), the documented rate-limit envelope (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`, 429 throttled status, default RPM, 60s window), a plain-English summary of each workspace policy (tenant isolation, audit chain, idempotency replay, IP allowlist, residency, lockdown, dry-run), the full scope catalog with descriptions and a reverse index of which endpoints each scope unlocks, and every endpoint with method, path, params, and the scope it requires. Sourced from the same `ENDPOINTS` table the `/docs` page renders, so it cannot drift from real routes. Side-effect free: no auth, no audit row, no rate-limit slot, cached for 60s, safe to share with a security questionnaire. Surfaced as a "discovery manifest" link on `/docs`. Pinned by `web/tests/v1-discovery.test.ts` (every documented endpoint and scope appears in the manifest, reverse index matches forward index, rate-limit headers match what every `/v1` route advertises, and a source-level assertion that the route does not import auth, audit, rate-limit, usage, or webhook machinery so credential-free scanners can hit it safely).
 
   ### Try it: pull the manifest into a procurement review
