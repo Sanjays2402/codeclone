@@ -15,6 +15,8 @@ export const ALL_SCOPES = [
   "shares:write",
   "usage:read",
   "audit:read",
+  "webhooks:read",
+  "webhooks:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -25,4 +27,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "shares:write": "Delete saved comparison results via DELETE /v1/shares/:id.",
   "usage:read": "Read this workspace's /v1 usage and plan state via GET /v1/usage.",
   "audit:read": "Stream this workspace's audit log to a SIEM via GET /v1/audit.",
+  "webhooks:read": "List and fetch this workspace's webhook endpoints via GET /v1/webhooks.",
+  "webhooks:write": "Create and delete webhook endpoints via POST/DELETE /v1/webhooks.",
 };

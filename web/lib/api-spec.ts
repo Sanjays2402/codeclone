@@ -123,6 +123,60 @@ const shareDetailResponse = JSON.stringify(
   2,
 );
 
+const webhooksListResponse = JSON.stringify(
+  {
+    workspace_id: "ws_acme",
+    count: 1,
+    supported_events: ["compare.completed", "batch.completed", "audit.recorded", "webhook.ping"],
+    items: [
+      {
+        id: "wh_2a9k1p4q",
+        workspaceId: "ws_acme",
+        label: "prod-pagerduty",
+        url: "https://example.com/hooks/codeclone",
+        events: ["compare.completed", "audit.recorded"],
+        secretPrefix: "whsec_aBcD",
+        createdAt: 1717000000000,
+        successCount: 42,
+        failureCount: 0,
+      },
+    ],
+  },
+  null,
+  2,
+);
+
+const webhooksCreateBody = JSON.stringify(
+  {
+    label: "prod-pagerduty",
+    url: "https://example.com/hooks/codeclone",
+    events: ["compare.completed", "audit.recorded"],
+  },
+  null,
+  2,
+);
+
+const webhooksCreateResponse = JSON.stringify(
+  {
+    webhook: {
+      id: "wh_2a9k1p4q",
+      workspaceId: "ws_acme",
+      label: "prod-pagerduty",
+      url: "https://example.com/hooks/codeclone",
+      events: ["compare.completed", "audit.recorded"],
+      secretPrefix: "whsec_aBcD",
+      createdAt: 1717000000000,
+      successCount: 0,
+      failureCount: 0,
+    },
+    secret: "whsec_REDACTED_SHOWN_ONCE",
+    secret_notice:
+      "Store this signing secret now. It will never be shown again. Use it to verify the X-CodeClone-Signature header on every delivery.",
+  },
+  null,
+  2,
+);
+
 function shJsonArg(s: string): string {
   // Single-quote for shell, escape embedded single quotes.
   return `'${s.replace(/'/g, `'\\''`)}'`;
@@ -244,6 +298,64 @@ export const ENDPOINTS: SpecEndpoint[] = [
     ),
     curl: (host, key) =>
       `curl -sS "${host}/v1/audit?limit=100&status=denied" \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "webhooks-list",
+    method: "GET",
+    path: "/v1/webhooks",
+    routeFile: "app/api/v1/webhooks/route.ts",
+    summary: "List the calling workspace's webhook endpoints. Signing secrets are never returned.",
+    scope: "webhooks:read",
+    params: [],
+    sampleResponse: webhooksListResponse,
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/webhooks \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "webhooks-create",
+    method: "POST",
+    path: "/v1/webhooks",
+    routeFile: "app/api/v1/webhooks/route.ts",
+    summary: "Provision a webhook endpoint in the calling workspace. The signing secret is returned exactly once.",
+    scope: "webhooks:write",
+    params: [
+      { name: "url", kind: "body", required: true, type: "https URL", description: "Receiver URL. Must be https. Public hosts only (private/loopback ranges are rejected). Honours the workspace webhook domain allowlist if configured." },
+      { name: "label", kind: "body", required: false, type: "string", description: "Human label shown in the dashboard. Max 60 chars." },
+      { name: "events", kind: "body", required: false, type: "string[]", description: "Subset of supported events to subscribe to. Defaults to compare.completed." },
+      { name: "dry_run", kind: "body", required: false, type: "boolean", description: "Sandbox mode. Validates auth, scope, policy, and URL then returns a preview without creating the webhook or charging quota. Also accepted as ?dry_run=true." },
+    ],
+    sampleBody: webhooksCreateBody,
+    sampleResponse: webhooksCreateResponse,
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/webhooks \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d ${shJsonArg(webhooksCreateBody)}`,
+  },
+  {
+    id: "webhooks-get",
+    method: "GET",
+    path: "/v1/webhooks/{id}",
+    routeFile: "app/api/v1/webhooks/[id]/route.ts",
+    summary: "Fetch a single webhook endpoint summary. Returns 404 for ids in other workspaces.",
+    scope: "webhooks:read",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Webhook id from /v1/webhooks or the dashboard." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        id: "wh_2a9k1p4q",
+        workspaceId: "ws_acme",
+        label: "prod-pagerduty",
+        url: "https://example.com/hooks/codeclone",
+        events: ["compare.completed", "audit.recorded"],
+        secretPrefix: "whsec_aBcD",
+        createdAt: 1717000000000,
+        successCount: 42,
+        failureCount: 0,
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/webhooks/wh_2a9k1p4q \\\n  -H "Authorization: Bearer ${key}"`,
   },
 ];
 

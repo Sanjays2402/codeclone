@@ -103,6 +103,8 @@ api-keys/
 webhooks/
 !web/app/api/webhooks/
 !web/app/api/webhooks/**
+!web/app/api/v1/webhooks/
+!web/app/api/v1/webhooks/**
 settings.json
 rate-limit/
 session-rate-limit/

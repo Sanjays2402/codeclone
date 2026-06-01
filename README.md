@@ -10,6 +10,31 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic webhook provisioning via `/v1/webhooks`. Until this change, the only way to create or delete a webhook endpoint was the cookie-authenticated `/api/webhooks` dashboard surface, which blocks Terraform, internal control planes, and CI tooling from rotating receivers without a human in the loop. `GET /v1/webhooks`, `POST /v1/webhooks`, `GET /v1/webhooks/{id}`, and `DELETE /v1/webhooks/{id}` now accept the same Bearer (or `x-api-key`) credential as the rest of `/v1`, behind two least-privilege scopes (`webhooks:read`, `webhooks:write`) and the standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, rate limit). Tenant scope is structural: list and load delegate to `listWebhooksForWorkspace` / `loadWebhookForWorkspace(id, workspaceId)`, and the destructive path calls `deleteWebhook(id, workspaceId)` which refuses on mismatch without touching disk. Cross-tenant ids return a flat 404 so the existence of another workspace's webhook id cannot be probed. Keys with no workspace binding receive `tenant_required` instead of falling through. Creation honours the workspace's webhook domain allowlist and returns the signing secret exactly once (matching the dashboard create flow). Both mutating verbs support `dry_run=true` (query or body) which runs every auth/policy/quota check then returns a preview without creating or deleting; every probe and every real action writes to the tamper-evident audit chain as `v1.webhooks.create`, `v1.webhooks.delete`, or the matching `*.dry_run` variant. Pinned by `web/tests/v1-webhooks-tenant-isolation.test.ts` (cross-tenant list/load/delete denied at the lib level, plus source-level wiring checks that fail on regression if the scope, workspace gate, or audit/rate-limit/IP/residency calls are dropped).
+
+  ### Try it: provision a webhook from outside the dashboard
+
+  ```bash
+  pnpm dev   # web dashboard on http://localhost:3000
+
+  # Mint a key with webhooks:read + webhooks:write scopes from /api-keys.
+
+  # Create an endpoint (signing secret is returned once, never again):
+  curl -sS -X POST http://localhost:3000/v1/webhooks \
+    -H "Authorization: Bearer cc_live_..." \
+    -H "Content-Type: application/json" \
+    -d '{"label":"prod-pagerduty","url":"https://example.com/hooks/codeclone","events":["compare.completed","audit.recorded"]}'
+  # -> {"webhook":{...},"secret":"whsec_...","secret_notice":"Store this signing secret now..."}
+
+  # List this workspace's webhooks (returns 404, not 403, for ids in other tenants):
+  curl -sS http://localhost:3000/v1/webhooks \
+    -H "Authorization: Bearer cc_live_..."
+
+  # Dry-run a delete to validate scope + policy without removing anything:
+  curl -sS -X DELETE "http://localhost:3000/v1/webhooks/wh_2a9k1p4q?dry_run=true" \
+    -H "Authorization: Bearer cc_live_..."
+  ```
+
 - SIEM-friendly audit stream with `GET /v1/audit`. Enterprise security teams need to ingest CodeClone's audit log into Splunk, Datadog, Elastic, or a generic NDJSON HTTP collector on a polling cron; the dashboard `/api/audit` route is cookie-authenticated and meant for humans, so until this change there was no machine-readable way for a SIEM forwarder to pull workspace activity. `GET /v1/audit` now accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `audit:read` scope, and emits the calling key's workspace entries as NDJSON by default (`format=ndjson`, one entry per line) or as a JSON object with an `items` array (`format=json`). Tenant scope is structural: the route builds an `allowedWorkspaceIds` set containing only the key's own `workspaceId` and passes it to `listAudit()`, so a key minted in workspace A can never tail workspace B's audit log even though both tenants share the same JSONL store. Keys with no workspace binding get an empty scope and see nothing; Bearer callers are explicitly not admitted to null-workspace user events (`selfActorId: undefined`). The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any entry is read, owner-configured retention is honoured so consumers can never read entries the dashboard already hides as expired, the per-key rate-limit window is *enforced* (not peeked) so this endpoint cannot be used as a free heartbeat, and every call writes a `v1.audit.read` row to the tamper-evident audit chain (audit reads are themselves auditable). Cursor pagination is exposed via the `X-Next-Until` response header (newest-first by `ts`; pass it back as `?until=` to walk backwards). Pinned by `web/tests/v1-audit-tenant-isolation.test.ts` (cross-tenant isolation via `allowedWorkspaceIds`, scope rejection for keys missing `audit:read`, and a source-level wiring check that fails on regression if the scope filter, the rate-limit `enforce` call, the tenant scope, or any of the workspace gates is dropped).
 
 ### Try it: stream this workspace's audit log into a SIEM
