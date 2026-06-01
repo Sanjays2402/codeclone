@@ -21,7 +21,7 @@ export interface SpecParam {
 
 export interface SpecEndpoint {
   id: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   path: string;
   routeFile: string;
   summary: string;
@@ -471,6 +471,161 @@ export const ENDPOINTS: SpecEndpoint[] = [
     ),
     curl: (host, key) =>
       `curl -sS ${host}/v1/webhooks/wh_2a9k1p4q \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "snippets-list",
+    method: "GET",
+    path: "/v1/snippets",
+    routeFile: "app/api/v1/snippets/route.ts",
+    summary: "List the calling user's saved snippets. Supports q, tag, language, classification filters plus limit and offset. Strictly scoped to the API key's userId, never cross-user.",
+    scope: "snippets:read",
+    params: [
+      { name: "q", kind: "query", required: false, type: "string", description: "Free-text match over title, body, and tags." },
+      { name: "tag", kind: "query", required: false, type: "string", description: "Exact tag match (lowercased)." },
+      { name: "language", kind: "query", required: false, type: "string", description: "Language id, e.g. python or typescript." },
+      { name: "classification", kind: "query", required: false, type: "string", description: "One of public, internal, confidential, restricted." },
+      { name: "limit", kind: "query", required: false, type: "integer", description: "1..100, default 25." },
+      { name: "offset", kind: "query", required: false, type: "integer", description: ">= 0, default 0." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        count: 1,
+        limit: 25,
+        offset: 0,
+        items: [
+          {
+            id: "sn_2k9j1p4q",
+            title: "acme baseline parser",
+            language: "python",
+            body: "def parse(s):\n    return s.strip()\n",
+            tags: ["baseline", "parser"],
+            classification: "internal",
+            created_at: 1717000000000,
+            updated_at: 1717000000000,
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS "${host}/v1/snippets?language=python&limit=10" \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "snippets-create",
+    method: "POST",
+    path: "/v1/snippets",
+    routeFile: "app/api/v1/snippets/route.ts",
+    summary: "Create a snippet in the calling user's corpus. Useful for bulk-loading a baseline reference set from CI or migration scripts.",
+    scope: "snippets:write",
+    params: [
+      { name: "title", kind: "body", required: true, type: "string", description: "Display label, 1..120 chars." },
+      { name: "language", kind: "body", required: true, type: "string", description: "Language id, e.g. python." },
+      { name: "body", kind: "body", required: true, type: "string", description: "Snippet source, up to 64 KiB." },
+      { name: "tags", kind: "body", required: false, type: "string[]", description: "Up to 8 tags, each <= 32 chars." },
+      { name: "classification", kind: "body", required: false, type: "string", description: "public | internal | confidential | restricted. Defaults to internal." },
+    ],
+    sampleBody: JSON.stringify(
+      { title: "acme baseline parser", language: "python", body: "def parse(s):\n    return s.strip()\n", tags: ["baseline"], classification: "internal" },
+      null,
+      2,
+    ),
+    sampleResponse: JSON.stringify(
+      {
+        snippet: {
+          id: "sn_2k9j1p4q",
+          title: "acme baseline parser",
+          language: "python",
+          body: "def parse(s):\n    return s.strip()\n",
+          tags: ["baseline"],
+          classification: "internal",
+          created_at: 1717000000000,
+          updated_at: 1717000000000,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X POST ${host}/v1/snippets \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"title":"acme baseline parser","language":"python","body":"def parse(s):\\n    return s.strip()\\n"}'`,
+  },
+  {
+    id: "snippets-get",
+    method: "GET",
+    path: "/v1/snippets/{id}",
+    routeFile: "app/api/v1/snippets/[id]/route.ts",
+    summary: "Fetch a single snippet by id. Returns 404 for ids that belong to other users.",
+    scope: "snippets:read",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Snippet id from /v1/snippets or the dashboard." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        snippet: {
+          id: "sn_2k9j1p4q",
+          title: "acme baseline parser",
+          language: "python",
+          body: "def parse(s):\n    return s.strip()\n",
+          tags: ["baseline"],
+          classification: "internal",
+          created_at: 1717000000000,
+          updated_at: 1717000000000,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/snippets/sn_2k9j1p4q \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "snippets-update",
+    method: "PATCH",
+    path: "/v1/snippets/{id}",
+    routeFile: "app/api/v1/snippets/[id]/route.ts",
+    summary: "Partial update of a snippet. Any subset of title, language, body, tags, classification.",
+    scope: "snippets:write",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Snippet id." },
+      { name: "title", kind: "body", required: false, type: "string", description: "New display label." },
+      { name: "language", kind: "body", required: false, type: "string", description: "New language id." },
+      { name: "body", kind: "body", required: false, type: "string", description: "New source body." },
+      { name: "tags", kind: "body", required: false, type: "string[]", description: "Replacement tag set." },
+      { name: "classification", kind: "body", required: false, type: "string", description: "public | internal | confidential | restricted." },
+    ],
+    sampleBody: JSON.stringify({ tags: ["baseline", "reviewed"], classification: "confidential" }, null, 2),
+    sampleResponse: JSON.stringify(
+      {
+        snippet: {
+          id: "sn_2k9j1p4q",
+          title: "acme baseline parser",
+          language: "python",
+          body: "def parse(s):\n    return s.strip()\n",
+          tags: ["baseline", "reviewed"],
+          classification: "confidential",
+          created_at: 1717000000000,
+          updated_at: 1717200000000,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X PATCH ${host}/v1/snippets/sn_2k9j1p4q \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"classification":"confidential"}'`,
+  },
+  {
+    id: "snippets-delete",
+    method: "DELETE",
+    path: "/v1/snippets/{id}",
+    routeFile: "app/api/v1/snippets/[id]/route.ts",
+    summary: "Permanently delete a snippet from the calling user's corpus.",
+    scope: "snippets:write",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Snippet id." },
+    ],
+    sampleResponse: JSON.stringify({ ok: true, id: "sn_2k9j1p4q" }, null, 2),
+    curl: (host, key) =>
+      `curl -sS -X DELETE ${host}/v1/snippets/sn_2k9j1p4q \\\n  -H "Authorization: Bearer ${key}"`,
   },
 ];
 

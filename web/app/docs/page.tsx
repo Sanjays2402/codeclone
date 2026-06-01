@@ -87,10 +87,14 @@ function CodeBlock({
   );
 }
 
-function MethodPill({ method }: { method: "GET" | "POST" }) {
+function MethodPill({ method }: { method: "GET" | "POST" | "PATCH" | "DELETE" }) {
   const tone =
     method === "GET"
       ? "text-emerald-700 border-emerald-300 bg-emerald-50 dark:text-emerald-300 dark:border-emerald-800 dark:bg-emerald-900/20"
+      : method === "DELETE"
+      ? "text-rose-700 border-rose-300 bg-rose-50 dark:text-rose-300 dark:border-rose-800 dark:bg-rose-900/20"
+      : method === "PATCH"
+      ? "text-amber-700 border-amber-300 bg-amber-50 dark:text-amber-300 dark:border-amber-800 dark:bg-amber-900/20"
       : "text-violet-700 border-violet-300 bg-violet-50 dark:text-violet-300 dark:border-violet-800 dark:bg-violet-900/20";
   return (
     <span

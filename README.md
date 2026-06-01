@@ -10,6 +10,39 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic snippet corpus management via `GET/POST /v1/snippets` and `GET/PATCH/DELETE /v1/snippets/{id}`. Enterprise customers running CodeClone in CI, IDE plugins, and migration pipelines need to load and curate the baseline corpus (canonical implementations, internal templates, "known good" reference code) without pasting snippets through the `/snippets` dashboard one entry at a time. These routes expose the same per-user snippet store the dashboard uses, so a snippet POSTed through the API shows up immediately in `/snippets` and is usable as a baseline in `/compare`. Auth is the same Bearer token (or `x-api-key`) as the rest of `/v1`, with two new least-privilege scopes: `snippets:read` for list and fetch, `snippets:write` for create, partial update, and delete. Tenant scope is structural and per-identity: every store call passes `key.userId` into `lib/snippets`, which uses it as both the on-disk directory and a defensive `rec.userId === userId` recheck on every load, so a key minted by user A can never list, read, mutate, or delete user B's snippets; cross-tenant id guesses return 404 with no "exists but not yours" distinction. Keys with no userId binding are rejected with `invalid_request` rather than falling through to an empty corpus. The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, DPA) runs before any side effect, the per-key rate-limit window is enforced (not peeked) so corpus housekeeping cannot be used as a free heartbeat, and every call writes a `v1.snippets.list` / `v1.snippets.create` / `v1.snippets.read` / `v1.snippets.update` / `v1.snippets.delete` row to the tamper-evident audit chain with the actor user id, key prefix, snippet id, and the fields touched. Workspace plan quota is intentionally not charged: snippet management is corpus housekeeping, not a billable model call. Pinned by `web/tests/v1-snippets-tenant-isolation.test.ts` (live per-user cross-tenant isolation across read/list/update/delete, scope rejection for keys missing the new scopes, mirroring between `lib/scopes.ts` and `lib/api-keys.ts`, and a source-level wiring check that fails on regression if the scope filters, the rate-limit `enforce` call, the workspace enforcement chain, the `key.userId` tenant scope, or the audit rows are dropped).
+
+  ### Try it: bulk-load a baseline corpus from a CI pipeline
+
+  ```bash
+  pnpm dev   # web dashboard on http://localhost:3000
+
+  # Mint a least-privilege key on /api-keys with snippets:read + snippets:write.
+
+  # Create a baseline snippet from a CI job.
+  curl -sS -X POST http://localhost:3000/v1/snippets \
+    -H "Authorization: Bearer ck_live_your_key_here" \
+    -H "Content-Type: application/json" \
+    -d '{"title":"acme baseline parser","language":"python","body":"def parse(s):\n    return s.strip()\n","tags":["baseline"],"classification":"internal"}'
+  # {"snippet":{"id":"sn_2k9j1p4q","title":"acme baseline parser",...}}
+
+  # List the corpus (filtered, paginated). Strictly scoped to this key's user.
+  curl -sS "http://localhost:3000/v1/snippets?language=python&limit=10" \
+    -H "Authorization: Bearer ck_live_your_key_here"
+  # {"count":1,"limit":10,"offset":0,"items":[{"id":"sn_2k9j1p4q",...}]}
+
+  # Promote a snippet's classification after review.
+  curl -sS -X PATCH http://localhost:3000/v1/snippets/sn_2k9j1p4q \
+    -H "Authorization: Bearer ck_live_your_key_here" \
+    -H "Content-Type: application/json" \
+    -d '{"classification":"confidential","tags":["baseline","reviewed"]}'
+
+  # Retire a snippet from the corpus.
+  curl -sS -X DELETE http://localhost:3000/v1/snippets/sn_2k9j1p4q \
+    -H "Authorization: Bearer ck_live_your_key_here"
+  # {"ok":true,"id":"sn_2k9j1p4q"}
+  ```
+
 - Programmatic GDPR Article 17 (right to erasure) execution via `POST /v1/erasure`. `GET /v1/export` covers Article 20 (portability); this is the symmetric write path enterprise privacy teams need to fulfill data-subject erasure requests on a schedule (nightly retention sweeps, DSAR closeouts, contractual purge after customer offboarding) without poking the dashboard one row at a time. The endpoint accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `erasure:write` scope, and bulk-deletes saved comparisons in the calling key's workspace via either an explicit `ids: [...]` list (for DSAR pipelines that already know which records to forget) or a `filter` object (`tag`, `language`, `created_before` epoch ms) for bulk retention sweeps. Tenant scope is structural: every load and delete passes a `{ workspaceId: key.workspaceId, allowLegacy: false }` scope hint to `loadShare`/`deleteShare`, so a key minted in workspace B can never erase workspace A's records even when the body contains workspace-A ids; foreign ids are silently skipped (no cross-tenant existence leak), not 404ed. Keys with no workspace binding receive `invalid_request`; legacy unscoped shares are never erasable via the public API. The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any deletion, and the per-key rate-limit window is enforced (not peeked) because bulk delete is heavier than a single-row write. `dry_run: true` (query or body) supports a no-op preview that runs every auth/scope/rate-limit check and returns the would-be erased id list under the standard `x-codeclone-dry-run: true` header. Every live call writes a single `v1.erasure.execute` audit row carrying the actor key id, mode, requested/erased/skipped/failed counts, and the full erased id list; every dry-run writes `v1.erasure.dry_run`. The audit row is the DPO erasure receipt and is itself retained under workspace audit retention so the erased payloads are gone but the attribution survives, matching SOC 2 and GDPR guidance. Pinned by `web/tests/v1-erasure-tenant-isolation.test.ts` (cross-tenant load/delete denied at the lib level, scope rejection for keys missing `erasure:write`, mirroring between `lib/scopes.ts` and `lib/api-keys.ts`, and a source-level wiring check that fails on regression if the scope filter, the rate-limit `enforce` call, the workspace-bound scope hint, the workspace gates, the dry-run preview, or the audit rows are dropped).
 
   ### Try it: fulfill an Article 17 erasure request from a DSAR pipeline

@@ -20,6 +20,8 @@ export const ALL_SCOPES = [
   "members:read",
   "export:read",
   "erasure:write",
+  "snippets:read",
+  "snippets:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -35,4 +37,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "members:read": "List this workspace's members and their roles via GET /v1/members for IGA reconciliation.",
   "export:read": "Download this workspace's GDPR Article 20 data portability bundle via GET /v1/export.",
   "erasure:write": "Execute GDPR Article 17 (right to erasure) bulk deletion of this workspace's saved comparisons via POST /v1/erasure.",
+  "snippets:read": "List and fetch the calling user's saved snippets via GET /v1/snippets and GET /v1/snippets/:id.",
+  "snippets:write": "Create, update, and delete the calling user's saved snippets via POST/PATCH/DELETE /v1/snippets.",
 };
