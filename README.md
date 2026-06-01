@@ -10,6 +10,27 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Tenant-scoped usage dashboard. Until this change, `GET /api/usage` and `/api/usage/recent` were unauthenticated and folded every key's usage rows in `$CODECLONE_KEYS_DIR/usage/*.jsonl` into a single global view, leaking another tenant's `keyId`s, endpoints, latencies, and byte totals to anyone who hit the URL. The routes now require a signed-in session, resolve the caller's active workspace memberships (`listWorkspacesForUser` honouring suspended + expired support grants), and pass that allowlist as a `WorkspaceScope` into `summarize()` and `recentEvents()` so the aggregation engine drops any row whose `workspaceId` is not in the caller's set. Legacy unscoped rows (older keys with no `workspaceId`) are excluded from any scoped view rather than silently attributed. The dashboard at `/usage` adds a workspace picker so customers can either see totals across every workspace they belong to or scope to one, and the route writes `usage.read` / `usage.read.denied` rows to the tamper-evident audit chain so security teams can see exactly who looked at whose usage. Pinned by `web/tests/usage-tenant-isolation.test.ts`.
+
+### Try it: confirm one tenant cannot see another tenant's usage rows
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Anonymous callers are refused with a structured error:
+curl -sS http://localhost:3000/api/usage | jq
+# { "error": { "type": "unauthorized", "message": "sign in required" } }
+
+# Sign in, then scope to a workspace you do not belong to:
+curl -sS -b cookies.txt "http://localhost:3000/api/usage?workspaceId=ws_someoneElses" -i
+# HTTP/1.1 403 Forbidden
+# { "error": { "type": "forbidden", "message": "not a member of that workspace" } }
+# (also writes a usage.read.denied audit row visible at /audit)
+
+# Without a workspaceId, totals are auto-scoped to every workspace you belong to:
+curl -sS -b cookies.txt http://localhost:3000/api/usage | jq '.scope.workspaceIds, .totalCalls'
+```
+
 - Read-only key introspection at `GET /v1/whoami`. Customers running codeclone in CI need a cheap way to confirm a Bearer token is the one they think it is, see which scopes it carries, and check how close they are to their per-minute and monthly limits, without burning a rate-limit slot or a billable usage event. The endpoint is authenticated by the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires no scope (any valid key may introspect itself, mirroring OIDC `/userinfo`), and runs the standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy). The rate-limit window is *peeked*, not incremented, so a CI health check can run every minute without touching the customer budget. Every call writes a `v1.whoami.read` row to the tamper-evident audit chain and refreshes `recordUse` so leaked-key triage stays accurate. The response is derived strictly from the authenticated key record so the endpoint cannot be coaxed into echoing another tenant's metadata. Pinned by `web/tests/v1-whoami.test.ts` (cross-tenant lookup isolation, revoked + expired rejection, peek() never consumes a slot, route wires the full enforcement chain and never calls `logUsage`).
 
 ### Try it: introspect a key without burning a slot

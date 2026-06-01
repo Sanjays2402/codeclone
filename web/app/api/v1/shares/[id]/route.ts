@@ -100,6 +100,7 @@ export async function GET(
       endpoint: "/v1/shares/[id]",
       bytes: 0,
       latencyMs: 0,
+      workspaceId: key.workspaceId,
     });
 
     return NextResponse.json({
@@ -252,6 +253,7 @@ export async function DELETE(
       endpoint: "DELETE /v1/shares/[id]",
       bytes: 0,
       latencyMs: 0,
+      workspaceId: key.workspaceId,
     });
     void tryRecordAudit(req, {
       action: "v1.shares.delete",

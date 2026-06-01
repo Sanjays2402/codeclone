@@ -37,6 +37,7 @@ interface UsageSummary {
   byKey: KeyUsage[];
   byEndpoint: EndpointUsage[];
   lastEventAt: number | null;
+  scope?: { workspaceIds: string[] };
 }
 interface RecentCall {
   ts: number;
@@ -152,26 +153,78 @@ function DailyBars({ days }: { days: DailyUsage[] }) {
   );
 }
 
+interface WorkspaceListItem { id: string; name: string; slug: string; myRole: string | null }
+interface WorkspaceListResponse { items: WorkspaceListItem[] }
+
 export default function UsagePage() {
   const [days, setDays] = useState(30);
+  const [scope, setScope] = useState<string>("all");
+
+  const wsRes = useSWR<WorkspaceListResponse>("/api/workspaces", async (url: string) => {
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(`workspaces ${res.status}`);
+    return res.json();
+  });
+  const workspaces = wsRes.data?.items ?? [];
+
+  const usageUrl =
+    scope === "all"
+      ? `/api/usage?days=${days}`
+      : `/api/usage?days=${days}&workspaceId=${encodeURIComponent(scope)}`;
+
   const { data, error, isLoading, mutate } = useSWR<UsageSummary>(
-    `/api/usage?days=${days}`,
+    usageUrl,
     fetcher,
     { refreshInterval: 30_000 },
   );
 
   useEffect(() => {
     void mutate();
-  }, [days, mutate]);
+  }, [days, scope, mutate]);
 
   const quota = useMemo(() => classifyQuota(data?.quotaPercent ?? 0), [data]);
 
   return (
     <main className="mx-auto max-w-[1280px] px-7 py-10">
       <H1 eyebrow="Account">Usage</H1>
-      <p className="text-[14px] text-[var(--color-ink-3)] max-w-[640px] -mt-3 mb-6">
-        Track API calls against your free tier quota. Counters reset on the first of each calendar month UTC.
+      <p className="text-[14px] text-[var(--color-ink-3)] max-w-[640px] -mt-3 mb-4">
+        Track API calls against your free tier quota. Counters reset on the first of each calendar month UTC. Numbers are scoped to workspaces you belong to.
       </p>
+
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <span className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">Workspace</span>
+        <button
+          type="button"
+          onClick={() => setScope("all")}
+          aria-pressed={scope === "all"}
+          className={`mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border ${
+            scope === "all"
+              ? "bg-[var(--color-paper-3)] border-[var(--color-rule)] text-[var(--color-ink)]"
+              : "border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
+          }`}
+        >
+          All mine
+        </button>
+        {workspaces.map((w) => (
+          <button
+            key={w.id}
+            type="button"
+            onClick={() => setScope(w.id)}
+            aria-pressed={scope === w.id}
+            className={`mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border ${
+              scope === w.id
+                ? "bg-[var(--color-paper-3)] border-[var(--color-rule)] text-[var(--color-ink)]"
+                : "border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
+            }`}
+            title={w.id}
+          >
+            {w.name}
+          </button>
+        ))}
+        {wsRes.data && workspaces.length === 0 && (
+          <span className="text-[12.5px] text-[var(--color-ink-3)]">No workspaces yet. <Link href="/workspaces" className="underline">Create one</Link> to scope usage.</span>
+        )}
+      </div>
 
       {error && <ErrorBlock message={(error as Error).message} />}
       {isLoading && !data && <LoadingRow rows={4} />}

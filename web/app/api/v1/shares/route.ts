@@ -123,6 +123,7 @@ export async function GET(req: Request) {
       endpoint: "/v1/shares",
       bytes: 0,
       latencyMs: 0,
+      workspaceId: key.workspaceId,
     });
 
     return NextResponse.json({
