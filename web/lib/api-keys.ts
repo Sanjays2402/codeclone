@@ -48,6 +48,8 @@ export const ALL_SCOPES = [
   "erasure:write",
   "snippets:read",
   "snippets:write",
+  "keys:read",
+  "keys:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -65,6 +67,8 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "erasure:write": "Execute GDPR Article 17 (right to erasure) bulk deletion of this workspace's saved comparisons via POST /v1/erasure.",
   "snippets:read": "List and fetch the calling user's saved snippets via GET /v1/snippets and GET /v1/snippets/:id.",
   "snippets:write": "Create, update, and delete the calling user's saved snippets via POST/PATCH/DELETE /v1/snippets.",
+  "keys:read": "List this workspace's API keys via GET /v1/keys for SOC2 key inventory and rotation tracking.",
+  "keys:write": "Rotate or revoke this workspace's API keys via POST /v1/keys/:id/rotate and DELETE /v1/keys/:id for automated SOC2 90-day rotation.",
 };
 
 function normalizeScopes(input: unknown): Scope[] | undefined {
@@ -387,6 +391,90 @@ export async function deleteKey(id: string, userId?: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Tenant-scoped key listing. Returns only keys bound to the given
+ * workspaceId. Used by /v1/keys so a key minted in workspace A can
+ * never enumerate keys from workspace B even if both live on the
+ * same store.
+ */
+export async function listKeysForWorkspace(workspaceId: string): Promise<ApiKeySummary[]> {
+  await ensureDir();
+  let names: string[];
+  try {
+    names = await fs.readdir(KEYS_DIR);
+  } catch {
+    return [];
+  }
+  const out: ApiKeySummary[] = [];
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const id = name.slice(0, -5);
+    if (!isKeyId(id)) continue;
+    const rec = await loadKey(id);
+    if (!rec) continue;
+    if (rec.workspaceId !== workspaceId) continue;
+    out.push(summarize(rec));
+  }
+  out.sort((a, b) => b.createdAt - a.createdAt);
+  return out;
+}
+
+/**
+ * Tenant-scoped key fetch. Returns null when the id does not exist OR
+ * belongs to a different workspace. The route surfaces both as 404 so
+ * a caller cannot probe for the existence of another tenant's key id.
+ */
+export async function loadKeyForWorkspace(
+  id: string,
+  workspaceId: string,
+): Promise<ApiKeyRecord | null> {
+  const rec = await loadKey(id);
+  if (!rec) return null;
+  if (rec.workspaceId !== workspaceId) return null;
+  return rec;
+}
+
+/**
+ * Tenant-scoped key rotation. Returns null when the id does not exist,
+ * belongs to a different workspace, is revoked, or is expired. Never
+ * leaks information about keys outside the calling workspace.
+ */
+export async function rotateKeyForWorkspace(
+  id: string,
+  workspaceId: string,
+): Promise<RotatedKey | null> {
+  const rec = await loadKey(id);
+  if (!rec) return null;
+  if (rec.workspaceId !== workspaceId) return null;
+  if (rec.revoked) return null;
+  if (isExpired(rec)) return null;
+  const secret = crypto.randomBytes(SECRET_BYTES).toString("base64url");
+  const plaintext = `${KEY_PREFIX}${secret}`;
+  rec.prefix = plaintext.slice(0, 12);
+  rec.hash = hashKey(plaintext);
+  await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
+  return { record: summarize(rec), plaintext };
+}
+
+/**
+ * Tenant-scoped key revocation. Returns true when the key was found
+ * within the workspace and is now revoked (idempotent: already-revoked
+ * keys return true). Returns false when the id does not exist or
+ * belongs to a different workspace.
+ */
+export async function revokeKeyForWorkspace(
+  id: string,
+  workspaceId: string,
+): Promise<boolean> {
+  const rec = await loadKey(id);
+  if (!rec) return false;
+  if (rec.workspaceId !== workspaceId) return false;
+  if (rec.revoked) return true;
+  rec.revoked = true;
+  await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
+  return true;
 }
 
 export async function listKeys(userId?: string): Promise<ApiKeySummary[]> {

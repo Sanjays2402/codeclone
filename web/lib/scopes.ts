@@ -22,6 +22,8 @@ export const ALL_SCOPES = [
   "erasure:write",
   "snippets:read",
   "snippets:write",
+  "keys:read",
+  "keys:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -39,4 +41,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "erasure:write": "Execute GDPR Article 17 (right to erasure) bulk deletion of this workspace's saved comparisons via POST /v1/erasure.",
   "snippets:read": "List and fetch the calling user's saved snippets via GET /v1/snippets and GET /v1/snippets/:id.",
   "snippets:write": "Create, update, and delete the calling user's saved snippets via POST/PATCH/DELETE /v1/snippets.",
+  "keys:read": "List this workspace's API keys via GET /v1/keys for SOC2 key inventory and rotation tracking.",
+  "keys:write": "Rotate or revoke this workspace's API keys via POST /v1/keys/:id/rotate and DELETE /v1/keys/:id for automated SOC2 90-day rotation.",
 };

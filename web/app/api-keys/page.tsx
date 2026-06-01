@@ -48,6 +48,10 @@ const ALL_SCOPES = [
   { id: "members:read", label: "members", desc: "GET /v1/members (IGA reconciliation)" },
   { id: "export:read", label: "export", desc: "GET /v1/export (GDPR portability bundle)" },
   { id: "erasure:write", label: "erasure", desc: "POST /v1/erasure (GDPR Article 17 bulk erasure)" },
+  { id: "snippets:read", label: "snippets", desc: "GET /v1/snippets (programmatic corpus read)" },
+  { id: "snippets:write", label: "snippets manage", desc: "POST + PATCH + DELETE /v1/snippets" },
+  { id: "keys:read", label: "keys", desc: "GET /v1/keys (workspace key inventory for SOC2 rotation evidence)" },
+  { id: "keys:write", label: "keys manage", desc: "POST /v1/keys/:id/rotate + DELETE /v1/keys/:id (automated rotation and revoke)" },
 ] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";
