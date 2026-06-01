@@ -168,6 +168,22 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
     -H "Authorization: Bearer $CODECLONE_KEY" | jq '{count, items: (.items|length)}'
   ```
 
+- Public, unauthenticated `GET /v1/openapi.json` and `GET /v1/openapi.yaml` documents that emit a standards-compliant OpenAPI 3.1 specification for the entire `/v1` API surface. Every enterprise procurement, API gateway operator (Kong, AWS API Gateway, Apigee), and SDK generator (openapi-generator, Stainless, Speakeasy, Postman, Insomnia) asks for the OpenAPI document by name; until now CodeClone shipped the custom `/v1/discovery` manifest but not the standards file customers feed into their build pipelines. The document is generated from the same `ENDPOINTS` table that powers `/docs` and `/v1/discovery`, so the OpenAPI view cannot drift from real routes. Each operation declares the required scope under `security.bearerAuth`, mirrors the same scope to a custom `x-codeclone-scope` extension, and references the on-disk route file via `x-codeclone-route-file` so audits can map every operation back to source. Standard error envelopes (400, 401, 403, 404, 429) are wired through reusable `components.responses` references, rate-limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`) are declared on the 429 response so generated SDKs surface them as typed fields, and `x-codeclone.scopes` lists every canonical scope so RBAC reviewers do not need a second document. Side-effect free: no auth, no audit row, no rate-limit slot, cached for 60s, CORS open, safe to share with a security questionnaire. The `/v1/openapi.json` and `/v1/openapi.yaml` URLs are also advertised through `/v1/discovery.api` so existing discovery consumers pick them up automatically. Pinned by `web/tests/openapi.test.ts` (every documented endpoint becomes an operation with the correct method, path, scope, route-file, and 400/401/403/429 envelopes; every canonical scope appears in `x-codeclone.scopes`; required body parameters become required JSON-schema fields; path parameters are emitted as required path params; the YAML serializer round-trips JSON-shaped data; the route files exist and reference the same builder; the discovery manifest exposes the new URLs).
+
+  ### Try it: generate a typed SDK from the OpenAPI document
+
+  ```bash
+  curl -sS http://localhost:3000/v1/openapi.json | jq '{openapi, info: .info.title, paths: (.paths | length)}'
+  # {"openapi":"3.1.0","info":"CodeClone API","paths":24}
+
+  # YAML for openapi-generator / swagger-cli lint:
+  curl -sS http://localhost:3000/v1/openapi.yaml | head -20
+
+  # Which scope does each operation require?
+  curl -sS http://localhost:3000/v1/openapi.json \
+    | jq '.paths | to_entries[] | .key as $p | .value | to_entries[] | {method:.key, path:$p, scope:.value["x-codeclone-scope"]}'
+  ```
+
 - Public, unauthenticated `GET /v1/discovery` manifest that lets enterprise procurement, SecOps, and SDK generators inspect the entire `/v1` surface without credentials. Returns API version and base URL, accepted auth schemes (Bearer plus `x-api-key`), the documented rate-limit envelope (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`, 429 throttled status, default RPM, 60s window), a plain-English summary of each workspace policy (tenant isolation, audit chain, idempotency replay, IP allowlist, residency, lockdown, dry-run), the full scope catalog with descriptions and a reverse index of which endpoints each scope unlocks, and every endpoint with method, path, params, and the scope it requires. Sourced from the same `ENDPOINTS` table the `/docs` page renders, so it cannot drift from real routes. Side-effect free: no auth, no audit row, no rate-limit slot, cached for 60s, safe to share with a security questionnaire. Surfaced as a "discovery manifest" link on `/docs`. Pinned by `web/tests/v1-discovery.test.ts` (every documented endpoint and scope appears in the manifest, reverse index matches forward index, rate-limit headers match what every `/v1` route advertises, and a source-level assertion that the route does not import auth, audit, rate-limit, usage, or webhook machinery so credential-free scanners can hit it safely).
 
   ### Try it: pull the manifest into a procurement review

@@ -30,6 +30,8 @@ export interface DiscoveryManifest {
     version: string;
     base_url: string;
     docs_url: string;
+    openapi_url: string;
+    openapi_yaml_url: string;
     contact: { security_txt: string };
   };
   auth: {
@@ -84,6 +86,8 @@ export function buildDiscovery(host: string): DiscoveryManifest {
       version: "v1",
       base_url: host,
       docs_url: `${host}/docs`,
+      openapi_url: `${host}/v1/openapi.json`,
+      openapi_yaml_url: `${host}/v1/openapi.yaml`,
       contact: { security_txt: `${host}/.well-known/security.txt` },
     },
     auth: {
