@@ -45,6 +45,8 @@ const ALL_SCOPES = [
   { id: "audit:read", label: "audit", desc: "GET /v1/audit (SIEM stream)" },
   { id: "webhooks:read", label: "webhooks", desc: "GET /v1/webhooks" },
   { id: "webhooks:write", label: "webhooks manage", desc: "POST + DELETE /v1/webhooks" },
+  { id: "members:read", label: "members", desc: "GET /v1/members (IGA reconciliation)" },
+  { id: "export:read", label: "export", desc: "GET /v1/export (GDPR portability bundle)" },
 ] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";

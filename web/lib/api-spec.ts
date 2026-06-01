@@ -380,6 +380,34 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS "${host}/v1/members?include_suspended=true" \\\n  -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "export-bundle",
+    method: "GET",
+    path: "/v1/export",
+    routeFile: "app/api/v1/export/route.ts",
+    summary: "Download the calling workspace's GDPR Article 20 portability bundle (members, invites, API key metadata, audit log, SCIM mirror).",
+    scope: "export:read",
+    params: [
+      { name: "format", kind: "query", required: false, type: "string", description: "json (default) returns the full bundle; csv returns the audit log flattened to CSV for DPA review packets." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        v: 1,
+        exportedAt: 1717200000000,
+        workspace: { id: "ws_acme", name: "Acme", slug: "acme", plan: "pro" },
+        invites: [],
+        apiKeys: [{ id: "key_xxx", prefix: "ck_live_", scopes: ["compare:write"] }],
+        audit: [{ action: "v1.compare.write", actorId: "key_xxx", workspaceId: "ws_acme", at: 1717100000000 }],
+        scimUsers: [],
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS "${host}/v1/export?format=json" \\
+  -H "Authorization: Bearer ${key}" \\
+  -o workspace-export.json`,
+  },
+  {
     id: "webhooks-get",
     method: "GET",
     path: "/v1/webhooks/{id}",
