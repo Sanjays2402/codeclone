@@ -10,6 +10,32 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic webhook delivery log and replay via `/v1/webhooks/{id}/deliveries` and `/v1/webhooks/{id}/deliveries/{deliveryId}/redeliver`. Until this change, the only way to inspect a webhook's recent attempt history or re-fire a failed delivery was the cookie-authenticated `/api/webhooks` dashboard, which blocked SRE runbooks, SIEM forwarders, and incident-response automation from acting without a human session. `GET /v1/webhooks/{id}/deliveries` returns the newest-first attempt log (status, attempts, latency, error, request and response body previews) behind the `webhooks:read` scope; `POST /v1/webhooks/{id}/deliveries/{deliveryId}/redeliver` re-fires the recorded request body against the webhook's current URL with a fresh signature behind the `webhooks:write` scope, and supports `dry_run=true` (query or body) which runs every auth/policy/quota check then returns a preview without making a network call. Tenant scope is structural: both endpoints call `loadWebhookForWorkspace(id, key.workspaceId)` and `listDeliveriesForWorkspace(id, key.workspaceId)` / `redeliverDelivery(id, deliveryId, key.workspaceId)`, all of which refuse cross-tenant access at the lib layer; cross-tenant ids return a flat 404 so the existence of another workspace's webhook id cannot be probed. Keys with no workspace binding receive `tenant_required` instead of falling through. Every real replay and every dry-run probe writes to the tamper-evident audit chain as `v1.webhooks.redeliver` or `v1.webhooks.redeliver.dry_run` with event, status, ok, and target url, so a SOC2 reviewer can pivot from any redelivery back to which key fired it. The full `/v1` enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, rate limit) runs before the route ever touches webhook state. Pinned by `web/tests/v1-webhook-deliveries-tenant-isolation.test.ts` (cross-tenant list and redeliver denied at the lib level via a hermetic stub fetch, plus source-level wiring checks that fail on regression if the scope, workspace gate, dry-run, audit, or rate-limit/IP/residency calls are dropped).
+
+  ### Try it: list and replay deliveries from a CI script
+
+  ```bash
+  # Mint a key with webhooks:read + webhooks:write scopes from /api-keys,
+  # then resolve a webhook id you already own:
+  WH_ID=$(curl -sS http://localhost:3000/v1/webhooks \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq -r '.items[0].id')
+
+  # List the most recent 50 delivery attempts for that webhook:
+  curl -sS "http://localhost:3000/v1/webhooks/$WH_ID/deliveries?limit=50" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq '{total, items: (.items | length)}'
+
+  # Grab the most recent failed delivery and preview a redeliver (dry-run):
+  DELIV=$(curl -sS "http://localhost:3000/v1/webhooks/$WH_ID/deliveries" \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    | jq -r '.items[] | select(.ok==false) | .id' | head -1)
+  curl -sS -X POST "http://localhost:3000/v1/webhooks/$WH_ID/deliveries/$DELIV/redeliver?dry_run=true" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq
+
+  # Then re-fire for real:
+  curl -sS -X POST "http://localhost:3000/v1/webhooks/$WH_ID/deliveries/$DELIV/redeliver" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq '.delivery | {status, ok, attempts, redeliveredFrom}'
+  ```
+
 - Public, unauthenticated `GET /v1/discovery` manifest that lets enterprise procurement, SecOps, and SDK generators inspect the entire `/v1` surface without credentials. Returns API version and base URL, accepted auth schemes (Bearer plus `x-api-key`), the documented rate-limit envelope (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`, 429 throttled status, default RPM, 60s window), a plain-English summary of each workspace policy (tenant isolation, audit chain, idempotency replay, IP allowlist, residency, lockdown, dry-run), the full scope catalog with descriptions and a reverse index of which endpoints each scope unlocks, and every endpoint with method, path, params, and the scope it requires. Sourced from the same `ENDPOINTS` table the `/docs` page renders, so it cannot drift from real routes. Side-effect free: no auth, no audit row, no rate-limit slot, cached for 60s, safe to share with a security questionnaire. Surfaced as a "discovery manifest" link on `/docs`. Pinned by `web/tests/v1-discovery.test.ts` (every documented endpoint and scope appears in the manifest, reverse index matches forward index, rate-limit headers match what every `/v1` route advertises, and a source-level assertion that the route does not import auth, audit, rate-limit, usage, or webhook machinery so credential-free scanners can hit it safely).
 
   ### Try it: pull the manifest into a procurement review
