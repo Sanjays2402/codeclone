@@ -1,10 +1,22 @@
 import { NextResponse } from "next/server";
-import { loadShare, updateShare, deleteShare } from "../../../../lib/share";
+import { loadShare, updateShare, deleteShare, type ScopeHint } from "../../../../lib/share";
 import { tryRecordAudit } from "../../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { listWorkspacesForUser } from "../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+async function userScope(req: Request): Promise<{ user: Awaited<ReturnType<typeof currentUserFromCookieHeader>>; scope: ScopeHint | undefined; }> {
+  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+  if (!user) return { user: null, scope: undefined };
+  const wss = await listWorkspacesForUser(user.id);
+  // User can mutate any share in any workspace they belong to, plus
+  // legacy unscoped records. If they belong to multiple workspaces we
+  // try each until one matches; here we use the first workspace and
+  // also accept legacy unscoped records. Cross-tenant access returns 404.
+  return { user, scope: { workspaceId: wss[0]?.id ?? null, allowLegacy: true } };
+}
 
 export async function GET(
   _req: Request,
@@ -28,6 +40,10 @@ export async function PATCH(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
+  const { user, scope } = await userScope(req);
+  if (!scope) {
+    return NextResponse.json({ error: "Sign in to update shares." }, { status: 401 });
+  }
   let body: PatchBody;
   try {
     body = (await req.json()) as PatchBody;
@@ -49,18 +65,21 @@ export async function PATCH(
     return NextResponse.json({ error: "Provide title or tags to update." }, { status: 400 });
   }
   try {
-    const before = await loadShare(id);
-    const rec = await updateShare(id, patch);
+    const before = await loadShare(id, scope);
+    if (!before) {
+      return NextResponse.json({ error: "Share not found." }, { status: 404 });
+    }
+    const rec = await updateShare(id, patch, scope);
     if (!rec) {
       return NextResponse.json({ error: "Share not found." }, { status: 404 });
     }
-    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
     await tryRecordAudit(req, {
       action: "share.update",
       actorId: user?.id ?? null,
       actorEmail: user?.email ?? null,
+      workspaceId: rec.workspaceId ?? null,
       target: { type: "share", id, label: rec.title ?? undefined },
-      diff: { before: before ? { title: before.title, tags: before.tags } : null, after: patch },
+      diff: { before: { title: before.title, tags: before.tags }, after: patch },
     });
     return NextResponse.json(rec);
   } catch (e) {
@@ -74,18 +93,25 @@ export async function DELETE(
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
-  const before = await loadShare(id);
-  const ok = await deleteShare(id);
+  const { user, scope } = await userScope(req);
+  if (!scope) {
+    return NextResponse.json({ error: "Sign in to delete shares." }, { status: 401 });
+  }
+  const before = await loadShare(id, scope);
+  if (!before) {
+    return NextResponse.json({ error: "Share not found." }, { status: 404 });
+  }
+  const ok = await deleteShare(id, scope);
   if (!ok) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
   }
-  const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   await tryRecordAudit(req, {
     action: "share.delete",
     actorId: user?.id ?? null,
     actorEmail: user?.email ?? null,
-    target: { type: "share", id, label: before?.title ?? undefined },
-    diff: { before: before ? { title: before.title, tags: before.tags } : null },
+    workspaceId: before.workspaceId ?? null,
+    target: { type: "share", id, label: before.title ?? undefined },
+    diff: { before: { title: before.title, tags: before.tags } },
   });
   return NextResponse.json({ ok: true });
 }

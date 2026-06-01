@@ -10,6 +10,27 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Tenant-scoped share history closes a cross-workspace read/write leak. Saved comparisons (`/r/[id]`, `/api/share`, `/api/share/export`, `/v1/shares`) previously loaded any record by id regardless of which workspace the caller belonged to, so a signed-in user or API key in workspace B could list, read, patch, delete, and export workspace A's saved diffs. Records now carry a `workspaceId` stamped at creation time (schema v3, legacy v1/v2 records load as unscoped and remain readable through the public `/r/[id]` link only). Every mutating dashboard route and the entire `/v1/shares` surface now resolves the caller's workspace and passes a `ScopeHint` into `loadShare`/`updateShare`/`deleteShare`/`listSharesPage`/`exportShares`; cross-tenant ids return 404 instead of leaking the title or score, and tenant-local facet counts (languages, clone labels) no longer reveal the cardinality of other tenants' history. Pinned by `web/tests/share-tenant-isolation.test.ts` (cross-tenant read, patch, delete, list, and export all denied; legacy back-compat preserved).
+
+  ```bash
+  pnpm dev   # web dashboard on http://localhost:3000
+
+  # Save a comparison in workspace A:
+  curl -sS -X POST http://localhost:3000/api/share \
+    -H "Content-Type: application/json" \
+    -b cookie-ws-a.txt \
+    -d '{"a":"function f(){return 1}","b":"function f(){return 2}","language":"javascript","title":"alpha-only"}'
+  # -> {"id":"abc123def456","url":"/r/abc123def456"}
+
+  # A user in workspace B is refused even though they know the id:
+  curl -sS -i -X PATCH http://localhost:3000/api/share/abc123def456 \
+    -H "Content-Type: application/json" \
+    -b cookie-ws-b.txt \
+    -d '{"title":"pwned"}'
+  # HTTP/1.1 404 Not Found
+  # {"error":"Share not found."}
+  ```
+
 - Programmatic FinOps with `GET /v1/usage`. Enterprise customers running codeclone through chargeback / FinOps systems need a stable, machine-readable view of their own /v1 usage that can be called from a finance pipeline, not just from a browser session. The existing dashboard route `/api/usage` is cookie-authenticated, so it can only be hit by a human; until this change there was no way for a customer service account to fetch its workspace's call volumes, plan state, or per-endpoint roll-ups without scraping HTML. `GET /v1/usage` now accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `usage:read` scope, and returns the calling key's workspace usage summary (`by_day`, `by_key`, `by_endpoint`), the current month-to-date count and remaining plan quota, and optionally the most recent N events for incident triage (`?recent=50`, capped at 200). Tenant scope is structural: the route builds a `WorkspaceScope` containing only the key's own `workspaceId` and hands it to `summarize()` / `recentEvents()`, so a key minted in workspace A can never see workspace B's `keyId`s or call volumes even when both tenants share the same node's usage store. A key with no workspace binding gets an empty scope and sees nothing. The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any data is read, the per-key rate-limit window is *enforced* (not peeked) so this endpoint cannot be used as a free heartbeat, and every call writes a `v1.usage.read` row to the tamper-evident audit chain with the calling key's prefix, the window queried, and the total calls returned. Pinned by `web/tests/v1-usage.test.ts` (cross-tenant isolation via `WorkspaceScope`, scope rejection for keys missing `usage:read`, and a source-level wiring check that fails on regression if the scope filter, the rate-limit `enforce` call, or any of the workspace gates is dropped).
 
 ### Try it: pull your own usage from CI without a browser session

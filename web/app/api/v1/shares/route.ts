@@ -114,6 +114,11 @@ export async function GET(req: Request) {
       cloneLabel: sp.get("label") ?? undefined,
       minScore: parseScore(sp.get("minScore")),
       maxScore: parseScore(sp.get("maxScore")),
+      // Tenant-scope to the calling key's workspace. Keys with no
+      // workspace binding (legacy single-tenant installs) see only
+      // legacy unscoped shares so they cannot enumerate any tenant.
+      workspaceId: key.workspaceId ?? null,
+      allowLegacy: !key.workspaceId,
     });
 
     void recordUse(key.id, clientIpFromRequest(req));

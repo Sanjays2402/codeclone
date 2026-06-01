@@ -49,7 +49,7 @@ test("share lib: create, load, update, list, delete round trip", async () => {
     tags: ["Quick Test", "demo", "demo", "BAD!!!"],
     result: fakeResult(),
   });
-  assert.equal(rec.v, 2);
+  assert.equal(rec.v, 3);
   assert.equal(rec.language, "javascript");
   assert.equal(rec.title, "Adders side by side");
   assert.deepEqual(rec.tags, ["quick-test", "demo"]);

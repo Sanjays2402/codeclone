@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createShare, listSharesPage, MAX_SNIPPET_BYTES } from "../../../lib/share";
 import { compareCode, alignLines, classifyClone } from "../../../lib/similarity";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
+import { listWorkspacesForUser } from "../../../lib/workspaces";
 import { emitNotification } from "../../../lib/notifications";
 import { tryRecordAudit } from "../../../lib/audit";
 
@@ -48,6 +49,17 @@ export async function GET(req: Request) {
   const minScore = parseScore(minScoreRaw);
   const maxScore = parseScore(maxScoreRaw);
   try {
+    // Tenant-scope the history listing. Signed-in users see their own
+    // workspace's shares plus legacy unscoped records they created
+    // before workspaces existed. Unauthenticated callers only see
+    // legacy unscoped shares so they cannot enumerate any tenant's
+    // saved comparisons by hitting this endpoint.
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    let workspaceId: string | null = null;
+    if (user) {
+      const wss = await listWorkspacesForUser(user.id);
+      workspaceId = wss[0]?.id ?? null;
+    }
     const page = await listSharesPage({
       limit,
       offset,
@@ -57,6 +69,8 @@ export async function GET(req: Request) {
       cloneLabel,
       minScore,
       maxScore,
+      workspaceId,
+      allowLegacy: true,
     });
     return NextResponse.json({
       items: page.items,
@@ -109,12 +123,21 @@ export async function POST(req: Request) {
   try {
     const title = typeof raw.title === "string" ? raw.title : undefined;
     const tags = Array.isArray(raw.tags) ? (raw.tags as unknown[]).filter((t) => typeof t === "string") as string[] : undefined;
+    // Resolve creator's primary workspace so the share is owned by a
+    // tenant from the moment it lands on disk.
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    let workspaceId: string | null = null;
+    if (user) {
+      const wss = await listWorkspacesForUser(user.id);
+      workspaceId = wss[0]?.id ?? null;
+    }
     const rec = await createShare({
       a,
       b,
       language,
       title,
       tags,
+      workspaceId,
       result: {
         language,
         scores,
@@ -130,7 +153,6 @@ export async function POST(req: Request) {
       },
     });
     // Best-effort: log this in the signed-in user's inbox.
-    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
     if (user) {
       const pct = (scores.shingleJaccard * 100).toFixed(1);
       const titleText = (typeof raw.title === "string" && raw.title.trim()) || "Untitled comparison";
@@ -147,8 +169,9 @@ export async function POST(req: Request) {
       action: "share.create",
       actorId: user?.id ?? null,
       actorEmail: user?.email ?? null,
+      workspaceId,
       target: { type: "share", id: rec.id, label: typeof raw.title === "string" ? raw.title : undefined },
-      diff: { after: { language, bytes: { a: a.length, b: b.length }, score: scores.shingleJaccard } },
+      diff: { after: { language, bytes: { a: a.length, b: b.length }, score: scores.shingleJaccard, workspaceId } },
     });
     return NextResponse.json({ id: rec.id, url: `/r/${rec.id}` }, { status: 201 });
   } catch (e) {

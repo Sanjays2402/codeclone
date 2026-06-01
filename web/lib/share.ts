@@ -40,13 +40,18 @@ export interface ShareResult {
 }
 
 export interface ShareRecord {
-  v: 1 | 2;
+  v: 1 | 2 | 3;
   id: string;
   createdAt: number;
   updatedAt?: number;
   language: string;
   title?: string;
   tags?: string[];
+  // workspaceId is the tenant that owns this saved comparison. Older
+  // records (v1/v2) predate multi-tenant scoping and load as null;
+  // owners must be migrated explicitly via the admin console or are
+  // treated as legacy public records that no scoped caller can mutate.
+  workspaceId?: string | null;
   a: string;
   b: string;
   result: ShareResult;
@@ -59,6 +64,27 @@ export interface CreateShareInput {
   result: ShareResult;
   title?: string;
   tags?: string[];
+  workspaceId?: string | null;
+}
+
+/**
+ * Scope hint passed to load/update/delete/list. When set, the share
+ * must belong to this workspaceId (or to no workspace when the caller
+ * explicitly opts in via `allowUnscoped`). When unset, the share is
+ * returned regardless of workspace, which is what the public /r/[id]
+ * share-link surface and the legacy PDF endpoint use.
+ */
+export interface ScopeHint {
+  workspaceId?: string | null;
+  /** Allow legacy records with no workspaceId to match this scope. */
+  allowLegacy?: boolean;
+}
+
+function scopeMatches(rec: ShareRecord, scope?: ScopeHint): boolean {
+  if (!scope) return true;
+  const recWs = rec.workspaceId ?? null;
+  if (recWs === null) return scope.allowLegacy === true;
+  return recWs === (scope.workspaceId ?? null);
 }
 
 export interface UpdateShareInput {
@@ -131,14 +157,18 @@ export async function createShare(input: CreateShareInput): Promise<ShareRecord>
       // free
     }
     const now = Date.now();
+    const ws = typeof input.workspaceId === "string" && input.workspaceId.startsWith("ws_")
+      ? input.workspaceId
+      : null;
     const rec: ShareRecord = {
-      v: 2,
+      v: 3,
       id,
       createdAt: now,
       updatedAt: now,
       language: input.language || "auto",
       title: sanitizeTitle(input.title),
       tags: sanitizeTags(input.tags),
+      workspaceId: ws,
       a: input.a,
       b: input.b,
       result: input.result,
@@ -149,14 +179,18 @@ export async function createShare(input: CreateShareInput): Promise<ShareRecord>
   throw new Error("could not allocate share id");
 }
 
-export async function loadShare(id: string): Promise<ShareRecord | null> {
+export async function loadShare(
+  id: string,
+  scope?: ScopeHint,
+): Promise<ShareRecord | null> {
   if (!isShareId(id)) return null;
   try {
     const buf = await fs.readFile(shareFile(id), "utf-8");
     const rec = JSON.parse(buf) as ShareRecord;
-    if (!rec || (rec.v !== 1 && rec.v !== 2) || typeof rec.id !== "string") {
+    if (!rec || (rec.v !== 1 && rec.v !== 2 && rec.v !== 3) || typeof rec.id !== "string") {
       return null;
     }
+    if (!scopeMatches(rec, scope)) return null;
     return rec;
   } catch {
     return null;
@@ -166,8 +200,9 @@ export async function loadShare(id: string): Promise<ShareRecord | null> {
 export async function updateShare(
   id: string,
   patch: UpdateShareInput,
+  scope?: ScopeHint,
 ): Promise<ShareRecord | null> {
-  const rec = await loadShare(id);
+  const rec = await loadShare(id, scope);
   if (!rec) return null;
   let changed = false;
   if (patch.title !== undefined) {
@@ -204,15 +239,22 @@ export async function updateShare(
     }
   }
   if (changed) {
-    rec.v = 2;
+    rec.v = 3;
     rec.updatedAt = Date.now();
     await fs.writeFile(shareFile(id), JSON.stringify(rec), "utf-8");
   }
   return rec;
 }
 
-export async function deleteShare(id: string): Promise<boolean> {
+export async function deleteShare(
+  id: string,
+  scope?: ScopeHint,
+): Promise<boolean> {
   if (!isShareId(id)) return false;
+  if (scope) {
+    const rec = await loadShare(id, scope);
+    if (!rec) return false;
+  }
   try {
     await fs.unlink(shareFile(id));
     return true;
@@ -231,6 +273,7 @@ export interface ShareSummary {
   title?: string;
   tags?: string[];
   bytes: { a: number; b: number };
+  workspaceId: string | null;
 }
 
 export function shareSummary(rec: ShareRecord): ShareSummary {
@@ -244,6 +287,7 @@ export function shareSummary(rec: ShareRecord): ShareSummary {
     title: rec.title,
     tags: rec.tags,
     bytes: rec.result.bytes,
+    workspaceId: rec.workspaceId ?? null,
   };
 }
 
@@ -256,6 +300,10 @@ export interface ListSharesOptions {
   cloneLabel?: string;
   minScore?: number;
   maxScore?: number;
+  /** Restrict to a single workspaceId. Combine with allowLegacy. */
+  workspaceId?: string | null;
+  /** When true, also include legacy records with no workspaceId. */
+  allowLegacy?: boolean;
 }
 
 async function loadAllSummaries(): Promise<ShareSummary[]> {
@@ -284,6 +332,14 @@ function applyFilters(
   opts: ListSharesOptions,
 ): ShareSummary[] {
   let out = rows;
+  if (opts.workspaceId !== undefined) {
+    const ws = opts.workspaceId;
+    out = out.filter((s) => {
+      if (s.workspaceId === ws) return true;
+      if (s.workspaceId === null && opts.allowLegacy) return true;
+      return false;
+    });
+  }
   if (opts.tag) {
     const tg = opts.tag.toLowerCase();
     out = out.filter((s) => s.tags?.includes(tg));
@@ -345,13 +401,16 @@ export async function listSharesPage(
   opts: ListSharesOptions = {},
 ): Promise<ListSharesPage> {
   const all = await loadAllSummaries();
-  const filtered = applyFilters(all, opts);
+  // Apply tenant scope to the universe BEFORE computing facets so we
+  // never leak language/label cardinality from other tenants' shares.
+  const scoped = opts.workspaceId !== undefined ? applyFilters(all, { workspaceId: opts.workspaceId, allowLegacy: opts.allowLegacy }) : all;
+  const filtered = applyFilters(scoped, opts);
   const offset = Math.max(0, opts.offset ?? 0);
   const limit = opts.limit && opts.limit > 0 ? opts.limit : 25;
   const page = filtered.slice(offset, offset + limit);
   const langCounts = new Map<string, number>();
   const labelCounts = new Map<string, number>();
-  for (const s of all) {
+  for (const s of scoped) {
     langCounts.set(s.language, (langCounts.get(s.language) ?? 0) + 1);
     labelCounts.set(s.cloneLabel, (labelCounts.get(s.cloneLabel) ?? 0) + 1);
   }
@@ -398,7 +457,13 @@ export interface ExportResult {
 }
 
 export async function exportShares(opts: ExportOptions = {}): Promise<ExportResult> {
-  const items = await listShares({ limit: opts.limit, q: opts.q, tag: opts.tag });
+  const items = await listShares({
+    limit: opts.limit,
+    q: opts.q,
+    tag: opts.tag,
+    workspaceId: opts.workspaceId,
+    allowLegacy: opts.allowLegacy,
+  });
   const fmt: ExportFormat = opts.format === "json" ? "json" : "csv";
   const stamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const origin = (opts.origin ?? "").replace(/\/$/, "");

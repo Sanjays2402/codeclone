@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { exportShares, type ExportFormat } from "../../../../lib/share";
+import { currentUserFromCookieHeader } from "../../../../lib/auth";
+import { listWorkspacesForUser } from "../../../../lib/workspaces";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -29,12 +31,22 @@ export async function GET(req: Request) {
   }
   try {
     const origin = `${url.protocol}//${url.host}`;
+    // Tenant-scope the export so a user can only download their own
+    // workspace's saved comparisons (plus legacy unscoped records).
+    const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
+    let workspaceId: string | null = null;
+    if (user) {
+      const wss = await listWorkspacesForUser(user.id);
+      workspaceId = wss[0]?.id ?? null;
+    }
     const out = await exportShares({
       format: fmtRaw as ExportFormat,
       q,
       tag,
       limit,
       origin,
+      workspaceId,
+      allowLegacy: true,
     });
     return new NextResponse(out.body, {
       status: 200,

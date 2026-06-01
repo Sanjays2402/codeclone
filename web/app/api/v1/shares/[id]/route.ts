@@ -20,7 +20,7 @@ import { clientIpFromRequest } from "../../../../../lib/ip-allowlist";
 import { enforceWorkspaceResidencyForKey } from "../../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceLockdownForKey } from "../../../../../lib/lockdown-enforce";
-import { loadShare, deleteShare } from "../../../../../lib/share";
+import { loadShare, deleteShare, type ScopeHint } from "../../../../../lib/share";
 import { logUsage } from "../../../../../lib/usage";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import { isDryRun, DRY_RUN_HEADER } from "../../../../../lib/dry-run";
@@ -84,8 +84,13 @@ export async function GET(
     );
   }
 
+  // Tenant scope: the calling key must own the share's workspace, or
+  // (for legacy single-tenant installs where the key has no workspace)
+  // the share must itself be legacy unscoped.
+  const scope: ScopeHint = { workspaceId: key.workspaceId ?? null, allowLegacy: !key.workspaceId };
+
   try {
-    const rec = await loadShare(id);
+    const rec = await loadShare(id, scope);
     if (!rec) {
       return NextResponse.json(
         { error: { type: "not_found", message: "Share not found." } },
