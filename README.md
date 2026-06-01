@@ -10,6 +10,40 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic FinOps with `GET /v1/usage`. Enterprise customers running codeclone through chargeback / FinOps systems need a stable, machine-readable view of their own /v1 usage that can be called from a finance pipeline, not just from a browser session. The existing dashboard route `/api/usage` is cookie-authenticated, so it can only be hit by a human; until this change there was no way for a customer service account to fetch its workspace's call volumes, plan state, or per-endpoint roll-ups without scraping HTML. `GET /v1/usage` now accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `usage:read` scope, and returns the calling key's workspace usage summary (`by_day`, `by_key`, `by_endpoint`), the current month-to-date count and remaining plan quota, and optionally the most recent N events for incident triage (`?recent=50`, capped at 200). Tenant scope is structural: the route builds a `WorkspaceScope` containing only the key's own `workspaceId` and hands it to `summarize()` / `recentEvents()`, so a key minted in workspace A can never see workspace B's `keyId`s or call volumes even when both tenants share the same node's usage store. A key with no workspace binding gets an empty scope and sees nothing. The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any data is read, the per-key rate-limit window is *enforced* (not peeked) so this endpoint cannot be used as a free heartbeat, and every call writes a `v1.usage.read` row to the tamper-evident audit chain with the calling key's prefix, the window queried, and the total calls returned. Pinned by `web/tests/v1-usage.test.ts` (cross-tenant isolation via `WorkspaceScope`, scope rejection for keys missing `usage:read`, and a source-level wiring check that fails on regression if the scope filter, the rate-limit `enforce` call, or any of the workspace gates is dropped).
+
+### Try it: pull your own usage from CI without a browser session
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Create a key on /api-keys with the new "usage" scope checked, then:
+curl -sS "http://localhost:3000/api/v1/usage?days=7&recent=20" \
+  -H "Authorization: Bearer $CODECLONE_KEY" -i
+
+# Response includes X-RateLimit-* and x-codeclone-plan-* headers and:
+# {
+#   "workspace":     { "id": "ws_...", "name": "acme-prod", "plan": "pro" },
+#   "window_days":   7,
+#   "total_calls":   1284,
+#   "month_to_date": 4127,
+#   "plan":          { "id": "pro", "monthly_limit": 50000,
+#                      "month_to_date": 4127, "remaining": 45873 },
+#   "by_day":        [ { "date": "2026-05-25", "count": 142 }, ... ],
+#   "by_endpoint":   [ { "endpoint": "/v1/compare", "count": 1108,
+#                        "avg_latency_ms": 41.7, "total_bytes": 8421033 }, ... ],
+#   "recent":        [ { "ts": 1717000000000, "key_id": "...",
+#                        "endpoint": "/v1/compare",
+#                        "latency_ms": 38, "bytes": 7421 }, ... ]
+# }
+
+# A key missing the usage:read scope is refused:
+#   HTTP/1.1 403 Forbidden
+#   { "error": { "type": "forbidden",
+#                "message": "This key is missing the 'usage:read' scope.",
+#                "required_scope": "usage:read" } }
+```
+
 - Tenant-scoped usage dashboard. Until this change, `GET /api/usage` and `/api/usage/recent` were unauthenticated and folded every key's usage rows in `$CODECLONE_KEYS_DIR/usage/*.jsonl` into a single global view, leaking another tenant's `keyId`s, endpoints, latencies, and byte totals to anyone who hit the URL. The routes now require a signed-in session, resolve the caller's active workspace memberships (`listWorkspacesForUser` honouring suspended + expired support grants), and pass that allowlist as a `WorkspaceScope` into `summarize()` and `recentEvents()` so the aggregation engine drops any row whose `workspaceId` is not in the caller's set. Legacy unscoped rows (older keys with no `workspaceId`) are excluded from any scoped view rather than silently attributed. The dashboard at `/usage` adds a workspace picker so customers can either see totals across every workspace they belong to or scope to one, and the route writes `usage.read` / `usage.read.denied` rows to the tamper-evident audit chain so security teams can see exactly who looked at whose usage. Pinned by `web/tests/usage-tenant-isolation.test.ts`.
 
 ### Try it: confirm one tenant cannot see another tenant's usage rows
