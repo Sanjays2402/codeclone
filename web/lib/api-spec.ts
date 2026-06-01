@@ -300,6 +300,31 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS "${host}/v1/audit?limit=100&status=denied" \\\n  -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "audit-verify",
+    method: "GET",
+    path: "/v1/audit/verify",
+    routeFile: "app/api/v1/audit/verify/route.ts",
+    summary: "Verify the immutable audit hash chain for tamper evidence. Returns the head hash for external pinning (notary, WORM, SOC2 evidence). 200 ok, 409 broken.",
+    scope: "audit:read",
+    params: [],
+    sampleResponse: JSON.stringify(
+      {
+        ok: true,
+        total_entries: 12843,
+        chained_entries: 12843,
+        legacy_entries: 0,
+        first_day: "2025-01-04",
+        last_day: "2026-05-31",
+        last_hash: "7f2c1d3e9a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
+        broken_at: null,
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/audit/verify \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "webhooks-list",
     method: "GET",
     path: "/v1/webhooks",
