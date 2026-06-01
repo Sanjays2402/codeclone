@@ -43,6 +43,7 @@ export const ALL_SCOPES = [
   "audit:read",
   "webhooks:read",
   "webhooks:write",
+  "members:read",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -55,6 +56,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "audit:read": "Stream this workspace's audit log to a SIEM via GET /v1/audit.",
   "webhooks:read": "List and fetch this workspace's webhook endpoints via GET /v1/webhooks.",
   "webhooks:write": "Create and delete webhook endpoints via POST/DELETE /v1/webhooks.",
+  "members:read": "List this workspace's members and their roles via GET /v1/members for IGA reconciliation.",
 };
 
 function normalizeScopes(input: unknown): Scope[] | undefined {

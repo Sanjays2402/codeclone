@@ -10,6 +10,25 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic workspace roster via `GET /v1/members`. Enterprise identity teams wiring CodeClone into Okta Lifecycle, SailPoint, or Workday joiner/mover/leaver pipelines need a scoped, machine-readable pull channel for reconciliation against their source of truth. SCIM at `/scim/v2` is the push channel from the IdP; this is the pull channel. `GET /v1/members` accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `members:read` scope, and returns the calling workspace's roster (user id, email, role, status, joined timestamp, plus suspension and just-in-time support grant fields). Tenant scope is structural: the route always calls `getWorkspace(key.workspaceId)`; no query string can override the workspace target, so a key minted in workspace B can never enumerate workspace A even though both tenants share the same store. Keys with no workspace binding receive `invalid_request` rather than falling through to an empty list. The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any member is read, the per-key rate-limit window is enforced (not peeked) so this endpoint cannot be used as a free heartbeat, and every call writes a `v1.members.read` row (with member count and include flags) to the tamper-evident audit chain. Suspended members and just-in-time support grants are excluded by default for clean IGA payloads; `?include_suspended=true` and `?include_support=true` surface them when forensic continuity matters. Pinned by `web/tests/v1-members-tenant-isolation.test.ts` (live cross-tenant isolation, scope rejection, and a source-level wiring check that fails on regression if the scope filter, the rate-limit enforce, the tenant scope, the workspace gates, or the audit row is dropped).
+
+  ### Try it: reconcile a workspace roster from an IGA pipeline
+
+  ```bash
+  pnpm dev   # web dashboard on http://localhost:3000
+
+  # Mint a least-privilege key on /api-keys with only the members:read scope.
+
+  # Pull the active roster (default: excludes suspended and expired support grants):
+  curl -sS http://localhost:3000/v1/members \
+    -H "Authorization: Bearer cc_live_..."
+  # {"workspace":{"id":"ws_acme",...},"count":2,"items":[{"user_id":"u_42","email":"alice@acme.com","role":"owner","status":"active",...}]}
+
+  # Include suspended members for forensic reconciliation:
+  curl -sS "http://localhost:3000/v1/members?include_suspended=true&include_support=true" \
+    -H "Authorization: Bearer cc_live_..."
+  ```
+
 - Programmatic webhook provisioning via `/v1/webhooks`. Until this change, the only way to create or delete a webhook endpoint was the cookie-authenticated `/api/webhooks` dashboard surface, which blocks Terraform, internal control planes, and CI tooling from rotating receivers without a human in the loop. `GET /v1/webhooks`, `POST /v1/webhooks`, `GET /v1/webhooks/{id}`, and `DELETE /v1/webhooks/{id}` now accept the same Bearer (or `x-api-key`) credential as the rest of `/v1`, behind two least-privilege scopes (`webhooks:read`, `webhooks:write`) and the standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy, rate limit). Tenant scope is structural: list and load delegate to `listWebhooksForWorkspace` / `loadWebhookForWorkspace(id, workspaceId)`, and the destructive path calls `deleteWebhook(id, workspaceId)` which refuses on mismatch without touching disk. Cross-tenant ids return a flat 404 so the existence of another workspace's webhook id cannot be probed. Keys with no workspace binding receive `tenant_required` instead of falling through. Creation honours the workspace's webhook domain allowlist and returns the signing secret exactly once (matching the dashboard create flow). Both mutating verbs support `dry_run=true` (query or body) which runs every auth/policy/quota check then returns a preview without creating or deleting; every probe and every real action writes to the tamper-evident audit chain as `v1.webhooks.create`, `v1.webhooks.delete`, or the matching `*.dry_run` variant. Pinned by `web/tests/v1-webhooks-tenant-isolation.test.ts` (cross-tenant list/load/delete denied at the lib level, plus source-level wiring checks that fail on regression if the scope, workspace gate, or audit/rate-limit/IP/residency calls are dropped).
 
   ### Try it: provision a webhook from outside the dashboard
