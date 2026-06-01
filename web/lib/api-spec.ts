@@ -883,6 +883,31 @@ export const ENDPOINTS: SpecEndpoint[] = [
     sampleResponse: JSON.stringify({ id: "r_2024_05_31_a", recipe_hash: "sha256:abc123", steps: 1500, last_loss: 0.412, backend: "mlx", model: "Qwen/Qwen2.5-Coder-0.5B", started_at: 1717000000000, status: "passed", params: { lr: 0.0002, lora_r: 16 }, metrics: [{ step: 100, loss: 0.91 }, { step: 200, loss: 0.74 }], eval_report: { model: "Qwen/Qwen2.5-Coder-0.5B", mini_pass_rate: 0.72 } }, null, 2),
     curl: (host, key) => `curl -sS ${host}/v1/runs/r_2024_05_31_a -H "Authorization: Bearer ${key}"`,
   },
+  {
+    id: "allowlist-get",
+    method: "GET",
+    path: "/v1/allowlist",
+    routeFile: "app/api/v1/allowlist/route.ts",
+    summary: "Read the workspace IP CIDR allowlist for SOC2 CC6.6 evidence and SIEM reconciliation.",
+    scope: "allowlist:read",
+    params: [],
+    sampleResponse: JSON.stringify({ workspace_id: "w_abc", entries: ["10.0.0.0/8", "203.0.113.4/32"], count: 2, max_entries: 64, enforced: true, server_time: 1717000000000 }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/allowlist -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "allowlist-replace",
+    method: "POST",
+    path: "/v1/allowlist",
+    routeFile: "app/api/v1/allowlist/route.ts",
+    summary: "Append entries to the workspace IP CIDR allowlist. Returns the merged list plus any rejected raw inputs. Workspace owner only.",
+    scope: "allowlist:write",
+    params: [
+      { name: "entries", kind: "body", required: true, type: "string[]", description: "CIDR strings to append (IPv4 or IPv6). Duplicates against the existing list are dropped silently. Malformed inputs are returned in `rejected`. Total list capped at 64." },
+    ],
+    sampleBody: JSON.stringify({ entries: ["198.51.100.7/32"] }, null, 2),
+    sampleResponse: JSON.stringify({ workspace_id: "w_abc", entries: ["10.0.0.0/8", "203.0.113.4/32", "198.51.100.7/32"], count: 3, added: ["198.51.100.7/32"], rejected: [], max_entries: 64, enforced: true, server_time: 1717000000000 }, null, 2),
+    curl: (host, key) => `curl -sS -X POST ${host}/v1/allowlist -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"entries":["198.51.100.7/32"]}'`,
+  },
 ];
 
 export function endpointsForScopes(scopes: readonly Scope[] | undefined): SpecEndpoint[] {

@@ -30,6 +30,8 @@ export const ALL_SCOPES = [
   "sessions:read",
   "sessions:write",
   "runs:read",
+  "allowlist:read",
+  "allowlist:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -55,4 +57,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "sessions:read": "List active dashboard sessions for every member of this workspace via GET /v1/sessions for SecOps incident triage and SOC2 CC6.1 access reviews.",
   "sessions:write": "Revoke individual or all dashboard sessions for a member of this workspace via DELETE /v1/sessions/:jti and POST /v1/sessions/revoke-all for credential-compromise containment.",
   "runs:read": "Read training run metadata, hyperparameters, and per-step metrics via GET /v1/runs and GET /v1/runs/:id for MLflow / Weights & Biases / SIEM ingest.",
+  "allowlist:read": "Read this workspace's IP CIDR allowlist via GET /v1/allowlist for SecOps compliance evidence and SIEM reconciliation.",
+  "allowlist:write": "Replace, append, or clear this workspace's IP CIDR allowlist via PUT/POST/DELETE /v1/allowlist for SOAR-driven incident response (block attacker IPs, sync VPN egress ranges). Caller's API key must belong to a workspace owner.",
 };

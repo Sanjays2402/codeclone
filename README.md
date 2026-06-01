@@ -10,6 +10,32 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic workspace IP CIDR allowlist management via `GET/PUT/POST/DELETE /v1/allowlist`, behind the new `allowlist:read` and `allowlist:write` scopes. SecOps teams running CodeClone need to wire the workspace allowlist into the same SOAR / IGA pipelines they already use for cloud network policy: block an attacker IP within seconds of a SIEM alert, sync the corporate VPN egress block on a nightly cron, drop the allowlist at the end of a red-team window, and pull the current rules into a SOC2 CC6.6 evidence collector. Until this change the only way to edit the allowlist was hand-clicking the editor on `/workspaces/[id]`, which is cookie-authenticated and not reachable from a SOAR playbook. The `GET` endpoint returns the current entries, count, cap, and whether enforcement is active; `PUT` replaces the full list (CIDR sanitiser dedupes and echoes back any rejected raw strings so the script can alert on malformed inputs); `POST` appends with cross-batch dedupe and refuses to push the workspace past the 64-entry cap (`entries_over_limit` 400 carries `current_count`, `would_add`, and `max_entries`); `DELETE` clears the list (open access). Tenant scope is structural: the workspace id is always `key.workspaceId`, never read from a query parameter or body field, so a key in workspace A can never read or mutate workspace B. Writes additionally require that the calling key's owning user is a current owner of the workspace, mirroring the `canManage` rule that already gates the dashboard editor, so a SOAR service key with `allowlist:write` cannot privilege-escalate past the human policy. Every call runs the full /v1 enforcement chain (lockdown, workspace + per-key IP allowlist, residency, API-key policy, per-key rate-limit enforce-not-peek) and writes a `v1.allowlist.{read,replace,append,clear}` audit row with a before/after diff of the CIDR set. Pinned by `web/tests/v1-allowlist-tenant-isolation.test.ts` (scope split, full enforcement chain, owner gate on writes, audit ids, store-layer isolation between two workspaces, and the per-workspace cap).
+
+  ### Try it: block an attacker IP from a SIEM alert
+
+  ```bash
+  # 1. Read the current workspace allowlist for SOC2 evidence.
+  curl -sS https://codeclone.example.com/v1/allowlist \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+
+  # 2. Append an attacker /32 in response to a SIEM alert.
+  curl -sS -X POST https://codeclone.example.com/v1/allowlist \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"entries":["198.51.100.7/32"]}'
+
+  # 3. Replace the full list on a nightly cron from your corporate VPN ranges.
+  curl -sS -X PUT https://codeclone.example.com/v1/allowlist \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"entries":["10.0.0.0/8","203.0.113.0/24"]}'
+
+  # 4. Lift enforcement at the end of a red-team window.
+  curl -sS -X DELETE https://codeclone.example.com/v1/allowlist \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+  ```
+
 - Programmatic training-run feed via `GET /v1/runs` and `GET /v1/runs/{id}`, behind the new `runs:read` scope. MLOps platforms (MLflow, Weights & Biases, internal model registries) and ML supply-chain SIEM ingest need a stable, scoped, audited way to enumerate every fine-tuning run on the host and pull its hyperparameters, per-step metrics, and eval report. Until this change the dashboard's `/api/runs` route was the only programmatic surface and it is unauthenticated browser scaffolding, not something a procurement reviewer will sign off on. The list endpoint accepts `status` (queued/running/passed/failed), `limit`, and `offset`; the detail endpoint returns params, the full metrics timeline, and the eval report when present. Both endpoints run the standard `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate-limit **enforce** so the call is metered), write a `v1.runs.list` / `v1.runs.read` audit row, and post a billable usage event so the integration shows up in `/usage` timelines. The detail route additionally clamps the path id to a slug regex so traversal attempts (`../etc/passwd`) fail with 400 before any disk access. Pinned by `web/tests/v1-runs.test.ts` (scope registration in both `lib/api-keys` and the client-safe `lib/scopes` mirror, RBAC at the lib layer, route-source wiring of scope/rate-limit/enforcement chain/audit/usage, traversal-guard regex, and api-spec registration).
 
   ### Try it: stream training runs into MLflow / W&B / SIEM
