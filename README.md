@@ -10,6 +10,31 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic saved-share creation via `POST /v1/shares`, behind a workspace-scoped `shares:write` key. The existing `/v1/shares` read surface let customers list and fetch saved comparisons from CI but forced them through the browser-only `/compare` UI to actually create one, so a CI pipeline that wanted to publish "here is the near-duplicate we flagged in build #4127" as a stable `/r/<id>` link had to either screen-scrape or keep a cookie session alive. `POST /v1/shares` closes that gap: pass `{a, b, language?, title?, tags?}` as JSON, the server recomputes scores, line alignment, and clone classification itself (so a leaked key cannot mint a share link that lies about a 0.42 similarity by claiming 0.97), stamps the record with the calling key's `workspaceId`, and returns the new `id`, public `url`, recomputed `scores`, `clone` label, and byte counts. The full enforcement chain that every other mutating `/v1` route runs is wired in unchanged (workspace lockdown, workspace + per-key IP allowlists, residency, workspace API-key policy, DPA, per-key rate limit with the standard `X-RateLimit-*` headers, the 4 KiB `MAX_SNIPPET_BYTES` cap that returns structured `413 payload_too_large`); keys with no workspace binding are rejected with `400 invalid_request` because a cross-tenant or unowned saved share is not a real product. Honors the standard `x-codeclone-dry-run: true` header (or `?dry_run=true`): returns the would-be scores and tenant stamp with `x-codeclone-dry-run: true` echoed back and writes nothing, so SDK CI can prove contract shape without leaving litter on disk or burning quota. Real calls write a `v1.shares.create` row to the tamper-evident audit chain with the key prefix, share id, language, recomputed shingle-Jaccard, clone label, byte counts, and tags, and log a usage event so the call shows up in `/usage` and `/v1/usage` (plan quota is intentionally not double-billed: the underlying compare already billed it). Cross-tenant isolation, RBAC separation between `shares:read` and `shares:write`, recomputed-score pinning, and the snippet size cap are pinned by `web/tests/v1-shares-create.test.ts`.
+
+  ### Try it: publish a saved comparison from CI
+
+  ```bash
+  # Local dashboard runs at http://localhost:3000.
+  curl -sS -X POST http://localhost:3000/api/v1/shares \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "content-type: application/json" \
+    -d '{
+      "a": "function add(x, y) { return x + y; }",
+      "b": "function add(a, b) { return a + b; }",
+      "language": "javascript",
+      "title": "build-4127 near-duplicate",
+      "tags": ["ci", "build-4127"]
+    }'
+  # -> { "id": "...", "url": "/r/...", "scores": { "shingleJaccard": 0.83, ... }, "workspace_id": "ws_..." }
+
+  # Dry-run: preview the score and tenant stamp without writing.
+  curl -sS -X POST "http://localhost:3000/api/v1/shares?dry_run=true" \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "content-type: application/json" \
+    -d '{"a":"let x=1","b":"let x=2","language":"javascript"}'
+  ```
+
 - Programmatic break-glass workspace lockdown via `GET/POST/DELETE /v1/lockdown`, behind the new `lockdown:read` and `lockdown:write` scopes. When a credential compromise, insider-threat alert, or active investigation requires halting every /v1 call to a workspace within seconds, SecOps needs to fire that switch from a SOAR playbook, not a human dashboard login. The `GET` endpoint returns whether the workspace is locked and (when locked) the reason, optional case reference, placed-at timestamp, and placed-by actor for SIEM correlation and SOC2 CC7.3 incident-response evidence. `POST` engages the lockdown with a validated reason (3 to 500 chars) and an optional ticket id (PagerDuty, Jira, ServiceNow); from that moment every other `/v1` route bound to the workspace refuses with HTTP 423 `workspace_locked`. `DELETE` lifts the lockdown but requires the workspace slug as a confirmation token so a misconfigured SOAR playbook cannot accidentally release the wrong tenant. Tenant scope is structural: the workspace is always `key.workspaceId`, never read from a query parameter or body field, so a key in workspace A cannot read or mutate workspace B's lockdown state. Writes additionally require that the calling key's owning user is a current owner of the workspace, mirroring the `canManage` rule that gates the dashboard editor, so a SOAR service key with `lockdown:write` cannot privilege-escalate past the human policy. This route deliberately omits the workspace lockdown enforcement gate that every other `/v1` route runs (and only this gate): otherwise placing a lockdown would soft-brick the API release path. Every other `/v1` policy still applies (workspace + per-key IP allowlist, residency, API-key policy, per-key rate-limit enforce-not-peek so the call is metered). Every call writes a `v1.lockdown.{read,place,release}` audit row with a before/after diff on writes; denied writes by non-owners are also audited so privilege-escalation attempts are visible in the SIEM. Pinned by `web/tests/v1-lockdown-tenant-isolation.test.ts` (scope split, policy chain minus the deliberate lockdown carve-out, owner gate on writes, slug-as-confirmation guard, live cross-tenant isolation between two workspaces on a shared on-disk store).
 
   ### Try it: halt a workspace from a SIEM-fired SOAR playbook

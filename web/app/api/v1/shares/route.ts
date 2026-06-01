@@ -29,8 +29,12 @@ import { clientIpFromRequest } from "../../../../lib/ip-allowlist";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceLockdownForKey } from "../../../../lib/lockdown-enforce";
-import { listSharesPage } from "../../../../lib/share";
+import { enforceWorkspaceDpaForKey } from "../../../../lib/dpa-enforce";
+import { createShare, listSharesPage, MAX_SNIPPET_BYTES } from "../../../../lib/share";
+import { compareCode, alignLines, classifyClone } from "../../../../lib/similarity";
 import { logUsage } from "../../../../lib/usage";
+import { tryRecordAudit } from "../../../../lib/audit";
+import { isDryRun, DRY_RUN_HEADER } from "../../../../lib/dry-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -146,6 +150,250 @@ export async function GET(req: Request) {
     return NextResponse.json(
       { error: { type: "internal_error", message: msg } },
       { status: 500 },
+    );
+  }
+}
+
+/**
+ * POST /v1/shares
+ *
+ * Programmatically create a saved comparison ("share") from CI, an
+ * SDK, or any backend pipeline, without going through the /compare
+ * UI. The server recomputes scores/alignment/clone classification so
+ * the resulting public /r/<id> link can never lie about what the
+ * snippets actually compare to.
+ *
+ * Auth: Bearer token or x-api-key. Required scope: shares:write.
+ * Tenant scope: the new record is stamped with the calling key's
+ *   workspaceId. Keys with no workspace binding are rejected here,
+ *   matching every other mutating /v1 write: cross-tenant or
+ *   "global" saved shares are not a real product.
+ *
+ * Body (application/json):
+ *   a        string, required, non-empty, <= MAX_SNIPPET_BYTES utf-8 bytes
+ *   b        string, required, non-empty, <= MAX_SNIPPET_BYTES utf-8 bytes
+ *   language string, optional, defaults to "auto"
+ *   title    string, optional
+ *   tags     string[], optional
+ *
+ * Honors x-codeclone-dry-run (or ?dry_run=true): returns the would-be
+ * scores and a preview response with x-codeclone-dry-run: true, and
+ * does NOT write a share, does NOT log usage, does NOT emit an audit
+ * row. Rate-limit + tenant gates still run so dry-run can't be used
+ * to bypass enforcement.
+ *
+ * Side effects on a real call: bills one /v1 rate-limit slot,
+ * records one audit row (v1.shares.create), and logs usage so the
+ * call shows up in /usage and /v1/usage. Plan quota is NOT charged:
+ * saving an already-computed share is housekeeping, not a billable
+ * model call (the underlying /v1/compare call already billed it).
+ */
+export async function POST(req: Request) {
+  const token = extractBearer(req);
+  if (!token) {
+    return unauthorized("Missing API key. Pass 'Authorization: Bearer <key>'.");
+  }
+  const key = await findByPlaintext(token);
+  if (!key) {
+    return unauthorized("Invalid or revoked API key.");
+  }
+  if (!hasScope(key, "shares:write")) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "insufficient_scope",
+          message:
+            "This key is missing the 'shares:write' scope. Rotate it with the scope enabled or issue a new key.",
+          required_scope: "shares:write",
+          granted_scopes: key.scopes ?? null,
+        },
+      },
+      { status: 403 },
+    );
+  }
+  if (!key.workspaceId) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message:
+            "This API key is not bound to a workspace. /v1/shares POST requires a workspace-scoped key so the new share has a tenant owner.",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  // Full enforcement chain matches every other mutating /v1 route.
+  const lockdownBlocked = await enforceWorkspaceLockdownForKey(req, key, { route: "/v1/shares" });
+  if (lockdownBlocked) return lockdownBlocked;
+  const wsIpBlocked = await enforceWorkspaceAllowlistForKey(req, key);
+  if (wsIpBlocked) return wsIpBlocked;
+  const keyIpBlocked = await enforceKeyAllowlist(req, key);
+  if (keyIpBlocked) return keyIpBlocked;
+  const residencyBlocked = await enforceWorkspaceResidencyForKey(req, key);
+  if (residencyBlocked) return residencyBlocked;
+  const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
+  if (policyBlocked) return policyBlocked;
+  const dpaBlocked = await enforceWorkspaceDpaForKey(req, key, { route: "/v1/shares" });
+  if (dpaBlocked) return dpaBlocked;
+
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: "Body must be JSON." } },
+      { status: 400, headers: rl.headers },
+    );
+  }
+  const body = (raw ?? {}) as Record<string, unknown>;
+  const a = typeof body.a === "string" ? body.a : "";
+  const b = typeof body.b === "string" ? body.b : "";
+  const language =
+    typeof body.language === "string" && body.language.trim()
+      ? body.language.trim()
+      : "auto";
+  const title = typeof body.title === "string" ? body.title : undefined;
+  const tags = Array.isArray(body.tags)
+    ? (body.tags as unknown[]).filter((t) => typeof t === "string") as string[]
+    : undefined;
+
+  if (!a.trim() || !b.trim()) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Both 'a' and 'b' must be non-empty strings.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+  if (
+    Buffer.byteLength(a, "utf-8") > MAX_SNIPPET_BYTES ||
+    Buffer.byteLength(b, "utf-8") > MAX_SNIPPET_BYTES
+  ) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "payload_too_large",
+          message: `Each snippet must be at most ${MAX_SNIPPET_BYTES} bytes.`,
+        },
+      },
+      { status: 413, headers: rl.headers },
+    );
+  }
+
+  // Recompute server-side so the share link cannot lie about scores.
+  const started = performance.now();
+  const scores = compareCode(a, b);
+  const alignment = alignLines(a, b);
+  const clone = classifyClone(a, b, scores);
+  const latencyMs = performance.now() - started;
+  const result = {
+    language,
+    scores,
+    alignment,
+    clone,
+    bytes: {
+      a: Buffer.byteLength(a, "utf-8"),
+      b: Buffer.byteLength(b, "utf-8"),
+    },
+    latency_ms: Number(latencyMs.toFixed(3)),
+    method:
+      "exact-jaccard+5gram-shingles+line-align+structural-4gram-clone-type",
+  };
+
+  // Dry-run: preview only. No write, no audit, no usage.
+  if (isDryRun(req, body)) {
+    return NextResponse.json(
+      {
+        dry_run: true,
+        would_create: {
+          language,
+          title: title ?? null,
+          tags: tags ?? null,
+          workspace_id: key.workspaceId,
+          scores,
+          clone,
+          bytes: result.bytes,
+        },
+      },
+      {
+        status: 200,
+        headers: { ...rl.headers, ...DRY_RUN_HEADER },
+      },
+    );
+  }
+
+  try {
+    const rec = await createShare({
+      a,
+      b,
+      language,
+      title,
+      tags,
+      workspaceId: key.workspaceId,
+      result,
+    });
+
+    void recordUse(key.id, clientIpFromRequest(req));
+    void tryRecordAudit(req, {
+      action: "v1.shares.create",
+      actorId: key.userId ?? null,
+      workspaceId: key.workspaceId,
+      target: { type: "share", id: rec.id, label: rec.title ?? undefined },
+      status: "ok",
+      meta: {
+        prefix: key.prefix,
+        language,
+        score: scores.shingleJaccard,
+        clone_label: clone.label,
+        bytes: result.bytes,
+        tags: rec.tags ?? null,
+      },
+    });
+    void logUsage({
+      ts: Date.now(),
+      keyId: key.id,
+      endpoint: "/v1/shares",
+      bytes: result.bytes.a + result.bytes.b,
+      latencyMs: Number(latencyMs.toFixed(3)),
+      workspaceId: key.workspaceId,
+    });
+
+    return NextResponse.json(
+      {
+        id: rec.id,
+        url: `/r/${rec.id}`,
+        language: rec.language,
+        title: rec.title ?? null,
+        tags: rec.tags ?? null,
+        workspace_id: rec.workspaceId,
+        scores,
+        clone,
+        bytes: result.bytes,
+        created_at: rec.createdAt,
+      },
+      { status: 201, headers: rl.headers },
+    );
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    void tryRecordAudit(req, {
+      action: "v1.shares.create",
+      actorId: key.userId ?? null,
+      workspaceId: key.workspaceId,
+      target: { type: "api_key", id: key.id, label: key.label },
+      status: "denied",
+      meta: { prefix: key.prefix, reason: msg },
+    });
+    return NextResponse.json(
+      { error: { type: "internal_error", message: msg } },
+      { status: 500, headers: rl.headers },
     );
   }
 }
