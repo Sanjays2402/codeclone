@@ -10,6 +10,38 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic workspace member management via `POST /v1/members` (invite), `PATCH /v1/members/{user_id}` (change role or suspend), and `DELETE /v1/members/{user_id}` (remove). Until this change, `GET /v1/members` was the read half of the IGA contract (Okta Lifecycle, SailPoint, Workday joiner/mover/leaver pipelines) but the write half required a human in the dashboard, so the joiner side of an automation pipeline could not actually land an invite or the leaver side cut access. These routes expose invite, role flip, suspend, reinstate, and remove against the same workspace store the dashboard writes to, behind the new `members:write` scope. RBAC is enforced server-side: the calling key must be bound to an active **owner** of the workspace (editor and viewer keys are denied with a stable `v1.members.{invite,update,remove}` audit row marked `status="denied"`), and a caller can never demote, suspend, or remove themselves through this endpoint so a leaver script cannot lock the workspace out by accident. Owner role transfers and sole-owner removals are blocked at the lib layer (`only_owner` invariant). Tenant scope is structural: the workspace is always derived from `key.workspaceId` (no body field can override it), targets are looked up inside that workspace's roster, and cross-tenant user ids return 404 (not 403) so foreign user ids cannot be probed. Every mutation writes the audit chain; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, per-key rate limit) runs before any side effect. Pinned by `web/tests/v1-members-write-tenant-isolation.test.ts` (live tenant partitioning at the lib layer, RBAC denial under non-owner keys, only-owner invariants, plus source-level wiring checks that fail on regression if the scope, RBAC gate, rate-limit, audit, or workspace-from-key derivation is dropped).
+
+  ### Try it: provision a new hire from a Workday joiner webhook
+
+  ```bash
+  # Mint an owner-bound key with members:read + members:write scopes from
+  # /api-keys, then invite a new editor:
+  curl -sS -X POST http://localhost:3000/v1/members \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"email":"carol@acme.com","role":"editor"}' \
+    | jq '.invite | {id, email, role, accept_url, expires_at}'
+
+  # Flip a member to viewer when their team changes:
+  curl -sS -X PATCH http://localhost:3000/v1/members/u_91 \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"role":"viewer"}' | jq .member
+
+  # Workday leaver event: suspend (preserves audit trail) then remove:
+  curl -sS -X PATCH http://localhost:3000/v1/members/u_91 \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"status":"suspended","reason":"Workday leaver event"}' | jq .member
+
+  curl -sS -X DELETE http://localhost:3000/v1/members/u_91 \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq .
+
+  # Non-owner keys get a 403 with a stable audit row; cross-tenant user
+  # ids return 404 so foreign user ids cannot be probed.
+  ```
+
 - Programmatic share-collection management via `GET/POST /v1/collections` and `GET/PATCH/DELETE /v1/collections/{id}`. Until this change, share collections (the `/c/<id>` URLs that bundle a sprint's worth of `/r/<id>` shares) could only be assembled by a human clicking through the `/collections` dashboard with a session cookie. Customers wiring CodeClone into release engineering and CI wanted to mint a single "every near-duplicate we flagged this sprint" URL straight from a pipeline. These routes expose list/create over the same store the dashboard uses behind the `collections:read` and `collections:write` scopes, so a collection POSTed from CI shows up immediately under `/collections`. Tenant scope is structural: every store call passes `key.workspaceId` (rejected with `invalid_request` if the key has no workspace), `listCollections` is invoked with `allowLegacy: false` so unscoped single-tenant records are invisible, and the `[id]` route runs a `workspaceOwns` check that returns a flat 404 on cross-workspace ids so the existence of another workspace's collection id cannot be probed. Every mutation writes to the audit chain under stable `v1.collections.{list,create,update,delete}` action ids; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate limit with `X-RateLimit-*` and `Retry-After`) runs before any side effect. Pinned by `web/tests/v1-collections-tenant-isolation.test.ts` (live per-workspace partitioning at the lib layer plus source-level wiring checks that fail on regression if the scope, workspace gate, rate-limit, audit, IP/residency, or `allowLegacy: false` calls are dropped).
 
   ### Try it: assemble a sprint dupes collection from CI

@@ -50,10 +50,14 @@ import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-poli
 import { enforceWorkspaceLockdownForKey } from "../../../../lib/lockdown-enforce";
 import { tryRecordAudit } from "../../../../lib/audit";
 import {
+  canManage,
   getWorkspace,
+  isEmailAllowedForWorkspace,
   isMemberActive,
   isMemberSuspended,
+  issueInvite,
   isSupportMember,
+  type Role,
 } from "../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -204,4 +208,261 @@ export async function GET(req: Request) {
   };
 
   return NextResponse.json(body, { headers: rlHeaders });
+}
+
+/**
+ * POST /v1/members: invite a new member to the calling key's workspace.
+ *
+ * This is the write half of the IGA contract. Identity teams that mirror
+ * joiner events from Workday into CodeClone need a programmatic invite path
+ * so a new hire's first-day automation can land an invite in their inbox
+ * without anyone clicking through the dashboard.
+ *
+ * Body (JSON):
+ *   email: string (required) - invitee email. Must satisfy the workspace
+ *          invite-domain allowlist if one is configured.
+ *   role:  "editor" | "viewer" (required). Owner role cannot be granted via
+ *          invite; transfer ownership through the dashboard.
+ *
+ * Auth: Bearer token or `x-api-key` header.
+ * Scope: `members:write`.
+ * RBAC: the API key's owning user must be an active owner of the workspace.
+ *       Editor and viewer keys cannot manage membership.
+ * Tenant scope: invite is bound to key.workspaceId; no body field can
+ *       override the workspace target.
+ * Side effects: rate-limit slot consumed, audit row `v1.members.invite`
+ *       written (action stable for IGA grep).
+ *
+ * Still enforced: revocation, expiry, workspace IP allowlist, per-key IP
+ * allowlist, residency, workspace API key policy, lockdown.
+ */
+export async function POST(req: Request) {
+  const token = extractBearer(req);
+  if (!token) {
+    return unauthorized("Missing API key. Pass 'Authorization: Bearer <key>'.");
+  }
+  const key = await findByPlaintext(token);
+  if (!key) {
+    return unauthorized("Invalid or revoked API key.");
+  }
+
+  if (!hasScope(key, "members:write")) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "insufficient_scope",
+          message: "This key is missing the 'members:write' scope.",
+          required_scope: "members:write",
+          granted_scopes: key.scopes ?? null,
+        },
+      },
+      { status: 403 },
+    );
+  }
+
+  const lockdownBlocked = await enforceWorkspaceLockdownForKey(req, key, {
+    route: "/v1/members",
+  });
+  if (lockdownBlocked) return lockdownBlocked;
+  const wsBlocked = await enforceWorkspaceAllowlistForKey(req, key);
+  if (wsBlocked) return wsBlocked;
+  const keyBlocked = await enforceKeyAllowlist(req, key);
+  if (keyBlocked) return keyBlocked;
+  const residencyBlocked = await enforceWorkspaceResidencyForKey(req, key);
+  if (residencyBlocked) return residencyBlocked;
+  const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
+  if (policyBlocked) return policyBlocked;
+
+  if (!key.workspaceId) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message:
+            "This API key is not bound to a workspace. /v1/members requires a workspace-scoped key.",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+  const rlHeaders = rl.headers;
+
+  const ws = await getWorkspace(key.workspaceId);
+  if (!ws) {
+    return NextResponse.json(
+      { error: { type: "not_found", message: "Workspace not found." } },
+      { status: 404, headers: rlHeaders },
+    );
+  }
+
+  // RBAC: the calling key must belong to an active owner of this workspace.
+  // Keys minted without a userId (legacy/service) cannot manage membership
+  // because there is no human accountable for the change.
+  if (!key.userId || !canManage(ws, key.userId)) {
+    void tryRecordAudit(req, {
+      action: "v1.members.invite",
+      actorId: key.id,
+      workspaceId: key.workspaceId,
+      target: { type: "workspace_members", id: key.workspaceId },
+      status: "denied",
+      meta: {
+        prefix: key.prefix,
+        reason: "rbac_owner_required",
+      },
+    });
+    return NextResponse.json(
+      {
+        error: {
+          type: "forbidden",
+          message:
+            "Inviting members requires an owner-bound API key. The calling key is not bound to an active owner of this workspace.",
+        },
+      },
+      { status: 403, headers: rlHeaders },
+    );
+  }
+
+  let raw: unknown;
+  try {
+    raw = await req.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Request body must be valid JSON.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
+
+  const body = (raw ?? {}) as Record<string, unknown>;
+  const email = typeof body.email === "string" ? body.email.trim().toLowerCase() : "";
+  const role = typeof body.role === "string" ? body.role.trim().toLowerCase() : "";
+
+  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Field 'email' is required and must be a valid email address.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
+
+  if (role !== "editor" && role !== "viewer") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message:
+            "Field 'role' must be 'editor' or 'viewer'. Owner role cannot be granted via invite.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
+
+  if (!isEmailAllowedForWorkspace(ws, email)) {
+    void tryRecordAudit(req, {
+      action: "v1.members.invite",
+      actorId: key.id,
+      workspaceId: key.workspaceId,
+      target: { type: "workspace_members", id: key.workspaceId },
+      status: "denied",
+      meta: { prefix: key.prefix, email, reason: "invite_domain_not_allowed" },
+    });
+    return NextResponse.json(
+      {
+        error: {
+          type: "invite_domain_not_allowed",
+          message:
+            "This email is not allowed by the workspace invite-domain allowlist.",
+        },
+      },
+      { status: 403, headers: rlHeaders },
+    );
+  }
+
+  if (ws.members.some((m) => m.email === email)) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "already_member",
+          message: "A member with this email is already on the workspace roster.",
+        },
+      },
+      { status: 409, headers: rlHeaders },
+    );
+  }
+
+  const origin = (() => {
+    try {
+      return new URL(req.url).origin;
+    } catch {
+      return "http://localhost:3000";
+    }
+  })();
+
+  let invite;
+  try {
+    invite = await issueInvite({
+      workspace: ws,
+      email,
+      role: role as Exclude<Role, "owner">,
+      invitedBy: key.userId!,
+      origin,
+    });
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "invite_failed";
+    return NextResponse.json(
+      {
+        error: {
+          type: code,
+          message: "Failed to issue invite.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
+
+  void recordUse(key.id, clientIpFromRequest(req));
+  void tryRecordAudit(req, {
+    action: "v1.members.invite",
+    actorId: key.id,
+    workspaceId: key.workspaceId,
+    target: { type: "workspace_invite", id: invite.record.id },
+    status: "ok",
+    meta: {
+      prefix: key.prefix,
+      email,
+      role,
+      expires_at: invite.record.expiresAt,
+    },
+  });
+
+  return NextResponse.json(
+    {
+      invite: {
+        id: invite.record.id,
+        workspace_id: invite.record.workspaceId,
+        email: invite.record.email,
+        role: invite.record.role,
+        invited_by: invite.record.invitedBy,
+        created_at: invite.record.createdAt,
+        expires_at: invite.record.expiresAt,
+        accept_url: invite.url,
+      },
+      token: invite.token,
+      token_notice:
+        "Store this token now. It will never be shown again. Deliver via your provisioning channel.",
+    },
+    { status: 201, headers: rlHeaders },
+  );
 }

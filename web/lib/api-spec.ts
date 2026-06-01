@@ -380,6 +380,85 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS "${host}/v1/members?include_suspended=true" \\\n  -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "members-invite",
+    method: "POST",
+    path: "/v1/members",
+    routeFile: "app/api/v1/members/route.ts",
+    summary: "Invite a member to the calling workspace. Caller's key must be bound to an active owner. Used by Workday joiner pipelines to land first-day access.",
+    scope: "members:write",
+    params: [
+      { name: "email", kind: "body", required: true, type: "string", description: "Invitee email. Must satisfy the workspace invite-domain allowlist if one is set." },
+      { name: "role", kind: "body", required: true, type: "string", description: "'editor' or 'viewer'. Owner role cannot be granted via invite." },
+    ],
+    sampleBody: JSON.stringify({ email: "carol@acme.com", role: "editor" }, null, 2),
+    sampleResponse: JSON.stringify(
+      {
+        invite: {
+          id: "inv_abc123",
+          workspace_id: "ws_acme",
+          email: "carol@acme.com",
+          role: "editor",
+          invited_by: "u_42",
+          created_at: 1717200000000,
+          expires_at: 1717804800000,
+          accept_url: "https://codeclone.example/workspaces/invite/inv_abc123.XXXX",
+        },
+        token: "inv_abc123.XXXXXXXXXXXXXXXX",
+        token_notice: "Store this token now. It will never be shown again.",
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/members \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"email":"carol@acme.com","role":"editor"}'`,
+  },
+  {
+    id: "members-update",
+    method: "PATCH",
+    path: "/v1/members/:user_id",
+    routeFile: "app/api/v1/members/[userId]/route.ts",
+    summary: "Change a member's role ('editor'|'viewer') and/or status ('active'|'suspended'). Owner-bound key required; owner demotion blocked here.",
+    scope: "members:write",
+    params: [
+      { name: "user_id", kind: "path", required: true, type: "string", description: "Target user id within the calling workspace." },
+      { name: "role", kind: "body", required: false, type: "string", description: "'editor' or 'viewer'." },
+      { name: "status", kind: "body", required: false, type: "string", description: "'active' or 'suspended'. Suspension preserves the audit trail." },
+      { name: "reason", kind: "body", required: false, type: "string", description: "Free-text suspension reason (max 280 chars)." },
+    ],
+    sampleBody: JSON.stringify({ role: "viewer", status: "suspended", reason: "Workday leaver event" }, null, 2),
+    sampleResponse: JSON.stringify(
+      {
+        member: {
+          user_id: "u_91",
+          email: "bob@acme.com",
+          role: "viewer",
+          status: "suspended",
+          joined_at: 1717100000000,
+          suspended_at: 1717250000000,
+          suspended_reason: "Workday leaver event",
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X PATCH ${host}/v1/members/u_91 \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"status":"suspended","reason":"Workday leaver event"}'`,
+  },
+  {
+    id: "members-remove",
+    method: "DELETE",
+    path: "/v1/members/:user_id",
+    routeFile: "app/api/v1/members/[userId]/route.ts",
+    summary: "Remove a member from the calling workspace's roster. Owner-bound key required; self-removal blocked.",
+    scope: "members:write",
+    params: [
+      { name: "user_id", kind: "path", required: true, type: "string", description: "Target user id within the calling workspace." },
+    ],
+    sampleResponse: JSON.stringify({ id: "u_91", removed: true }, null, 2),
+    curl: (host, key) =>
+      `curl -sS -X DELETE ${host}/v1/members/u_91 \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "export-bundle",
     method: "GET",
     path: "/v1/export",
