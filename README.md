@@ -2209,6 +2209,52 @@ The hook is enabled by default and self-cleans on success; failed pods are kept 
 | 429s spiking | check which bucket (`ip` or `api_key`) is named in the body; raise the matching `CODECLONE_RATELIMIT_*` knob or add capacity |
 | Audit log disk full | confirm `CODECLONE_AUDIT_LOG_MAX_BYTES` and `_BACKUP_COUNT` are set; ship rotated `.gz` files to the SIEM faster |
 
+### Try it: enumerate and revoke dashboard sessions for incident response
+
+CodeClone is a code-similarity service. When SecOps has to contain a credential compromise (stolen laptop, phishing victim, offboarded employee) the dashboard `/settings/sessions` page is one-user-at-a-time and cookie-authenticated, so until this change there was no programmatic, tenant-scoped path for a SOAR or IGA bot to enumerate active sessions or force-logout a member. `GET /v1/sessions`, `DELETE /v1/sessions/{jti}`, and `POST /v1/sessions/revoke-all` now expose the same primitives over Bearer auth, gated by the new least-privilege `sessions:read` and `sessions:write` scopes. Tenant scope is structural: the list endpoint derives the in-scope user set from `workspace.members`, the revoke endpoint resolves the owning userId server-side from the jti and 404s if that user is not a member of the calling key's workspace, and `revoke-all` requires `user_id` in the body and 404s if that user is not a workspace member. Cross-tenant probes never leak the existence of another tenant's jti or userId via status code. Every call appends a `v1.sessions.read | revoke | revoke_all` row to the tamper-evident audit chain.
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Mint a key on /api-keys with sessions:read + sessions:write scopes.
+
+# Enumerate every active dashboard session in this workspace:
+curl -sS http://localhost:3000/v1/sessions \
+  -H "Authorization: Bearer cc_live_..."
+# {
+#   "workspace_id": "ws_acme",
+#   "sessions": [
+#     { "jti": "k7Q1abcDEF...", "user_id": "u_42",
+#       "created_at": 1717000000000, "expires_at": 1719600000000,
+#       "last_seen_at": 1717003600000,
+#       "ip": "203.0.113.7", "user_agent": "Mozilla/5.0 ...",
+#       "created_ip": "203.0.113.7", "created_user_agent": "Mozilla/5.0 ..." }
+#   ],
+#   "total": 1
+# }
+
+# Revoke a single suspicious session (idempotent; 404 if cross-tenant):
+curl -sS -X DELETE http://localhost:3000/v1/sessions/k7Q1abcDEF \
+  -H "Authorization: Bearer cc_live_..."
+# { "jti": "k7Q1abcDEF", "user_id": "u_42", "revoked": true }
+
+# Incident kill switch: force-logout every active session for a member
+# (user_id must be a member of the calling workspace, otherwise 404):
+curl -sS -X POST http://localhost:3000/v1/sessions/revoke-all \
+  -H "Authorization: Bearer cc_live_..." \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":"u_42"}'
+# { "user_id": "u_42", "revoked_count": 3 }
+
+# A key missing the scope is refused:
+#   HTTP/1.1 403 Forbidden
+#   { "error": { "type": "insufficient_scope",
+#                "required_scope": "sessions:write",
+#                "granted_scopes": ["compare:write"] } }
+```
+
+Pinned by `web/tests/v1-sessions-tenant-isolation.test.ts`: source-level wiring (scope check, enforce rate-limit, full enforcement chain, audit ids) plus a live cross-tenant test that proves workspace B can never enumerate or revoke workspace A's sessions even when both tenants share the same on-disk session store.
+
 ## License
 
 Apache-2.0. See `LICENSE`.
