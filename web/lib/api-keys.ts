@@ -45,6 +45,7 @@ export const ALL_SCOPES = [
   "webhooks:write",
   "members:read",
   "export:read",
+  "erasure:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -59,6 +60,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "webhooks:write": "Create and delete webhook endpoints via POST/DELETE /v1/webhooks.",
   "members:read": "List this workspace's members and their roles via GET /v1/members for IGA reconciliation.",
   "export:read": "Download this workspace's GDPR Article 20 data portability bundle via GET /v1/export.",
+  "erasure:write": "Execute GDPR Article 17 (right to erasure) bulk deletion of this workspace's saved comparisons via POST /v1/erasure.",
 };
 
 function normalizeScopes(input: unknown): Scope[] | undefined {

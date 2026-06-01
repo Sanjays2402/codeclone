@@ -408,6 +408,43 @@ export const ENDPOINTS: SpecEndpoint[] = [
   -o workspace-export.json`,
   },
   {
+    id: "erasure-execute",
+    method: "POST",
+    path: "/v1/erasure",
+    routeFile: "app/api/v1/erasure/route.ts",
+    summary: "Execute GDPR Article 17 (right to erasure) bulk deletion of the calling workspace's saved comparisons. Supports explicit id lists or a filter (tag, language, created_before) plus dry_run preview. Writes a v1.erasure.execute audit row that doubles as a DPO erasure receipt.",
+    scope: "erasure:write",
+    params: [
+      { name: "ids", kind: "body", required: false, type: "string[]", description: "Explicit list of share ids to erase. Mutually exclusive with 'filter'. Foreign-tenant ids are silently skipped, not 404ed." },
+      { name: "filter", kind: "body", required: false, type: "object", description: "Bulk selector with optional tag, language, and created_before (epoch ms). Mutually exclusive with 'ids'." },
+      { name: "dry_run", kind: "body", required: false, type: "boolean", description: "Preview the erasure without deleting; returns the same auth/scope/rate-limit decisions and the would-be id list." },
+    ],
+    sampleBody: JSON.stringify(
+      { filter: { tag: "customer-acme", created_before: 1717000000000 }, dry_run: true },
+      null,
+      2,
+    ),
+    sampleResponse: JSON.stringify(
+      {
+        mode: "filter",
+        workspace_id: "ws_acme",
+        erased: { ids: ["abc1234567", "def8901234"], count: 2 },
+        skipped: [],
+        failed: [],
+        receipt: {
+          action: "v1.erasure.execute",
+          actor_key_id: "key_xxx",
+          workspace_id: "ws_acme",
+          at: 1717200000000,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X POST ${host}/v1/erasure \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"filter":{"tag":"customer-acme"},"dry_run":true}'`,
+  },
+  {
     id: "webhooks-get",
     method: "GET",
     path: "/v1/webhooks/{id}",

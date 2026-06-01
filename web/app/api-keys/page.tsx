@@ -47,6 +47,7 @@ const ALL_SCOPES = [
   { id: "webhooks:write", label: "webhooks manage", desc: "POST + DELETE /v1/webhooks" },
   { id: "members:read", label: "members", desc: "GET /v1/members (IGA reconciliation)" },
   { id: "export:read", label: "export", desc: "GET /v1/export (GDPR portability bundle)" },
+  { id: "erasure:write", label: "erasure", desc: "POST /v1/erasure (GDPR Article 17 bulk erasure)" },
 ] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";
