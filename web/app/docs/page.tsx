@@ -435,6 +435,15 @@ export default function DocsPage() {
           >
             <Lightning size={12} weight="duotone" /> usage and quota
           </Link>
+          <a
+            href="/v1/discovery"
+            target="_blank"
+            rel="noreferrer"
+            title="Public, unauthenticated JSON manifest of every /v1 endpoint, scope, and policy. Safe to share with procurement and SecOps."
+            className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-3)]"
+          >
+            <Book size={12} weight="duotone" /> discovery manifest
+          </a>
         </div>
       </header>
 
