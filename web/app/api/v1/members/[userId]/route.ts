@@ -1,6 +1,15 @@
 /**
- * Public /v1/members/[userId]: programmatic role change, suspend, reinstate, remove.
+ * Public /v1/members/[userId]: programmatic single-member read,
+ * role change, suspend, reinstate, remove.
  *
+ *   GET    /v1/members/:user_id   -> fetch one member's role, status,
+ *                                    and (for support grants) expiry +
+ *                                    grant metadata, without paginating
+ *                                    the full roster. Identity teams use
+ *                                    this in joiner/mover/leaver runbooks
+ *                                    and Okta Lifecycle reconciles to
+ *                                    confirm a single user before pushing
+ *                                    a SCIM PATCH.
  *   PATCH  /v1/members/:user_id   -> change role ("editor" | "viewer") and/or
  *                                    status ("active" | "suspended"). Owner role
  *                                    transfer is not exposed here on purpose:
@@ -162,6 +171,74 @@ async function rbacGate(req: Request, key: any, action: string) {
     };
   }
   return { ws };
+}
+
+function presentMember(m: {
+  userId: string;
+  email: string;
+  role: string;
+  status?: string | null;
+  joinedAt: number;
+  suspendedAt?: number | null;
+  suspendedReason?: string | null;
+  expiresAt?: number | null;
+  grantedBy?: string | null;
+  grantReason?: string | null;
+}) {
+  return {
+    user_id: m.userId,
+    email: m.email,
+    role: m.role,
+    status: m.status ?? "active",
+    joined_at: m.joinedAt,
+    suspended_at: m.suspendedAt ?? null,
+    suspended_reason: m.suspendedReason ?? null,
+    expires_at: m.expiresAt ?? null,
+    granted_by: m.grantedBy ?? null,
+    grant_reason: m.grantReason ?? null,
+  };
+}
+
+export async function GET(req: Request, ctx: Ctx) {
+  const gate = await commonGate(req);
+  if ("error" in gate) return gate.error;
+  const { key, rl } = gate;
+  if (!hasScope(key, "members:read"))
+    return insufficientScope("members:read", key.scopes);
+
+  const ws = await getWorkspace(key.workspaceId!);
+  if (!ws) {
+    return NextResponse.json(
+      { error: { type: "not_found", message: "Workspace not found." } },
+      { status: 404, headers: rl.headers },
+    );
+  }
+
+  const { userId } = await resolveParams(ctx);
+  if (typeof userId !== "string" || !userId.trim()) {
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: "Missing user id in path." } },
+      { status: 400, headers: rl.headers },
+    );
+  }
+
+  const target = ws.members.find((m) => m.userId === userId);
+  if (!target) return notFound();
+
+  void recordUse(key.id, clientIpFromRequest(req));
+  void tryRecordAudit(req, {
+    action: "v1.members.get",
+    actorId: key.id,
+    workspaceId: key.workspaceId!,
+    target: { type: "workspace_member", id: userId },
+    status: "ok",
+    meta: { prefix: key.prefix },
+  });
+
+  return NextResponse.json(
+    { member: presentMember(target) },
+    { headers: rl.headers },
+  );
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {

@@ -509,6 +509,37 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS "${host}/v1/members?include_suspended=true" \\\n  -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "members-get",
+    method: "GET",
+    path: "/v1/members/:user_id",
+    routeFile: "app/api/v1/members/[userId]/route.ts",
+    summary: "Fetch a single workspace member's role, status, and (for support grants) expiry, without paginating the roster. Used by IGA runbooks reconciling one user.",
+    scope: "members:read",
+    params: [
+      { name: "user_id", kind: "path", required: true, type: "string", description: "Target user id within the calling workspace." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        member: {
+          user_id: "u_91",
+          email: "bob@acme.com",
+          role: "editor",
+          status: "active",
+          joined_at: 1717100000000,
+          suspended_at: null,
+          suspended_reason: null,
+          expires_at: null,
+          granted_by: null,
+          grant_reason: null,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/members/u_91 \\\n  -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "members-invite",
     method: "POST",
     path: "/v1/members",
