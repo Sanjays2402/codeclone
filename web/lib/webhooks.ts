@@ -579,6 +579,102 @@ export async function setDisabled(
   return true;
 }
 
+/**
+ * Mutable fields on a webhook record. Signing secret is intentionally
+ * NOT included: rotation has its own dedicated dual-secret flow with
+ * receiver grace windows (`rotateSecret`/`finalizeRotation`).
+ * Pass `undefined` to leave a field unchanged. Returns the new
+ * canonical summary plus a diff object suitable for audit logging.
+ */
+export interface UpdateWebhookInput {
+  label?: unknown;
+  url?: unknown;
+  events?: unknown;
+  disabled?: unknown;
+  domainAllowlist?: readonly string[];
+}
+
+export interface UpdateWebhookResult {
+  record: WebhookSummary;
+  diff: {
+    before: Partial<Pick<WebhookSummary, "label" | "url" | "events" | "disabled">>;
+    after: Partial<Pick<WebhookSummary, "label" | "url" | "events" | "disabled">>;
+  };
+  changed: boolean;
+}
+
+export async function updateWebhook(
+  id: string,
+  workspaceId: string,
+  input: UpdateWebhookInput,
+): Promise<UpdateWebhookResult> {
+  if (!isId(id)) throw new Error("Invalid webhook id.");
+  if (!validateWorkspaceId(workspaceId)) throw new Error("Invalid workspace id.");
+  const rec = await loadWebhook(id);
+  if (!rec) throw new Error("Webhook not found.");
+  if (!webhookBelongsTo(rec, workspaceId)) throw new Error("Webhook not found.");
+
+  const before: UpdateWebhookResult["diff"]["before"] = {};
+  const after: UpdateWebhookResult["diff"]["after"] = {};
+  let changed = false;
+
+  if (input.url !== undefined) {
+    const check = validateUrl(input.url);
+    if (!check.ok) throw new Error(check.error);
+    if (input.domainAllowlist && input.domainAllowlist.length > 0) {
+      const host = new URL(check.url).hostname;
+      if (!matchesDomainAllowlist(host, input.domainAllowlist)) {
+        throw new Error(
+          `URL host '${host}' is not in this workspace's webhook domain allowlist.`,
+        );
+      }
+    }
+    if (rec.url !== check.url) {
+      before.url = rec.url;
+      after.url = check.url;
+      rec.url = check.url;
+      changed = true;
+    }
+  }
+  if (input.events !== undefined) {
+    const events = sanitizeEvents(input.events);
+    const sameLen = events.length === rec.events.length;
+    const same = sameLen && events.every((e) => rec.events.includes(e));
+    if (!same) {
+      before.events = rec.events.slice();
+      after.events = events.slice();
+      rec.events = events;
+      changed = true;
+    }
+  }
+  if (input.label !== undefined) {
+    const label = sanitizeLabel(input.label);
+    if (label !== rec.label) {
+      before.label = rec.label;
+      after.label = label;
+      rec.label = label;
+      changed = true;
+    }
+  }
+  if (input.disabled !== undefined) {
+    const want = Boolean(input.disabled);
+    const cur = Boolean(rec.disabled);
+    if (want !== cur) {
+      before.disabled = cur;
+      after.disabled = want;
+      rec.disabled = want || undefined;
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    rec.updatedAt = Date.now();
+    await fs.writeFile(file(rec.id), JSON.stringify(rec), "utf-8");
+  }
+
+  return { record: summarize(rec), diff: { before, after }, changed };
+}
+
 // Bounds for rotation grace window. Receivers need enough time to deploy
 // a verifier that accepts the new secret; we cap at 30d so a forgotten
 // rotation eventually finalizes on its own.
