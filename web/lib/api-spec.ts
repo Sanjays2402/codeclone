@@ -585,6 +585,35 @@ export const ENDPOINTS: SpecEndpoint[] = [
       `curl -sS -X POST ${host}/v1/erasure \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{"filter":{"tag":"customer-acme"},"dry_run":true}'`,
   },
   {
+    id: "webhooks-ping",
+    method: "POST",
+    path: "/v1/webhooks/{id}/ping",
+    routeFile: "app/api/v1/webhooks/[id]/ping/route.ts",
+    summary: "Fire a one-shot, fully-signed webhook.ping delivery so CI / SOAR scripts can prove HMAC verification and reachability without a person clicking the dashboard. Increments the same counters and writes the same delivery-log entry as a live event. Returns 200 if the receiver answered 2xx, 502 otherwise, 409 if the webhook is paused, 404 for cross-tenant ids.",
+    scope: "webhooks:write",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Webhook id from /v1/webhooks or the dashboard. A webhook id in another workspace returns 404 with no side effects." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        delivery: {
+          id: "whd_2a9k1p4q",
+          webhookId: "wh_2a9k1p4q",
+          event: "webhook.ping",
+          ok: true,
+          status: 200,
+          attempts: 1,
+          durationMs: 42,
+          attemptedAt: 1717000000000,
+        },
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS -X POST ${host}/v1/webhooks/wh_2a9k1p4q/ping \\\n  -H "Authorization: Bearer ${key}" \\\n  -H "Content-Type: application/json" \\\n  -d '{}'`,
+  },
+  {
     id: "webhooks-get",
     method: "GET",
     path: "/v1/webhooks/{id}",
