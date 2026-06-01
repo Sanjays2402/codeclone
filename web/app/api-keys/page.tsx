@@ -42,6 +42,7 @@ const ALL_SCOPES = [
   { id: "shares:read", label: "shares", desc: "GET /v1/shares" },
   { id: "shares:write", label: "shares delete", desc: "DELETE /v1/shares/:id" },
   { id: "usage:read", label: "usage", desc: "GET /v1/usage" },
+  { id: "audit:read", label: "audit", desc: "GET /v1/audit (SIEM stream)" },
 ] as const;
 
 type Status = "loading" | "ready" | "error" | "signedout";

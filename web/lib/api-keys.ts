@@ -40,6 +40,7 @@ export const ALL_SCOPES = [
   "shares:read",
   "shares:write",
   "usage:read",
+  "audit:read",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -49,6 +50,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "shares:read": "List and fetch saved comparison results via /v1/shares.",
   "shares:write": "Delete saved comparison results via DELETE /v1/shares/:id.",
   "usage:read": "Read this workspace's /v1 usage and plan state via GET /v1/usage.",
+  "audit:read": "Stream this workspace's audit log to a SIEM via GET /v1/audit.",
 };
 
 function normalizeScopes(input: unknown): Scope[] | undefined {

@@ -10,6 +10,30 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- SIEM-friendly audit stream with `GET /v1/audit`. Enterprise security teams need to ingest CodeClone's audit log into Splunk, Datadog, Elastic, or a generic NDJSON HTTP collector on a polling cron; the dashboard `/api/audit` route is cookie-authenticated and meant for humans, so until this change there was no machine-readable way for a SIEM forwarder to pull workspace activity. `GET /v1/audit` now accepts the same Bearer token (or `x-api-key`) as the rest of `/v1`, requires the new least-privilege `audit:read` scope, and emits the calling key's workspace entries as NDJSON by default (`format=ndjson`, one entry per line) or as a JSON object with an `items` array (`format=json`). Tenant scope is structural: the route builds an `allowedWorkspaceIds` set containing only the key's own `workspaceId` and passes it to `listAudit()`, so a key minted in workspace A can never tail workspace B's audit log even though both tenants share the same JSONL store. Keys with no workspace binding get an empty scope and see nothing; Bearer callers are explicitly not admitted to null-workspace user events (`selfActorId: undefined`). The standard workspace enforcement chain (lockdown, workspace IP allowlist, per-key IP allowlist, residency, API-key policy) runs before any entry is read, owner-configured retention is honoured so consumers can never read entries the dashboard already hides as expired, the per-key rate-limit window is *enforced* (not peeked) so this endpoint cannot be used as a free heartbeat, and every call writes a `v1.audit.read` row to the tamper-evident audit chain (audit reads are themselves auditable). Cursor pagination is exposed via the `X-Next-Until` response header (newest-first by `ts`; pass it back as `?until=` to walk backwards). Pinned by `web/tests/v1-audit-tenant-isolation.test.ts` (cross-tenant isolation via `allowedWorkspaceIds`, scope rejection for keys missing `audit:read`, and a source-level wiring check that fails on regression if the scope filter, the rate-limit `enforce` call, the tenant scope, or any of the workspace gates is dropped).
+
+### Try it: stream this workspace's audit log into a SIEM
+
+```bash
+pnpm dev   # web dashboard on http://localhost:3000
+
+# Mint a least-privilege key in the API Keys page with only the
+# audit:read scope (and your workspace IP allowlist, if you use one).
+# Then tail the workspace audit log as NDJSON:
+curl -sS "http://localhost:3000/v1/audit?limit=100" \
+  -H "Authorization: Bearer cc_live_..."
+# {"v":1,"id":"a1b2c3d4e5","ts":1717000000000,"actorId":"u_42","workspaceId":"ws_acme","action":"share.create",...}
+# {"v":1,"id":"f6g7h8i9j0","ts":1716999940000,"actorId":"k_abc1234","workspaceId":"ws_acme","action":"v1.compare.ok",...}
+
+# Only surface policy denials (e.g. for a Splunk rule on IP-allowlist drops):
+curl -sS "http://localhost:3000/v1/audit?status=denied&action=v1." \
+  -H "Authorization: Bearer cc_live_..."
+
+# Page backwards using the X-Next-Until header from the previous response:
+curl -sS -D - "http://localhost:3000/v1/audit?limit=100&until=1716999940000" \
+  -H "Authorization: Bearer cc_live_..."
+```
+
 - Tenant-scoped share history closes a cross-workspace read/write leak. Saved comparisons (`/r/[id]`, `/api/share`, `/api/share/export`, `/v1/shares`) previously loaded any record by id regardless of which workspace the caller belonged to, so a signed-in user or API key in workspace B could list, read, patch, delete, and export workspace A's saved diffs. Records now carry a `workspaceId` stamped at creation time (schema v3, legacy v1/v2 records load as unscoped and remain readable through the public `/r/[id]` link only). Every mutating dashboard route and the entire `/v1/shares` surface now resolves the caller's workspace and passes a `ScopeHint` into `loadShare`/`updateShare`/`deleteShare`/`listSharesPage`/`exportShares`; cross-tenant ids return 404 instead of leaking the title or score, and tenant-local facet counts (languages, clone labels) no longer reveal the cardinality of other tenants' history. Pinned by `web/tests/share-tenant-isolation.test.ts` (cross-tenant read, patch, delete, list, and export all denied; legacy back-compat preserved).
 
   ```bash

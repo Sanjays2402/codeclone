@@ -199,6 +199,52 @@ export const ENDPOINTS: SpecEndpoint[] = [
     curl: (host, key) =>
       `curl -sS ${host}/v1/shares/abc1234567 \\\n  -H "Authorization: Bearer ${key}"`,
   },
+  {
+    id: "audit",
+    method: "GET",
+    path: "/v1/audit",
+    routeFile: "app/api/v1/audit/route.ts",
+    summary: "Stream workspace-scoped audit entries as NDJSON for SIEM ingestion (Splunk, Datadog, Elastic).",
+    scope: "audit:read",
+    params: [
+      { name: "limit", kind: "query", required: false, type: "1..500", description: "Page size. Default 100." },
+      { name: "format", kind: "query", required: false, type: "ndjson|json", description: "Response format. Default ndjson (one entry per line). 'json' returns an object with an items array." },
+      { name: "action", kind: "query", required: false, type: "string", description: "Exact action match (e.g. 'snippet.create') or prefix with trailing dot ('snippet.')." },
+      { name: "status", kind: "query", required: false, type: "ok|denied|error", description: "Filter by outcome. Useful for surfacing only policy denials." },
+      { name: "actorId", kind: "query", required: false, type: "string", description: "Filter by acting user or API key id." },
+      { name: "targetType", kind: "query", required: false, type: "string", description: "Filter by audited target type (e.g. 'share', 'api_key')." },
+      { name: "targetId", kind: "query", required: false, type: "string", description: "Filter by audited target id." },
+      { name: "since", kind: "query", required: false, type: "ISO 8601 or ms epoch", description: "Only return entries at or after this time." },
+      { name: "until", kind: "query", required: false, type: "ISO 8601 or ms epoch", description: "Only return entries at or before this time. Use the X-Next-Until response header to paginate backwards." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        workspace_id: "ws_acme",
+        count: 1,
+        limit: 100,
+        next_until: null,
+        items: [
+          {
+            v: 1,
+            id: "a1b2c3d4e5",
+            ts: 1717000000000,
+            actorId: "u_42",
+            actorEmail: "alice@acme.com",
+            workspaceId: "ws_acme",
+            action: "share.create",
+            target: { type: "share", id: "abc1234567" },
+            status: "ok",
+            ip: "203.0.113.7",
+            requestId: "req_8f3e2a1b",
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS "${host}/v1/audit?limit=100&status=denied" \\\n  -H "Authorization: Bearer ${key}"`,
+  },
 ];
 
 export function endpointsForScopes(scopes: readonly Scope[] | undefined): SpecEndpoint[] {
