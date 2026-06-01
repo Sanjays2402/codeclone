@@ -12,7 +12,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
-import { loadShare, type ShareRecord } from "./share.ts";
+import { loadShare, type ScopeHint, type ShareRecord } from "./share.ts";
 
 const CWD = process.cwd();
 
@@ -210,11 +210,15 @@ export async function deleteCollection(id: string): Promise<boolean> {
 export async function addItem(
   id: string,
   shareId: string,
+  opts: { shareScope?: ScopeHint } = {},
 ): Promise<CollectionRecord | null> {
   if (!isShareIdLike(shareId)) throw new Error("invalid shareId");
   // confirm the share actually exists; refuse otherwise so collections
-  // never accumulate dangling references.
-  const share = await loadShare(shareId);
+  // never accumulate dangling references. When called from a tenant
+  // -scoped /v1 path, the caller passes shareScope so we cannot link a
+  // share owned by workspace B into workspace A's collection even if
+  // both stores share the same filesystem prefix.
+  const share = await loadShare(shareId, opts.shareScope);
   if (!share) throw new Error("share not found");
   const rec = await loadCollection(id);
   if (!rec) return null;
