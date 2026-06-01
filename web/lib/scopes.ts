@@ -53,7 +53,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "snippets:read": "List and fetch the calling user's saved snippets via GET /v1/snippets and GET /v1/snippets/:id.",
   "snippets:write": "Create, update, and delete the calling user's saved snippets via POST/PATCH/DELETE /v1/snippets.",
   "keys:read": "List this workspace's API keys via GET /v1/keys for SOC2 key inventory and rotation tracking.",
-  "keys:write": "Rotate or revoke this workspace's API keys via POST /v1/keys/:id/rotate and DELETE /v1/keys/:id for automated SOC2 90-day rotation.",
+  "keys:write": "Rotate, revoke, or edit this workspace's API keys via POST /v1/keys/:id/rotate, DELETE /v1/keys/:id, and PATCH /v1/keys/:id (narrow scopes, retune rpm, tighten ipAllowlist, shift expiresAt, rename) for automated SOC2 90-day rotation and continuous least-privilege.",
   "collections:read": "List and fetch this workspace's share collections via GET /v1/collections and GET /v1/collections/:id.",
   "collections:write": "Create, update, and delete this workspace's share collections via POST/PATCH/DELETE /v1/collections.",
   "sessions:read": "List active dashboard sessions for every member of this workspace via GET /v1/sessions for SecOps incident triage and SOC2 CC6.1 access reviews.",

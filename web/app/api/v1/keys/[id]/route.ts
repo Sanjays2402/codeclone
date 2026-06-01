@@ -37,6 +37,7 @@ import {
   revokeKeyForWorkspace,
   rotateKeyForWorkspace,
   summarize,
+  updateKeyForWorkspace,
 } from "../../../../../lib/api-keys";
 import { enforce as enforceRateLimit } from "../../../../../lib/rate-limit";
 import {
@@ -49,6 +50,7 @@ import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../../lib/api-key-p
 import { enforceWorkspaceLockdownForKey } from "../../../../../lib/lockdown-enforce";
 import { tryRecordAudit } from "../../../../../lib/audit";
 import { logUsage } from "../../../../../lib/usage";
+import { isDryRun, DRY_RUN_HEADER } from "../../../../../lib/dry-run";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -263,6 +265,165 @@ export async function DELETE(req: Request, ctx: Ctx) {
   });
   return NextResponse.json(
     { id: target.id, revoked: true },
+    { headers: rl.headers },
+  );
+}
+
+/**
+ * PATCH /v1/keys/[id] — edit a key in place.
+ *
+ * Security teams asked for this so they can narrow scopes on an
+ * existing key, drop the per-key rate-limit ceiling, tighten the
+ * per-key IP allowlist, extend (or shorten) the expiry deadline,
+ * or rename a key without rotating the secret and breaking every
+ * running pipeline. The secret never changes here; rotation is a
+ * separate flow at POST /v1/keys/:id/rotate.
+ *
+ * Scope: `keys:write`. Tenant-scoped to the calling key's workspace
+ * via `updateKeyForWorkspace`. Rate-limit, lockdown, IP allowlist,
+ * residency, and API-key policy gates all still apply. Every mutation
+ * (and every dry-run preview) is audited with a before/after diff for
+ * SOC2 CC6.1 / ISO 27001 A.9.2 access-change evidence.
+ *
+ * Self-protection: a caller cannot PATCH the key it is currently
+ * authenticating with. Narrowing your own scopes mid-flight is the
+ * fastest way to brick yourself out of the API; use a separate admin
+ * key. (Same rule as rotate/revoke.)
+ *
+ * Narrowing-only on scopes: a PATCH cannot grant a scope the key does
+ * not already hold. Widening requires rotating or recreating the key.
+ */
+export async function PATCH(req: Request, ctx: Ctx) {
+  const gate = await commonGate(req);
+  if ("error" in gate) return gate.error;
+  const { key, rl } = gate;
+  if (!hasScope(key, "keys:write")) return insufficientScope("keys:write", key.scopes);
+
+  const { id } = await resolveParams(ctx);
+  if (id === key.id) return selfTarget();
+
+  let body: unknown = null;
+  const ctype = (req.headers.get("content-type") || "").toLowerCase();
+  if (ctype.includes("application/json")) {
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: { type: "invalid_request", message: "Body must be valid JSON." } },
+        { status: 400, headers: rl.headers },
+      );
+    }
+  }
+  const b = (body ?? {}) as {
+    label?: unknown;
+    scopes?: unknown;
+    rpm?: unknown;
+    ipAllowlist?: unknown;
+    expiresAt?: unknown;
+  };
+  const hasAny =
+    b.label !== undefined ||
+    b.scopes !== undefined ||
+    b.rpm !== undefined ||
+    b.ipAllowlist !== undefined ||
+    b.expiresAt !== undefined;
+  if (!hasAny) {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message:
+            "Body must contain at least one of: label, scopes, rpm, ipAllowlist, expiresAt.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+
+  const target = await loadKeyForWorkspace(id, key.workspaceId!);
+  if (!target) return notFound();
+
+  const dryRun = isDryRun(req, body);
+  if (dryRun) {
+    void tryRecordAudit(req, {
+      action: "v1.keys.update.dry_run",
+      actorId: key.id,
+      workspaceId: key.workspaceId,
+      target: { type: "api_key", id: target.id, label: target.label },
+      meta: {
+        proposed: {
+          label: typeof b.label === "string" ? b.label : undefined,
+          scopes: Array.isArray(b.scopes) ? b.scopes : undefined,
+          rpm: b.rpm === null ? null : typeof b.rpm === "number" ? b.rpm : undefined,
+          ipAllowlist: Array.isArray(b.ipAllowlist)
+            ? b.ipAllowlist
+            : b.ipAllowlist === null
+              ? null
+              : undefined,
+          expiresAt:
+            b.expiresAt === null
+              ? null
+              : typeof b.expiresAt === "number"
+                ? b.expiresAt
+                : undefined,
+        },
+      },
+    });
+    return NextResponse.json(
+      {
+        dry_run: true,
+        would: { update_key: true, rotate_secret: false, record_usage: true },
+        key: summarize(target),
+      },
+      { headers: { ...rl.headers, ...DRY_RUN_HEADER } },
+    );
+  }
+
+  let result;
+  try {
+    result = await updateKeyForWorkspace(id, key.workspaceId!, {
+      label: b.label,
+      scopes: b.scopes,
+      rpm: b.rpm,
+      ipAllowlist: b.ipAllowlist,
+      expiresAt: b.expiresAt,
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: msg } },
+      { status: 400, headers: rl.headers },
+    );
+  }
+  if (!result) return notFound();
+
+  void recordUse(key.id, clientIpFromRequest(req));
+  void logUsage({
+    ts: Date.now(),
+    keyId: key.id,
+    endpoint: "PATCH /v1/keys/:id",
+    bytes: 0,
+    latencyMs: 0,
+    workspaceId: key.workspaceId,
+  });
+  void tryRecordAudit(req, {
+    action: "v1.keys.update",
+    actorId: key.id,
+    workspaceId: key.workspaceId,
+    target: { type: "api_key", id: result.summary.id, label: result.summary.label },
+    diff: result.diff,
+    meta: {
+      changed: result.changed,
+      rejected_cidrs: result.rejectedCidrs.length > 0 ? result.rejectedCidrs : undefined,
+    },
+  });
+
+  return NextResponse.json(
+    {
+      key: result.summary,
+      changed: result.changed,
+      rejected_cidrs: result.rejectedCidrs,
+    },
     { headers: rl.headers },
   );
 }

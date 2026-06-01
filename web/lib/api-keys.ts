@@ -79,7 +79,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "snippets:read": "List and fetch the calling user's saved snippets via GET /v1/snippets and GET /v1/snippets/:id.",
   "snippets:write": "Create, update, and delete the calling user's saved snippets via POST/PATCH/DELETE /v1/snippets.",
   "keys:read": "List this workspace's API keys via GET /v1/keys for SOC2 key inventory and rotation tracking.",
-  "keys:write": "Rotate or revoke this workspace's API keys via POST /v1/keys/:id/rotate and DELETE /v1/keys/:id for automated SOC2 90-day rotation.",
+  "keys:write": "Rotate, revoke, or edit this workspace's API keys via POST /v1/keys/:id/rotate, DELETE /v1/keys/:id, and PATCH /v1/keys/:id (narrow scopes, retune rpm, tighten ipAllowlist, shift expiresAt, rename) for automated SOC2 90-day rotation and continuous least-privilege.",
   "collections:read": "List and fetch this workspace's share collections via GET /v1/collections and GET /v1/collections/:id.",
   "collections:write": "Create, update, and delete this workspace's share collections via POST/PATCH/DELETE /v1/collections.",
   "sessions:read": "List active dashboard sessions for every member of this workspace via GET /v1/sessions for SecOps incident triage and SOC2 CC6.1 access reviews.",
@@ -386,6 +386,212 @@ export async function updateKey(
   }
   await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
   return { summary: summarize(rec), rejectedCidrs };
+}
+
+/**
+ * Tenant-scoped key update. Mutates non-secret, non-revocation fields
+ * on an existing key while preserving id, prefix, hash, createdAt,
+ * usageCount, lastUsedAt, owner, recentIps and workspace binding.
+ *
+ * Supported fields: `label`, `scopes` (narrowing only, never widening),
+ * `rpm` (per-key rate-limit override; pass null to clear), `ipAllowlist`
+ * (CIDR list; pass null/[] to clear), `expiresAt` (epoch ms; clamped to
+ * the workspace API key max-age policy when set; null clears).
+ *
+ * Returns null when the id does not exist OR belongs to a different
+ * workspace. Throws on bad input so the route can surface a 400.
+ * Refuses to mutate a revoked or expired key (route returns 400).
+ * `diff` is suitable for audit logging; `changed` is false when the
+ * patch is a no-op.
+ */
+export interface UpdateKeyForWorkspaceInput {
+  label?: unknown;
+  scopes?: unknown;
+  rpm?: unknown;
+  ipAllowlist?: unknown;
+  expiresAt?: unknown;
+}
+
+export interface UpdateKeyForWorkspaceResult {
+  summary: ApiKeySummary;
+  diff: {
+    before: Partial<Pick<ApiKeySummary, "label" | "scopes" | "rateLimit" | "ipAllowlist" | "expiresAt">>;
+    after: Partial<Pick<ApiKeySummary, "label" | "scopes" | "rateLimit" | "ipAllowlist" | "expiresAt">>;
+  };
+  changed: boolean;
+  rejectedCidrs: string[];
+}
+
+export async function updateKeyForWorkspace(
+  id: string,
+  workspaceId: string,
+  patch: UpdateKeyForWorkspaceInput,
+): Promise<UpdateKeyForWorkspaceResult | null> {
+  const rec = await loadKey(id);
+  if (!rec) return null;
+  if (rec.workspaceId !== workspaceId) return null;
+  if (rec.revoked) throw new Error("Key is revoked and cannot be edited.");
+  if (isExpired(rec)) throw new Error("Key is expired and cannot be edited.");
+
+  const before: UpdateKeyForWorkspaceResult["diff"]["before"] = {};
+  const after: UpdateKeyForWorkspaceResult["diff"]["after"] = {};
+  let changed = false;
+  let rejectedCidrs: string[] = [];
+
+  if (patch.label !== undefined) {
+    const label = sanitizeLabel(patch.label);
+    if (label !== rec.label) {
+      before.label = rec.label;
+      after.label = label;
+      rec.label = label;
+      changed = true;
+    }
+  }
+
+  if (patch.scopes !== undefined) {
+    if (patch.scopes === null) {
+      throw new Error(
+        "scopes cannot be cleared. A null scopes field would silently widen this key to legacy full-privilege mode. Pass an array of scope strings instead.",
+      );
+    }
+    const next = normalizeScopes(patch.scopes);
+    if (!next) {
+      throw new Error(
+        "scopes must be a non-empty array of valid scope strings. Use GET /v1/keys/:id to see the current scope set.",
+      );
+    }
+    // Narrowing-only: refuse to grant a scope the key does not
+    // already hold. Legacy keys with no `scopes` field are full-
+    // privilege; once narrowed they are pinned to the new set.
+    const current = Array.isArray(rec.scopes) ? rec.scopes : (ALL_SCOPES as readonly Scope[]);
+    const widened = next.filter((s) => !current.includes(s));
+    if (widened.length > 0) {
+      throw new Error(
+        `scopes patch must narrow, not widen. Refused new scopes: ${widened.join(", ")}. Rotate or recreate the key to grant additional scopes.`,
+      );
+    }
+    const curArr = Array.isArray(rec.scopes) ? rec.scopes.slice() : null;
+    const sameLen = curArr ? curArr.length === next.length : false;
+    const same = !!curArr && sameLen && next.every((s) => curArr.includes(s));
+    if (!same) {
+      before.scopes = curArr ?? undefined;
+      after.scopes = next.slice();
+      rec.scopes = next;
+      changed = true;
+    }
+  }
+
+  if (patch.rpm !== undefined) {
+    const curRl = rec.rateLimit ? { ...rec.rateLimit } : undefined;
+    if (patch.rpm === null || patch.rpm === "") {
+      if (rec.rateLimit) {
+        before.rateLimit = curRl;
+        after.rateLimit = undefined;
+        delete rec.rateLimit;
+        changed = true;
+      }
+    } else {
+      const rpm = normalizeRpm(patch.rpm);
+      if (typeof rpm !== "number") {
+        throw new Error(`rpm must be an integer between ${MIN_RPM_HINT} and 100000.`);
+      }
+      if (!curRl || curRl.rpm !== rpm) {
+        before.rateLimit = curRl;
+        after.rateLimit = { rpm };
+        rec.rateLimit = { rpm };
+        changed = true;
+      }
+    }
+  }
+
+  if (patch.ipAllowlist !== undefined) {
+    const curList = Array.isArray(rec.ipAllowlist) && rec.ipAllowlist.length > 0
+      ? rec.ipAllowlist.slice()
+      : undefined;
+    if (
+      patch.ipAllowlist === null ||
+      (Array.isArray(patch.ipAllowlist) && patch.ipAllowlist.length === 0)
+    ) {
+      if (curList) {
+        before.ipAllowlist = curList;
+        after.ipAllowlist = undefined;
+        delete rec.ipAllowlist;
+        changed = true;
+      }
+    } else {
+      const { ok, rejected } = sanitizeCidrList(patch.ipAllowlist);
+      rejectedCidrs = rejected;
+      if (ok.length === 0) {
+        throw new Error(
+          `ipAllowlist contained no valid CIDR entries. Rejected: ${rejected.join(", ") || "(none)"}.`,
+        );
+      }
+      const sameLen = curList ? curList.length === ok.length : false;
+      const same = !!curList && sameLen && ok.every((c) => curList.includes(c));
+      if (!same) {
+        before.ipAllowlist = curList;
+        after.ipAllowlist = ok.slice();
+        rec.ipAllowlist = ok;
+        changed = true;
+      }
+    }
+  }
+
+  if (patch.expiresAt !== undefined) {
+    const curExp = rec.expiresAt;
+    if (patch.expiresAt === null) {
+      // Refuse to lift expiry when a workspace policy demands one.
+      if (rec.workspaceId) {
+        try {
+          const ws = await getWorkspace(rec.workspaceId);
+          const deadline = apiKeyPolicyDeadline(ws, rec.createdAt);
+          if (deadline !== null) {
+            throw new Error(
+              "expiresAt cannot be cleared: workspace API key max-age policy requires an expiry.",
+            );
+          }
+        } catch (e) {
+          // Re-throw policy violation; swallow read failures.
+          if (e instanceof Error && e.message.startsWith("expiresAt cannot be cleared")) {
+            throw e;
+          }
+        }
+      }
+      if (curExp !== undefined) {
+        before.expiresAt = curExp;
+        after.expiresAt = undefined;
+        delete rec.expiresAt;
+        changed = true;
+      }
+    } else {
+      const n = typeof patch.expiresAt === "number" ? patch.expiresAt : Number(patch.expiresAt);
+      if (!Number.isFinite(n) || n <= Date.now()) {
+        throw new Error("expiresAt must be a future epoch-ms timestamp.");
+      }
+      let next = Math.floor(n);
+      // Clamp to workspace API key max-age policy.
+      if (rec.workspaceId) {
+        try {
+          const ws = await getWorkspace(rec.workspaceId);
+          const deadline = apiKeyPolicyDeadline(ws, rec.createdAt);
+          if (deadline !== null) next = Math.min(next, deadline);
+        } catch {
+          // ignore read failures; /v1 request-time enforcement still applies.
+        }
+      }
+      if (curExp !== next) {
+        before.expiresAt = curExp;
+        after.expiresAt = next;
+        rec.expiresAt = next;
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    await fs.writeFile(keyFile(id), JSON.stringify(rec), "utf-8");
+  }
+  return { summary: summarize(rec), diff: { before, after }, changed, rejectedCidrs };
 }
 
 export async function revokeKey(id: string, userId?: string): Promise<boolean> {
