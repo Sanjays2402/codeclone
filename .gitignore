@@ -76,6 +76,8 @@ data/repos/
 adapters/
 checkpoints/
 runs/
+!web/app/api/v1/runs/
+!web/app/api/v1/runs/**
 mlruns/
 logs/
 *.gguf

@@ -855,6 +855,34 @@ export const ENDPOINTS: SpecEndpoint[] = [
     sampleResponse: JSON.stringify({ user_id: "u_42", revoked_count: 3 }, null, 2),
     curl: (host, key) => `curl -sS -X POST ${host}/v1/sessions/revoke-all -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"user_id":"u_42"}'`,
   },
+  {
+    id: "runs-list",
+    method: "GET",
+    path: "/v1/runs",
+    routeFile: "app/api/v1/runs/route.ts",
+    summary: "List training runs with headline metrics. Drop-in feed for MLflow, W&B, and ML supply-chain SIEM ingest.",
+    scope: "runs:read",
+    params: [
+      { name: "status", kind: "query", required: false, type: "string", description: "Filter by run status: queued, running, passed, failed." },
+      { name: "limit", kind: "query", required: false, type: "integer", description: "Max items to return. Default 50, max 200." },
+      { name: "offset", kind: "query", required: false, type: "integer", description: "Page offset. Default 0." },
+    ],
+    sampleResponse: JSON.stringify({ count: 1, total: 1, limit: 50, offset: 0, items: [{ id: "r_2024_05_31_a", recipe_hash: "sha256:abc123", steps: 1500, last_loss: 0.412, backend: "mlx", model: "Qwen/Qwen2.5-Coder-0.5B", started_at: 1717000000000, status: "passed" }] }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/runs -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "runs-get",
+    method: "GET",
+    path: "/v1/runs/{id}",
+    routeFile: "app/api/v1/runs/[id]/route.ts",
+    summary: "Fetch hyperparameters, per-step metrics, and eval report for a single training run.",
+    scope: "runs:read",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Run id from /v1/runs." },
+    ],
+    sampleResponse: JSON.stringify({ id: "r_2024_05_31_a", recipe_hash: "sha256:abc123", steps: 1500, last_loss: 0.412, backend: "mlx", model: "Qwen/Qwen2.5-Coder-0.5B", started_at: 1717000000000, status: "passed", params: { lr: 0.0002, lora_r: 16 }, metrics: [{ step: 100, loss: 0.91 }, { step: 200, loss: 0.74 }], eval_report: { model: "Qwen/Qwen2.5-Coder-0.5B", mini_pass_rate: 0.72 } }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/runs/r_2024_05_31_a -H "Authorization: Bearer ${key}"`,
+  },
 ];
 
 export function endpointsForScopes(scopes: readonly Scope[] | undefined): SpecEndpoint[] {

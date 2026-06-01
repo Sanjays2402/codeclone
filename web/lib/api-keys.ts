@@ -55,6 +55,7 @@ export const ALL_SCOPES = [
   "collections:write",
   "sessions:read",
   "sessions:write",
+  "runs:read",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -79,6 +80,7 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "collections:write": "Create, update, and delete this workspace's share collections via POST/PATCH/DELETE /v1/collections.",
   "sessions:read": "List active dashboard sessions for every member of this workspace via GET /v1/sessions for SecOps incident triage and SOC2 CC6.1 access reviews.",
   "sessions:write": "Revoke individual or all dashboard sessions for a member of this workspace via DELETE /v1/sessions/:jti and POST /v1/sessions/revoke-all for credential-compromise containment.",
+  "runs:read": "Read training run metadata, hyperparameters, and per-step metrics via GET /v1/runs and GET /v1/runs/:id for MLflow / Weights & Biases / SIEM ingest.",
 };
 
 function normalizeScopes(input: unknown): Scope[] | undefined {

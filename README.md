@@ -10,6 +10,20 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic training-run feed via `GET /v1/runs` and `GET /v1/runs/{id}`, behind the new `runs:read` scope. MLOps platforms (MLflow, Weights & Biases, internal model registries) and ML supply-chain SIEM ingest need a stable, scoped, audited way to enumerate every fine-tuning run on the host and pull its hyperparameters, per-step metrics, and eval report. Until this change the dashboard's `/api/runs` route was the only programmatic surface and it is unauthenticated browser scaffolding, not something a procurement reviewer will sign off on. The list endpoint accepts `status` (queued/running/passed/failed), `limit`, and `offset`; the detail endpoint returns params, the full metrics timeline, and the eval report when present. Both endpoints run the standard `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate-limit **enforce** so the call is metered), write a `v1.runs.list` / `v1.runs.read` audit row, and post a billable usage event so the integration shows up in `/usage` timelines. The detail route additionally clamps the path id to a slug regex so traversal attempts (`../etc/passwd`) fail with 400 before any disk access. Pinned by `web/tests/v1-runs.test.ts` (scope registration in both `lib/api-keys` and the client-safe `lib/scopes` mirror, RBAC at the lib layer, route-source wiring of scope/rate-limit/enforcement chain/audit/usage, traversal-guard regex, and api-spec registration).
+
+  ### Try it: stream training runs into MLflow / W&B / SIEM
+
+  ```bash
+  # 1. List recent runs (filter by status if you only want completed ones).
+  curl -sS "https://codeclone.example.com/v1/runs?status=passed&limit=50" \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+
+  # 2. Pull params + per-step metrics + eval report for one run.
+  curl -sS https://codeclone.example.com/v1/runs/r_2024_05_31_a \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+  ```
+
 - Programmatic workspace dashboard session inventory and revoke via `GET /v1/sessions`, `DELETE /v1/sessions/{jti}`, and `POST /v1/sessions/revoke-all`, behind the new `sessions:read` and `sessions:write` scopes. SecOps teams running CodeClone need a machine-driven way to answer "who is currently signed into the dashboard?" during incident triage, after a phishing report, on offboarding, and on a recurring SOC2 CC6.1 access-review cadence; doing that one user at a time through the settings UI does not scale past the first audit. The list endpoint enumerates every non-expired, non-revoked dashboard session for every member of the calling key's workspace, returning jti, user_id, created_at, expires_at, last_seen_at, ip, and user_agent. The single-revoke endpoint resolves the owning user_id server-side from the jti via `findSessionOwner` (the caller never names a user_id) and the bulk-revoke endpoint validates the supplied user_id is an active member of the calling key's workspace before any revoke fires. Tenant scope is structural: the workspace is always derived from `key.workspaceId`, the set of in-scope users is the workspace roster, and any jti or user_id that belongs to a foreign workspace surfaces as 404 (not 403) so cross-tenant existence cannot be probed by watching status codes. Every revoke writes a `v1.sessions.revoke` or `v1.sessions.revoke_all` audit row with the actor key and target; every read writes `v1.sessions.read`. The full /v1 enforcement chain runs first (lockdown, workspace + per-key IP allowlists, residency, API-key policy, per-key rate limit enforce-not-peek so the route is metered in billing). Pinned by `web/tests/v1-sessions-tenant-isolation.test.ts` (live cross-tenant isolation on a shared on-disk session store, plus source-level wiring checks that fail on regression if the scope, enforcement chain, audit, or workspace-from-key derivation is dropped).
 
   ### Try it: force-logout a phished user from a SOAR playbook
