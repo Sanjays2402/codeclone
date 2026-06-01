@@ -414,5 +414,88 @@ export async function expandCollection(
   return { ...rec, items };
 }
 
+export interface ListItemsOptions {
+  /** Page size, 1..100. Defaults to 25. */
+  limit?: number;
+  /** Opaque cursor returned from a previous page. */
+  cursor?: string | null;
+  /** Restrict share lookups to a workspace. Cross-tenant shares present as `missing`. */
+  shareScope?: ScopeHint;
+}
+
+export interface ListItemsPage {
+  collectionId: string;
+  items: ExpandedCollectionItem[];
+  total: number;
+  nextCursor: string | null;
+}
+
+function encodeCursor(offset: number): string {
+  return Buffer.from(JSON.stringify({ o: offset }), "utf8").toString(
+    "base64url",
+  );
+}
+
+function decodeCursor(cursor: string | null | undefined): number {
+  if (!cursor) return 0;
+  try {
+    const raw = Buffer.from(cursor, "base64url").toString("utf8");
+    const obj = JSON.parse(raw) as { o?: unknown };
+    if (typeof obj.o === "number" && Number.isInteger(obj.o) && obj.o >= 0) {
+      return obj.o;
+    }
+  } catch {
+    /* fall through */
+  }
+  return 0;
+}
+
+/**
+ * Paginated, optionally tenant-scoped, expansion of a collection's shareIds
+ * into ExpandedCollectionItem rows. Shares the caller cannot see (wrong
+ * workspace, deleted, corrupt) are returned as `{ missing: true }` so the
+ * pagination cursor stays stable across visibility changes.
+ */
+export async function listItems(
+  id: string,
+  opts: ListItemsOptions = {},
+): Promise<ListItemsPage | null> {
+  const rec = await loadCollection(id);
+  if (!rec) return null;
+  const total = rec.shareIds.length;
+  const offset = Math.min(Math.max(0, decodeCursor(opts.cursor)), total);
+  const limit = Math.min(Math.max(1, opts.limit ?? 25), 100);
+  const slice = rec.shareIds.slice(offset, offset + limit);
+  const items: ExpandedCollectionItem[] = [];
+  for (const sid of slice) {
+    const share = await loadShare(sid, opts.shareScope);
+    if (!share) {
+      items.push({
+        id: sid,
+        language: "?",
+        cloneLabel: "missing",
+        shingleJaccard: 0,
+        createdAt: 0,
+        bytes: { a: 0, b: 0 },
+        missing: true,
+      });
+      continue;
+    }
+    const item: ExpandedCollectionItem = {
+      id: share.id,
+      ...(share.title ? { title: share.title } : {}),
+      language: share.language,
+      cloneLabel: share.result.clone.label,
+      shingleJaccard: share.result.scores.shingleJaccard,
+      createdAt: share.createdAt,
+      bytes: share.result.bytes,
+    };
+    items.push(item);
+  }
+  const consumed = offset + slice.length;
+  const nextCursor = consumed < total ? encodeCursor(consumed) : null;
+  return { collectionId: rec.id, items, total, nextCursor };
+}
+
 // re-export for type-only consumers
 export type { ShareRecord };

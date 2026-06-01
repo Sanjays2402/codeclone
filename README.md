@@ -217,6 +217,26 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
     -H "Authorization: Bearer $CODECLONE_KEY"
   ```
 
+- Paginated collection-items listing via `GET /v1/collections/{id}/items?limit=&cursor=`. The mutating verbs at the same path already shipped, but a curation bot or compliance reviewer that wanted to audit which shares actually sit inside a collection still had to fetch the full `/v1/collections/{id}` envelope and parse the embedded `shareIds` array, with no page boundary and no per-row metadata (language, clone label, shingle Jaccard, byte counts) for the dashboards SDK consumers actually build. The new verb returns expanded `items[]` rows behind the existing `collections:read` scope, with an opaque `next_cursor` (`base64url({o:offset})`) that is stable across visibility changes; no new scope to provision and no new dashboard surface to learn. Tenant scope is structural and runs on both sides of the link: the parent collection's `workspaceOwns` check returns a flat 404 on cross-workspace ids, and every share is re-loaded under `{ workspaceId: key.workspaceId }` via the new `listItems(..., { shareScope })` option, so even shares that somehow ended up referenced from another workspace surface as `{ missing: true }` placeholders rather than leaking the cross-tenant snippet's title, language, or scores. Each fetch writes a `v1.collections.item_list` row to the tamper-evident audit chain; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate limit with `X-RateLimit-*` and `Retry-After`) runs before any storage read. `limit` is validated against `[1,100]` and defaults to 25. Documented in `/v1/discovery`, `/v1/openapi.json|yaml`, and `/docs`. Pinned by `web/tests/v1-collection-items-list-tenant-isolation.test.ts` (live cross-tenant share-hide check at the lib layer, cursor stability across pages, and source-level wiring checks that fail on regression if the read scope, workspace gate, `shareScope` plumbing, audit, or rate-limit/IP/residency/lockdown enforcement are dropped).
+
+  ### Try it: audit a collection from CI without re-fetching the whole envelope
+
+  ```bash
+  # First page: 25 items by default, includes total + next_cursor.
+  curl -sS "http://localhost:3000/v1/collections/abc1234567/items?limit=25" \
+    -H "Authorization: Bearer $CODECLONE_KEY" \
+    | jq '{total, next_cursor, sample: .items[0]}'
+
+  # Walk pages with the opaque cursor:
+  curl -sS "http://localhost:3000/v1/collections/abc1234567/items?limit=25&cursor=eyJvIjoyNX0" \
+    -H "Authorization: Bearer $CODECLONE_KEY" | jq '.items | length'
+
+  # A collection owned by another workspace looks like a typo, never a leak:
+  curl -sS -o /dev/null -w "%{http_code}\n" \
+    "http://localhost:3000/v1/collections/someoneElsesId/items" \
+    -H "Authorization: Bearer $CODECLONE_KEY"
+  ```
+
 - Programmatic share-collection membership edits via `POST /v1/collections/{id}/items` and `DELETE /v1/collections/{id}/items?shareId=...`. The list/create/patch/delete verbs already shipped, but a curation bot that wanted to keep a collection fresh (drop the share that was retired, attach the one CI flagged this morning) still had to re-PUT the entire `shareIds` array through the cookie-only dashboard route, which lost ordering on concurrent edits and could not run from a release pipeline. The new verbs add or remove a single share by id behind the existing `collections:write` scope; no new scope to provision and no new dashboard surface to learn. Tenant scope is structural and runs on both sides of the link: the parent collection's `workspaceOwns` check returns a flat 404 on cross-workspace ids, and the share itself is loaded under `{ workspaceId: key.workspaceId }` via the new `addItem(..., { shareScope })` option, so a workspace A key cannot link a workspace B share into a workspace A collection and cannot use the membership-edit verb as a cross-tenant existence oracle (the response is 404 "share not found", indistinguishable from a typo). Every edit writes a `v1.collections.item_add` or `v1.collections.item_remove` row to the tamper-evident audit chain; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, DPA, per-key rate limit with `X-RateLimit-*` and `Retry-After`) runs before any storage write. Documented in `/v1/discovery`, `/v1/openapi.json|yaml`, and `/docs`. Pinned by `web/tests/v1-collection-items-tenant-isolation.test.ts` (live cross-tenant share-link denial at the lib layer plus source-level wiring checks that fail on regression if the scope, workspace gate, `shareScope` plumbing, audit, or rate-limit/IP/residency/lockdown enforcement are dropped).
 
   ### Try it: keep a sprint collection fresh from CI

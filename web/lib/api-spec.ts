@@ -1007,6 +1007,21 @@ export const ENDPOINTS: SpecEndpoint[] = [
     curl: (host, key) => `curl -sS -X DELETE "${host}/v1/collections/abc1234567/items?shareId=def4567890" -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "collections-item-list",
+    method: "GET",
+    path: "/v1/collections/{id}/items",
+    routeFile: "app/api/v1/collections/[id]/items/route.ts",
+    summary: "Paginated expansion of a collection's items. Each row carries share id, language, clone label, shingle Jaccard, byte counts, and createdAt. Cross-tenant collection ids return 404; shares the calling workspace cannot see surface as `{ missing: true }` so the cursor stays stable across visibility changes.",
+    scope: "collections:read",
+    params: [
+      { name: "id", kind: "path", required: true, type: "string", description: "Collection id." },
+      { name: "limit", kind: "query", required: false, type: "number", description: "Page size, 1..100. Defaults to 25." },
+      { name: "cursor", kind: "query", required: false, type: "string", description: "Opaque cursor returned in `next_cursor` from a previous page." },
+    ],
+    sampleResponse: JSON.stringify({ collection_id: "abc1234567", items: [{ id: "def4567890", title: "login flow vs onboarding flow", language: "typescript", cloneLabel: "near-duplicate", shingleJaccard: 0.82, createdAt: 1717000000000, bytes: { a: 1240, b: 1310 } }], total: 1, next_cursor: null }, null, 2),
+    curl: (host, key) => `curl -sS "${host}/v1/collections/abc1234567/items?limit=25" -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "sessions-list",
     method: "GET",
     path: "/v1/sessions",

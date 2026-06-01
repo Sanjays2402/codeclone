@@ -5,8 +5,9 @@
  * bots can keep collections current without driving the dashboard.
  *
  * Auth: Bearer token or `x-api-key` header.
- * Scope: collections:write for both POST (add) and DELETE (remove).
- *        Read-only callers cannot mutate membership.
+ * Scope: collections:read for GET (list), collections:write for POST
+ *        (add) and DELETE (remove). Read-only callers can audit
+ *        membership but cannot mutate it.
  * Tenant scope: both the target collection AND the referenced share
  *        must belong to the calling key's workspace. A workspace A
  *        key cannot link a workspace B share into a workspace A
@@ -46,6 +47,7 @@ import {
   removeItem,
   isCollectionId,
   loadCollection,
+  listItems,
   type CollectionRecord,
 } from "../../../../../../lib/collections";
 
@@ -149,6 +151,88 @@ function workspaceOwns(
 }
 
 type Ctx = { params: Promise<{ id: string }> };
+
+export async function GET(req: Request, ctx: Ctx) {
+  const { id } = await ctx.params;
+  const auth = await authenticate(req);
+  if ("error" in auth) return auth.error;
+  const { key } = auth;
+  if (!hasScope(key, "collections:read"))
+    return missingScope("collections:read", key);
+  const chain = await enforceChain(req, key, "/v1/collections/:id/items");
+  if (chain) return chain;
+  if (!key.workspaceId) return notBoundToWorkspace();
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
+  if (!isCollectionId(id)) return notFound();
+  const existing = await loadCollection(id);
+  if (!existing || !workspaceOwns(existing, key.workspaceId)) return notFound();
+
+  const url = new URL(req.url);
+  const rawLimit = url.searchParams.get("limit");
+  let limit = 25;
+  if (rawLimit !== null) {
+    const n = Number(rawLimit);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1 || n > 100) {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message: "limit must be an integer in [1,100].",
+          },
+        },
+        { status: 400, headers: rl.headers },
+      );
+    }
+    limit = n;
+  }
+  const cursor = url.searchParams.get("cursor");
+
+  const page = await listItems(id, {
+    limit,
+    cursor,
+    // Defence in depth: even if a cross-tenant shareId somehow ended up in
+    // a collection (it cannot via POST, but old data, manual edits, or
+    // future bugs are real), do not leak the other workspace's snippet.
+    shareScope: { workspaceId: key.workspaceId },
+  });
+  if (!page) return notFound();
+
+  void recordUse(key.id, clientIpFromRequest(req));
+  void tryRecordAudit(req, {
+    action: "v1.collections.item_list",
+    actorId: key.userId ?? null,
+    workspaceId: key.workspaceId,
+    target: { type: "collection", id: page.collectionId },
+    status: "ok",
+    meta: {
+      prefix: key.prefix,
+      limit,
+      cursor: cursor ?? null,
+      returned: page.items.length,
+      total: page.total,
+    },
+  });
+  void logUsage({
+    ts: Date.now(),
+    keyId: key.id,
+    endpoint: "/v1/collections/:id/items",
+    bytes: 0,
+    latencyMs: 0,
+    workspaceId: key.workspaceId,
+  });
+
+  return NextResponse.json(
+    {
+      collection_id: page.collectionId,
+      items: page.items,
+      total: page.total,
+      next_cursor: page.nextCursor,
+    },
+    { headers: rl.headers },
+  );
+}
 
 export async function POST(req: Request, ctx: Ctx) {
   const { id } = await ctx.params;

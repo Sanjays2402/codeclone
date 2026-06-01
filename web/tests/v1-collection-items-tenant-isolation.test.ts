@@ -61,11 +61,17 @@ const { createCollection, addItem, loadCollection } = await import(
 const { createShare } = await import("../lib/share.ts");
 
 test("v1/collections/:id/items: route wires scopes, rate-limit, enforcement chain, tenant-scoped shareScope, audit", () => {
-  // Scope: writes-only on both verbs.
+  // Scope: mutating verbs (POST add, DELETE remove) must require
+  // collections:write. The GET (list) handler may require collections
+  // :read; what we forbid is a *read-only* path to mutation, not the
+  // mere presence of the read scope string in the same file.
   assert.match(itemsRouteSrc, /hasScope\(key, "collections:write"\)/);
+  const writeRefs = itemsRouteSrc.match(
+    /hasScope\(key, "collections:write"\)/g,
+  );
   assert.ok(
-    !/hasScope\(key, "collections:read"\)/.test(itemsRouteSrc),
-    "items mutation route should require collections:write, not read",
+    writeRefs && writeRefs.length >= 2,
+    "both POST and DELETE handlers must gate on collections:write",
   );
   // Billable rate-limit enforce.
   assert.match(itemsRouteSrc, /enforceRateLimit\(/);
