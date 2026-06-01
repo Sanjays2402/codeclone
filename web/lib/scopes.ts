@@ -27,6 +27,8 @@ export const ALL_SCOPES = [
   "keys:write",
   "collections:read",
   "collections:write",
+  "sessions:read",
+  "sessions:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -49,4 +51,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "keys:write": "Rotate or revoke this workspace's API keys via POST /v1/keys/:id/rotate and DELETE /v1/keys/:id for automated SOC2 90-day rotation.",
   "collections:read": "List and fetch this workspace's share collections via GET /v1/collections and GET /v1/collections/:id.",
   "collections:write": "Create, update, and delete this workspace's share collections via POST/PATCH/DELETE /v1/collections.",
+  "sessions:read": "List active dashboard sessions for every member of this workspace via GET /v1/sessions for SecOps incident triage and SOC2 CC6.1 access reviews.",
+  "sessions:write": "Revoke individual or all dashboard sessions for a member of this workspace via DELETE /v1/sessions/:jti and POST /v1/sessions/revoke-all for credential-compromise containment.",
 };

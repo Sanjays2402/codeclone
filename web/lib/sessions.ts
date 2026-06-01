@@ -202,6 +202,35 @@ export async function revokeAllSessions(
   return n;
 }
 
+/**
+ * Find the userId that owns a given session id by scanning the
+ * sessions store. Returns null if the session is unknown, expired, or
+ * already revoked. Used by /v1/sessions/[jti] to resolve a workspace
+ * member's session for tenant-scoped revoke without trusting any
+ * userId from the request body.
+ */
+export async function findSessionOwner(jti: string): Promise<{ userId: string; record: SessionRecord } | null> {
+  if (!jti || typeof jti !== "string") return null;
+  if (await isRevoked(jti)) return null;
+  let userDirs: string[];
+  try {
+    userDirs = await fs.readdir(SESSIONS_DIR);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  for (const enc of userDirs) {
+    if (enc.startsWith("_")) continue; // skip _revoked/
+    const userId = decodeURIComponent(enc);
+    const p = sessionPath(userId, jti);
+    const rec = await readJson<SessionRecord>(p);
+    if (rec && rec.expiresAt > Date.now() && !rec.revokedAt) {
+      return { userId, record: rec };
+    }
+  }
+  return null;
+}
+
 export function clampTtl(ttlSec: number): number {
   if (!Number.isFinite(ttlSec)) return DEFAULT_TTL_SEC;
   return Math.max(MIN_TTL_SEC, Math.min(MAX_TTL_SEC, Math.floor(ttlSec)));

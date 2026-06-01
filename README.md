@@ -10,6 +10,26 @@ Walks your authored git history, extracts (prefix, completion) pairs from real c
 
 ## Features
 
+- Programmatic workspace dashboard session inventory and revoke via `GET /v1/sessions`, `DELETE /v1/sessions/{jti}`, and `POST /v1/sessions/revoke-all`, behind the new `sessions:read` and `sessions:write` scopes. SecOps teams running CodeClone need a machine-driven way to answer "who is currently signed into the dashboard?" during incident triage, after a phishing report, on offboarding, and on a recurring SOC2 CC6.1 access-review cadence; doing that one user at a time through the settings UI does not scale past the first audit. The list endpoint enumerates every non-expired, non-revoked dashboard session for every member of the calling key's workspace, returning jti, user_id, created_at, expires_at, last_seen_at, ip, and user_agent. The single-revoke endpoint resolves the owning user_id server-side from the jti via `findSessionOwner` (the caller never names a user_id) and the bulk-revoke endpoint validates the supplied user_id is an active member of the calling key's workspace before any revoke fires. Tenant scope is structural: the workspace is always derived from `key.workspaceId`, the set of in-scope users is the workspace roster, and any jti or user_id that belongs to a foreign workspace surfaces as 404 (not 403) so cross-tenant existence cannot be probed by watching status codes. Every revoke writes a `v1.sessions.revoke` or `v1.sessions.revoke_all` audit row with the actor key and target; every read writes `v1.sessions.read`. The full /v1 enforcement chain runs first (lockdown, workspace + per-key IP allowlists, residency, API-key policy, per-key rate limit enforce-not-peek so the route is metered in billing). Pinned by `web/tests/v1-sessions-tenant-isolation.test.ts` (live cross-tenant isolation on a shared on-disk session store, plus source-level wiring checks that fail on regression if the scope, enforcement chain, audit, or workspace-from-key derivation is dropped).
+
+  ### Try it: force-logout a phished user from a SOAR playbook
+
+  ```bash
+  # 1. Enumerate active sessions in the workspace.
+  curl -sS https://codeclone.example.com/v1/sessions \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+
+  # 2. Revoke a single suspicious session by jti.
+  curl -sS -X DELETE https://codeclone.example.com/v1/sessions/k7Q1abcDEF \
+    -H "Authorization: Bearer $CODECLONE_API_KEY"
+
+  # 3. Or kill every session for a compromised member in one call.
+  curl -sS -X POST https://codeclone.example.com/v1/sessions/revoke-all \
+    -H "Authorization: Bearer $CODECLONE_API_KEY" \
+    -H "Content-Type: application/json" \
+    -d '{"user_id":"u_42"}'
+  ```
+
 - Programmatic workspace member management via `POST /v1/members` (invite), `PATCH /v1/members/{user_id}` (change role or suspend), and `DELETE /v1/members/{user_id}` (remove). Until this change, `GET /v1/members` was the read half of the IGA contract (Okta Lifecycle, SailPoint, Workday joiner/mover/leaver pipelines) but the write half required a human in the dashboard, so the joiner side of an automation pipeline could not actually land an invite or the leaver side cut access. These routes expose invite, role flip, suspend, reinstate, and remove against the same workspace store the dashboard writes to, behind the new `members:write` scope. RBAC is enforced server-side: the calling key must be bound to an active **owner** of the workspace (editor and viewer keys are denied with a stable `v1.members.{invite,update,remove}` audit row marked `status="denied"`), and a caller can never demote, suspend, or remove themselves through this endpoint so a leaver script cannot lock the workspace out by accident. Owner role transfers and sole-owner removals are blocked at the lib layer (`only_owner` invariant). Tenant scope is structural: the workspace is always derived from `key.workspaceId` (no body field can override it), targets are looked up inside that workspace's roster, and cross-tenant user ids return 404 (not 403) so foreign user ids cannot be probed. Every mutation writes the audit chain; the full `/v1` enforcement chain (lockdown, workspace + per-key IP allowlists, residency, API-key policy, per-key rate limit) runs before any side effect. Pinned by `web/tests/v1-members-write-tenant-isolation.test.ts` (live tenant partitioning at the lib layer, RBAC denial under non-owner keys, only-owner invariants, plus source-level wiring checks that fail on regression if the scope, RBAC gate, rate-limit, audit, or workspace-from-key derivation is dropped).
 
   ### Try it: provision a new hire from a Workday joiner webhook

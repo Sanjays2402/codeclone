@@ -817,6 +817,44 @@ export const ENDPOINTS: SpecEndpoint[] = [
     sampleResponse: JSON.stringify({ deleted: true }, null, 2),
     curl: (host, key) => `curl -sS -X DELETE ${host}/v1/collections/abc1234567 -H "Authorization: Bearer ${key}"`,
   },
+  {
+    id: "sessions-list",
+    method: "GET",
+    path: "/v1/sessions",
+    routeFile: "app/api/v1/sessions/route.ts",
+    summary: "List active dashboard sessions for every member of the calling workspace. SOC2 CC6.1 access reviews.",
+    scope: "sessions:read",
+    params: [],
+    sampleResponse: JSON.stringify({ workspace_id: "ws_acme", sessions: [{ jti: "k7Q1...", user_id: "u_42", created_at: 1717000000000, expires_at: 1719600000000, last_seen_at: 1717003600000, ip: "203.0.113.7", user_agent: "Mozilla/5.0", created_ip: "203.0.113.7", created_user_agent: "Mozilla/5.0" }], total: 1 }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/sessions -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "sessions-revoke",
+    method: "DELETE",
+    path: "/v1/sessions/{jti}",
+    routeFile: "app/api/v1/sessions/[jti]/route.ts",
+    summary: "Revoke a single dashboard session by jti. Cross-workspace jtis return 404.",
+    scope: "sessions:write",
+    params: [
+      { name: "jti", kind: "path", required: true, type: "string", description: "Session id from /v1/sessions." },
+    ],
+    sampleResponse: JSON.stringify({ jti: "k7Q1...", user_id: "u_42", revoked: true }, null, 2),
+    curl: (host, key) => `curl -sS -X DELETE ${host}/v1/sessions/k7Q1abcDEF -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "sessions-revoke-all",
+    method: "POST",
+    path: "/v1/sessions/revoke-all",
+    routeFile: "app/api/v1/sessions/revoke-all/route.ts",
+    summary: "Force-logout every active session for a single workspace member. Incident-response kill switch.",
+    scope: "sessions:write",
+    params: [
+      { name: "user_id", kind: "body", required: true, type: "string", description: "User id (must be a member of the calling workspace)." },
+    ],
+    sampleBody: JSON.stringify({ user_id: "u_42" }, null, 2),
+    sampleResponse: JSON.stringify({ user_id: "u_42", revoked_count: 3 }, null, 2),
+    curl: (host, key) => `curl -sS -X POST ${host}/v1/sessions/revoke-all -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"user_id":"u_42"}'`,
+  },
 ];
 
 export function endpointsForScopes(scopes: readonly Scope[] | undefined): SpecEndpoint[] {
