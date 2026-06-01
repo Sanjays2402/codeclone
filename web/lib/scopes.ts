@@ -32,6 +32,8 @@ export const ALL_SCOPES = [
   "runs:read",
   "allowlist:read",
   "allowlist:write",
+  "lockdown:read",
+  "lockdown:write",
 ] as const;
 export type Scope = (typeof ALL_SCOPES)[number];
 
@@ -59,4 +61,6 @@ export const SCOPE_DESCRIPTIONS: Record<Scope, string> = {
   "runs:read": "Read training run metadata, hyperparameters, and per-step metrics via GET /v1/runs and GET /v1/runs/:id for MLflow / Weights & Biases / SIEM ingest.",
   "allowlist:read": "Read this workspace's IP CIDR allowlist via GET /v1/allowlist for SecOps compliance evidence and SIEM reconciliation.",
   "allowlist:write": "Replace, append, or clear this workspace's IP CIDR allowlist via PUT/POST/DELETE /v1/allowlist for SOAR-driven incident response (block attacker IPs, sync VPN egress ranges). Caller's API key must belong to a workspace owner.",
+  "lockdown:read": "Read this workspace's break-glass lockdown status via GET /v1/lockdown for SOAR polling and SOC2 CC7.3 incident-response evidence.",
+  "lockdown:write": "Place or release this workspace's break-glass lockdown via POST/DELETE /v1/lockdown so a SIEM-fired SOAR playbook can halt all /v1 traffic during a credential-compromise incident without a human dashboard login. Caller's API key must belong to a workspace owner.",
 };

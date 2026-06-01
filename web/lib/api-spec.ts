@@ -962,6 +962,46 @@ export const ENDPOINTS: SpecEndpoint[] = [
     sampleResponse: JSON.stringify({ workspace_id: "w_abc", entries: ["10.0.0.0/8", "203.0.113.4/32", "198.51.100.7/32"], count: 3, added: ["198.51.100.7/32"], rejected: [], max_entries: 64, enforced: true, server_time: 1717000000000 }, null, 2),
     curl: (host, key) => `curl -sS -X POST ${host}/v1/allowlist -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"entries":["198.51.100.7/32"]}'`,
   },
+  {
+    id: "lockdown-get",
+    method: "GET",
+    path: "/v1/lockdown",
+    routeFile: "app/api/v1/lockdown/route.ts",
+    summary: "Read this workspace's break-glass lockdown status for SOAR polling and SOC2 CC7.3 evidence.",
+    scope: "lockdown:read",
+    params: [],
+    sampleResponse: JSON.stringify({ workspace_id: "w_abc", locked: true, lockdown: { active: true, reason: "Suspected key compromise: see PD-1042.", case_ref: "PD-1042", placed_at: 1717000000000, placed_by: "u_alice" }, server_time: 1717000000000 }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/lockdown -H "Authorization: Bearer ${key}"`,
+  },
+  {
+    id: "lockdown-place",
+    method: "POST",
+    path: "/v1/lockdown",
+    routeFile: "app/api/v1/lockdown/route.ts",
+    summary: "Place the workspace under break-glass lockdown. While active, every /v1 endpoint refuses calls bound to this workspace with HTTP 423. Workspace owner only.",
+    scope: "lockdown:write",
+    params: [
+      { name: "reason", kind: "body", required: true, type: "string", description: "Human-readable cause, 3 to 500 chars. Recorded in the audit chain." },
+      { name: "caseRef", kind: "body", required: false, type: "string", description: "Optional ticket id (PagerDuty, Jira, ServiceNow). Max 120 chars, [A-Za-z0-9 _-./#:]." },
+    ],
+    sampleBody: JSON.stringify({ reason: "Suspected key compromise: see PD-1042.", caseRef: "PD-1042" }, null, 2),
+    sampleResponse: JSON.stringify({ workspace_id: "w_abc", locked: true, lockdown: { active: true, reason: "Suspected key compromise: see PD-1042.", case_ref: "PD-1042", placed_at: 1717000000000, placed_by: "u_alice" }, server_time: 1717000000000 }, null, 2),
+    curl: (host, key) => `curl -sS -X POST ${host}/v1/lockdown -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"reason":"Suspected key compromise: see PD-1042.","caseRef":"PD-1042"}'`,
+  },
+  {
+    id: "lockdown-release",
+    method: "DELETE",
+    path: "/v1/lockdown",
+    routeFile: "app/api/v1/lockdown/route.ts",
+    summary: "Lift an active break-glass lockdown. Body must include the workspace slug as confirmation. Workspace owner only.",
+    scope: "lockdown:write",
+    params: [
+      { name: "confirm", kind: "body", required: true, type: "string", description: "Must equal the workspace slug. Guards against accidental release in a SOAR misconfiguration." },
+    ],
+    sampleBody: JSON.stringify({ confirm: "acme" }, null, 2),
+    sampleResponse: JSON.stringify({ workspace_id: "w_abc", locked: false, lockdown: null, server_time: 1717000000000 }, null, 2),
+    curl: (host, key) => `curl -sS -X DELETE ${host}/v1/lockdown -H "Authorization: Bearer ${key}" -H "Content-Type: application/json" -d '{"confirm":"acme"}'`,
+  },
 ];
 
 export function endpointsForScopes(scopes: readonly Scope[] | undefined): SpecEndpoint[] {
