@@ -146,11 +146,26 @@ export async function GET(req: Request) {
   if (rl.response) return rl.response;
 
   const url = new URL(req.url);
-  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
-  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
-  const q = url.searchParams.get("q") ?? "";
-  const sort = parseSortKey(url.searchParams.get("sort"));
-  const dir = parseSortDir(url.searchParams.get("dir"));
+  const sp = url.searchParams;
+  const formatRaw = sp.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+  const limit = parsePositiveInt(sp.get("limit"), 25, 100);
+  const offset = parsePositiveInt(sp.get("offset"), 0, 1_000_000);
+  const q = sp.get("q") ?? "";
+  const sort = parseSortKey(sp.get("sort"));
+  const dir = parseSortDir(sp.get("dir"));
 
   const started = performance.now();
   const page = await listCollections({
@@ -181,6 +196,7 @@ export async function GET(req: Request) {
       filters: { q: q || null, sort, dir },
       limit,
       offset,
+      format,
     },
   });
   void logUsage({
@@ -191,6 +207,19 @@ export async function GET(req: Request) {
     latencyMs: Number(latencyMs.toFixed(3)),
     workspaceId: key.workspaceId,
   });
+
+  if (format === "csv") {
+    const filenameWs = key.workspaceId ?? "legacy";
+    const csv = collectionsToCsv(page.items, key.workspaceId ?? null);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${filenameWs}-collections.csv"`,
+      },
+    });
+  }
 
   return NextResponse.json(
     {
@@ -206,6 +235,53 @@ export async function GET(req: Request) {
     { headers: rl.headers },
   );
 }
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type CollectionCsvRow = {
+  id: string;
+  title: string;
+  description?: string;
+  count: number;
+  createdAt: number;
+  updatedAt: number;
+};
+
+function collectionsToCsv(
+  rows: ReadonlyArray<CollectionCsvRow>,
+  workspaceId: string | null,
+): string {
+  const header = [
+    "id",
+    "workspace_id",
+    "title",
+    "description",
+    "item_count",
+    "created_at",
+    "updated_at",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(workspaceId),
+        csvCell(r.title),
+        csvCell(r.description ?? ""),
+        csvCell(r.count),
+        csvCell(new Date(r.createdAt).toISOString()),
+        csvCell(new Date(r.updatedAt).toISOString()),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 
 export async function POST(req: Request) {
   const auth = await authenticate(req);

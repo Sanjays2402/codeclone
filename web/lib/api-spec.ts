@@ -948,6 +948,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "q", kind: "query", required: false, type: "string", description: "Free-text match over title and description." },
       { name: "sort", kind: "query", required: false, type: "updated|created|title|count", description: "Sort key. Default updated." },
       { name: "dir", kind: "query", required: false, type: "asc|desc", description: "Sort direction. Default desc." },
+      { name: "format", kind: "query", required: false, type: "'json' | 'csv'", description: "Response format. 'json' (default) returns the paginated list. 'csv' returns an RFC 4180 attachment of the same page for spreadsheet ingest of the workspace's collection inventory." },
     ],
     sampleResponse: JSON.stringify({ items: [{ id: "abc1234567", title: "sprint 42 dupes", count: 3, createdAt: 1717000000000, updatedAt: 1717000000000 }], total: 1, offset: 0, limit: 25, next_offset: null }, null, 2),
     curl: (host, key) => `curl -sS "${host}/v1/collections?limit=10" -H "Authorization: Bearer ${key}"`,
