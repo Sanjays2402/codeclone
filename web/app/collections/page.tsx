@@ -12,6 +12,7 @@ import {
   CaretLeft,
   CaretRight,
   ArrowsDownUp,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -209,6 +210,17 @@ export default function CollectionsPage() {
               new
             </button>
           )}
+          {status === "ready" && total > 0 ? (
+            <a
+              href="/api/collections?format=csv"
+              download="codeclone-collections.csv"
+              className="inline-flex items-center gap-1.5 px-2.5 h-9 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[13px] whitespace-nowrap text-[var(--color-ink-2)]"
+              title="Download your collections as CSV"
+            >
+              <DownloadSimple weight="duotone" size={14} />
+              CSV
+            </a>
+          ) : null}
         </div>
       </div>
 
