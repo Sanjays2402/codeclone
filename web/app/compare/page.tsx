@@ -84,6 +84,8 @@ function ComparePageInner() {
   const [copied, setCopied] = useState(false);
   const [mdCopied, setMdCopied] = useState(false);
   const [mdCopyError, setMdCopyError] = useState<string | null>(null);
+  const [jsonCopied, setJsonCopied] = useState(false);
+  const [jsonCopyError, setJsonCopyError] = useState<string | null>(null);
   const [rerun, setRerun] = useState<RerunInfo | null>(null);
   const [rerunLoading, setRerunLoading] = useState<boolean>(Boolean(fromId));
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -180,17 +182,25 @@ function ComparePageInner() {
   // as a JSON file. Runs entirely in the browser so it works for users who
   // don't want to mint a public /r/<id> share link or who need to attach the
   // raw result to an internal ticket or code-review thread.
-  const downloadJson = useCallback(() => {
-    if (!result) return;
+  // Build the JSON report string for the current comparison. Shared by
+  // the "download json" file-export button and the "copy json" clipboard
+  // button so both surfaces emit byte-identical output.
+  const buildJsonReport = useCallback((): string | null => {
+    if (!result) return null;
     const payload = {
       schema: "codeclone.compare.result/v1",
       exported_at: new Date().toISOString(),
       inputs: { a, b, language },
       result,
     };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], {
-      type: "application/json",
-    });
+    return JSON.stringify(payload, null, 2);
+  }, [a, b, language, result]);
+
+  const downloadJson = useCallback(() => {
+    if (!result) return;
+    const json = buildJsonReport();
+    if (json === null) return;
+    const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -200,7 +210,30 @@ function ComparePageInner() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-  }, [a, b, language, result]);
+  }, [result, buildJsonReport]);
+
+  // Copy the same JSON report straight to the clipboard. Pipelines that
+  // want to paste a comparison into an internal ticket, a code-review
+  // thread, or a quick `jq` inspection don't want to route through a
+  // downloaded file. Mirrors copyMarkdown's clipboard guard so a blocked
+  // clipboard (insecure context, denied permission, missing API) surfaces
+  // a visible error instead of silently doing nothing.
+  const copyJson = useCallback(async () => {
+    if (!result) return;
+    const json = buildJsonReport();
+    if (json === null) return;
+    setJsonCopyError(null);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard not available in this browser.");
+      }
+      await navigator.clipboard.writeText(json);
+      setJsonCopied(true);
+      setTimeout(() => setJsonCopied(false), 1400);
+    } catch (e) {
+      setJsonCopyError(e instanceof Error ? e.message : String(e));
+    }
+  }, [result, buildJsonReport]);
 
   // Build the Markdown report string for the current comparison. Shared by
   // the "download md" file-export button and the "copy md" clipboard button
@@ -533,6 +566,16 @@ function ComparePageInner() {
             </button>
             <button
               type="button"
+              onClick={copyJson}
+              title="Copy this comparison as JSON to the clipboard, ready to paste into an internal ticket, a code-review thread, or a quick jq inspection"
+              aria-label="Copy JSON report to clipboard"
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              {jsonCopied ? <Check weight="duotone" size={13} /> : <Copy weight="duotone" size={13} />}
+              {jsonCopied ? "copied" : "copy json"}
+            </button>
+            <button
+              type="button"
               onClick={downloadMarkdown}
               title="Download this comparison as a Markdown report for a PR, ticket, or Slack thread"
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
@@ -564,6 +607,11 @@ function ComparePageInner() {
           {mdCopyError && (
             <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
               copy failed: {mdCopyError}
+            </div>
+          )}
+          {jsonCopyError && (
+            <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
+              copy failed: {jsonCopyError}
             </div>
           )}
           {shareError && (
