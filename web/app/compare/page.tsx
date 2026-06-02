@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy, ClockClockwise, X as XIcon, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy, ClockClockwise, X as XIcon, DownloadSimple, Terminal } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
@@ -86,6 +86,8 @@ function ComparePageInner() {
   const [mdCopyError, setMdCopyError] = useState<string | null>(null);
   const [jsonCopied, setJsonCopied] = useState(false);
   const [jsonCopyError, setJsonCopyError] = useState<string | null>(null);
+  const [curlCopied, setCurlCopied] = useState(false);
+  const [curlCopyError, setCurlCopyError] = useState<string | null>(null);
   const [rerun, setRerun] = useState<RerunInfo | null>(null);
   const [rerunLoading, setRerunLoading] = useState<boolean>(Boolean(fromId));
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -234,6 +236,54 @@ function ComparePageInner() {
       setJsonCopyError(e instanceof Error ? e.message : String(e));
     }
   }, [result, buildJsonReport]);
+
+  // Build a runnable cURL command that reproduces the current comparison
+  // against the public POST /v1/compare endpoint. The output is meant to be
+  // pasted straight into a terminal, a CI step, or a bug report so a dev who
+  // sees an interesting result in the dashboard can hand it off to a script
+  // or a teammate without retyping the snippets. The bearer placeholder is a
+  // documented env var (CODECLONE_API_KEY) so we never serialize a real key
+  // into the clipboard. Origin is taken from window.location when available
+  // so localhost dev and deployed dashboards both produce a working command.
+  const buildCurlCommand = useCallback((): string | null => {
+    if (!result) return null;
+    const origin = typeof window !== "undefined" && window.location?.origin
+      ? window.location.origin
+      : "http://localhost:3000";
+    const body: { a: string; b: string; language?: string } = { a, b };
+    if (language && language !== "auto") body.language = language;
+    const json = JSON.stringify(body);
+    // Single-quote the JSON body for POSIX shells; close-reopen on any
+    // embedded single quote so the payload survives copy-paste verbatim.
+    const arg = `'${json.replace(/'/g, `'\\''`)}'`;
+    return [
+      `curl -sS ${origin}/v1/compare \\`,
+      `  -H "Authorization: Bearer $CODECLONE_API_KEY" \\`,
+      `  -H "Content-Type: application/json" \\`,
+      `  -d ${arg}`,
+    ].join("\n");
+  }, [a, b, language, result]);
+
+  // Copy the curl command to the clipboard. Mirrors copyMarkdown/copyJson's
+  // clipboard guard so a blocked clipboard (insecure context, denied
+  // permission, missing API) surfaces a visible error instead of silently
+  // doing nothing.
+  const copyCurl = useCallback(async () => {
+    if (!result) return;
+    const cmd = buildCurlCommand();
+    if (cmd === null) return;
+    setCurlCopyError(null);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard not available in this browser.");
+      }
+      await navigator.clipboard.writeText(cmd);
+      setCurlCopied(true);
+      setTimeout(() => setCurlCopied(false), 1400);
+    } catch (e) {
+      setCurlCopyError(e instanceof Error ? e.message : String(e));
+    }
+  }, [result, buildCurlCommand]);
 
   // Build the Markdown report string for the current comparison. Shared by
   // the "download md" file-export button and the "copy md" clipboard button
@@ -595,6 +645,16 @@ function ComparePageInner() {
             </button>
             <button
               type="button"
+              onClick={copyCurl}
+              title="Copy a runnable cURL command that reproduces this comparison against POST /v1/compare, ready to paste into a terminal, a CI step, or a bug report"
+              aria-label="Copy cURL command to clipboard"
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              {curlCopied ? <Check weight="duotone" size={13} /> : <Terminal weight="duotone" size={13} />}
+              {curlCopied ? "copied" : "copy curl"}
+            </button>
+            <button
+              type="button"
               onClick={share}
               disabled={sharing}
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] disabled:opacity-40"
@@ -612,6 +672,11 @@ function ComparePageInner() {
           {jsonCopyError && (
             <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
               copy failed: {jsonCopyError}
+            </div>
+          )}
+          {curlCopyError && (
+            <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
+              copy failed: {curlCopyError}
             </div>
           )}
           {shareError && (
