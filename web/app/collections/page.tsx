@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   FolderSimple,
@@ -60,6 +60,34 @@ export default function CollectionsPage() {
     const t = setTimeout(() => setDebounced(search.trim()), 250);
     return () => clearTimeout(t);
   }, [search]);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keyboard shortcut: "/" focuses the search box from anywhere on the page,
+  // matching the convention used by GitHub, Linear, and Slack (and the same
+  // shortcut already live on /history and /snippets). Skipped while the user
+  // is already typing in another input/textarea/select or a contenteditable
+  // surface, so we never hijack a literal slash they meant to type (for
+  // example inside the new-collection title or description fields).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Reset to first page whenever filters or sort change.
   useEffect(() => {
@@ -155,11 +183,14 @@ export default function CollectionsPage() {
             className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-ink-3)] pointer-events-none"
           />
           <input
+            ref={searchInputRef}
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search title or description"
             aria-label="Search collections"
+            aria-keyshortcuts="/"
+            title="Press / to focus search"
             className="w-full pl-8 pr-8 h-9 rounded border border-[var(--color-rule)] bg-[var(--color-paper)] text-[13.5px] outline-none focus:border-[var(--color-ink-3)]"
           />
           {search && (
