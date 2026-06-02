@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { loadShare, updateShare, deleteShare, type ScopeHint } from "../../../../lib/share";
+import { buildShareMarkdown } from "../../../../lib/share-markdown";
 import { tryRecordAudit } from "../../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../../lib/auth";
 import { listWorkspacesForUser } from "../../../../lib/workspaces";
@@ -33,6 +34,27 @@ export async function GET(
   // report. Same payload either way; only the headers change.
   const url = new URL(req.url);
   const download = url.searchParams.get("download");
+  const format = url.searchParams.get("format");
+  // ?format=md (optionally with ?download=1) renders a Markdown report
+  // of the saved comparison: scores, clone verdict, matched identifiers,
+  // and both snippets in a fenced block. Optimized for pasting straight
+  // into a PR description, code-review comment, ticket, or Slack thread,
+  // where the raw JSON record is unreadable but a formatted summary is
+  // what reviewers actually want to see. Mirrors the /compare page's
+  // existing "download md" / "copy md" buttons so a reviewer who only
+  // has the public share link gets the same affordance.
+  if (format === "md" || format === "markdown") {
+    const md = buildShareMarkdown(rec);
+    const asAttachment = download === "1" || download === "true";
+    const headers: Record<string, string> = {
+      "content-type": "text/markdown; charset=utf-8",
+      "cache-control": "no-store",
+    };
+    if (asAttachment) {
+      headers["content-disposition"] = `attachment; filename="codeclone-share-${id}.md"`;
+    }
+    return new NextResponse(md, { status: 200, headers });
+  }
   if (download === "1" || download === "true") {
     const body = JSON.stringify(rec, null, 2);
     return new NextResponse(body, {

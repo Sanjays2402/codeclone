@@ -8,6 +8,7 @@ import {
   LinkSimple,
   FilePdf,
   BracketsCurly,
+  MarkdownLogo,
 } from "@phosphor-icons/react/dist/ssr";
 import { loadShare, shareSummary } from "../../../lib/share";
 import { DiffViewer } from "../../../components/DiffViewer";
@@ -110,6 +111,15 @@ export default async function SharedResultPage({ params }: PageProps) {
               download={`codeclone-share-${id}.json`}
             >
               <BracketsCurly weight="duotone" size={13} /> download json
+            </a>
+            <a
+              href={`/api/share/${id}?format=md&download=1`}
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]"
+              aria-label="Download share as Markdown report"
+              title="Download a Markdown report of this comparison (scores, clone verdict, matched identifiers, fenced snippets), ready to paste into a PR, ticket, or Slack thread"
+              download={`codeclone-share-${id}.md`}
+            >
+              <MarkdownLogo weight="duotone" size={13} /> download md
             </a>
             <a
               href={`/api/share/${id}/pdf`}
