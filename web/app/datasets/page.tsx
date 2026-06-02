@@ -3,6 +3,7 @@ import { H1, H2 } from "../../components/Headings";
 import { MetricChip } from "../../components/MetricChip";
 import { Empty } from "../../components/States";
 import { fmtInt, fmtPct } from "../../lib/format";
+import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 
 export const dynamic = "force-dynamic";
 
@@ -50,6 +51,17 @@ export default async function Page() {
   return (
     <div>
       <H1 eyebrow="datasets · splits + mix">Dataset stats.</H1>
+      <div className="flex flex-wrap items-center justify-end gap-3 mb-3">
+        <a
+          href="/api/datasets?format=csv"
+          download="codeclone-datasets.csv"
+          className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+          title="Download the per-language pair counts across splits as CSV"
+        >
+          <DownloadSimple size={12} weight="duotone" />
+          Download CSV
+        </a>
+      </div>
       <div className="grid grid-cols-4 gap-3 mb-6">
         <MetricChip label="total pairs" value={fmtInt(total)} sub="after preprocess + dedupe" large accent />
         <MetricChip label="train" value={fmtInt(train)} sub={fmtPct(total > 0 ? train / total : 0, 1)} />
