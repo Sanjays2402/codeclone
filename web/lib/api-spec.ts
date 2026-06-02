@@ -1117,6 +1117,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "since", kind: "query", required: false, type: "string", description: "Only runs with started_at >= this value. Accepts epoch milliseconds or ISO-8601." },
       { name: "limit", kind: "query", required: false, type: "integer", description: "Max items to return. Default 50, max 200." },
       { name: "offset", kind: "query", required: false, type: "integer", description: "Page offset. Default 0." },
+      { name: "format", kind: "query", required: false, type: "string", description: "Response format. 'json' (default) or 'csv' for spreadsheet ingest. CSV honors the same filters and pagination." },
     ],
     sampleResponse: JSON.stringify({ count: 1, total: 1, limit: 50, offset: 0, items: [{ id: "r_2024_05_31_a", recipe_hash: "sha256:abc123", steps: 1500, last_loss: 0.412, backend: "mlx", model: "Qwen/Qwen2.5-Coder-0.5B", started_at: 1717000000000, status: "passed" }] }, null, 2),
     curl: (host, key) => `curl -sS ${host}/v1/runs -H "Authorization: Bearer ${key}"`,

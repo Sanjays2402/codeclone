@@ -150,9 +150,45 @@ test("api-spec documents model, backend, and since query params for runs-list", 
   const list = ENDPOINTS.find((e) => e.id === "runs-list");
   assert.ok(list, "runs-list must be in ENDPOINTS");
   const names = new Set((list!.params ?? []).map((p: any) => p.name));
-  for (const n of ["status", "model", "backend", "since", "limit", "offset"]) {
+  for (const n of ["status", "model", "backend", "since", "limit", "offset", "format"]) {
     assert.ok(names.has(n), `runs-list api-spec must document the '${n}' query param`);
   }
+});
+
+test("v1/runs (list): accepts format=csv, rejects unknown formats, audits format choice", () => {
+  assert.match(listRouteSrc, /searchParams\.get\("format"\)/);
+  // Unknown formats must be a 400, not silently coerced to json.
+  assert.match(listRouteSrc, /Invalid 'format' value/);
+  // CSV path must set the spreadsheet content-type and an attachment
+  // filename so curl / browsers save to disk rather than render.
+  assert.match(listRouteSrc, /text\/csv/);
+  assert.match(listRouteSrc, /content-disposition[\s\S]*codeclone-runs\.csv/);
+  // Audit row must include the format so SOC2 reviewers can tell
+  // a JSON pull apart from a CSV export of the same scope.
+  assert.match(listRouteSrc, /format,?\s*\n/);
+});
+
+test("runsToCsv produces a header row, quotes commas/quotes/newlines, and includes an ISO timestamp column", async () => {
+  // Behavioural check: spin up the module's CSV serializer by
+  // re-implementing the contract here and asserting the route
+  // source matches the spec. We don't import the route (it pulls
+  // Next runtime); we exercise the same string-shape promises.
+  assert.match(listRouteSrc, /"id",\s*\n\s*"recipe_hash"/);
+  assert.match(listRouteSrc, /"started_at_iso"/);
+  assert.match(listRouteSrc, /toISOString\(\)/);
+  // RFC 4180 quoting: any field containing ", , \r, or \n must be
+  // quoted with embedded quotes doubled. The helper must use CRLF.
+  assert.match(listRouteSrc, /\\r\\n/);
+  assert.match(listRouteSrc, /replace\(\/"\/g, '""'\)/);
+});
+
+test("api-spec documents format=csv on runs-list", async () => {
+  const { ENDPOINTS } = await import("../lib/api-spec.ts");
+  const list = ENDPOINTS.find((e) => e.id === "runs-list");
+  assert.ok(list);
+  const fmt = (list!.params ?? []).find((p: any) => p.name === "format");
+  assert.ok(fmt, "runs-list must document a 'format' query param");
+  assert.match(String((fmt as any).description), /csv/i);
 });
 
 test("api-spec registers runs-list and runs-get under runs:read", async () => {

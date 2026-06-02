@@ -18,6 +18,10 @@
  *
  * Auth: Bearer or x-api-key, identical to the rest of /v1.
  * Scope: runs:read.
+ * Query: ?format=csv returns the same filtered+paginated rows as a
+ *   spreadsheet (RFC 4180 quoting, CRLF, header row, ISO timestamp
+ *   column) so MLflow/W&B/SIEM operators can pipe `curl` straight
+ *   into Excel or `csvkit` without a JSON-to-CSV middlestep.
  * Side effects: bills one /v1 rate-limit slot, records one audit
  *   row (`v1.runs.list`), and logs a free usage event so the call
  *   shows up in /usage timelines. Runs themselves are not mutated.
@@ -147,6 +151,19 @@ export async function GET(req: Request) {
   }
   const limit = parsePositiveInt(url.searchParams.get("limit"), 50, 200);
   const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
+  const formatRaw = url.searchParams.get("format");
+  const format = formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
 
   const started = performance.now();
   let runs = await loadRuns();
@@ -186,6 +203,7 @@ export async function GET(req: Request) {
       },
       limit,
       offset,
+      format,
     },
   });
   void logUsage({
@@ -197,6 +215,23 @@ export async function GET(req: Request) {
     workspaceId: key.workspaceId,
   });
 
+  if (format === "csv") {
+    const csv = runsToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-runs.csv"`,
+        "cache-control": "no-store",
+        "x-codeclone-total": String(total),
+        "x-codeclone-count": String(items.length),
+        "x-codeclone-limit": String(limit),
+        "x-codeclone-offset": String(offset),
+      },
+    });
+  }
+
   return NextResponse.json(
     {
       count: items.length,
@@ -207,4 +242,46 @@ export async function GET(req: Request) {
     },
     { headers: rl.headers },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function runsToCsv(items: ReturnType<typeof presentRun>[]): string {
+  const cols = [
+    "id",
+    "recipe_hash",
+    "steps",
+    "last_loss",
+    "backend",
+    "model",
+    "started_at",
+    "started_at_iso",
+    "status",
+  ] as const;
+  const lines: string[] = [cols.join(",")];
+  for (const r of items) {
+    const isoVal =
+      typeof r.started_at === "number" && Number.isFinite(r.started_at)
+        ? new Date(r.started_at).toISOString()
+        : "";
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.recipe_hash),
+        csvCell(r.steps),
+        csvCell(r.last_loss),
+        csvCell(r.backend),
+        csvCell(r.model),
+        csvCell(r.started_at),
+        csvCell(isoVal),
+        csvCell(r.status),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
