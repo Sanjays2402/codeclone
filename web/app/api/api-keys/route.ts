@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createKey, listKeys } from "../../../lib/api-keys";
+import { createKey, listKeys, type ApiKeySummary } from "../../../lib/api-keys";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { tryRecordAudit } from "../../../lib/audit";
 import { enforceMfaEnrollment } from "../../../lib/mfa-enforce";
@@ -14,11 +14,95 @@ function unauthorized() {
   );
 }
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function keysToCsv(rows: ReadonlyArray<ApiKeySummary>): string {
+  const header = [
+    "id",
+    "label",
+    "prefix",
+    "created_at",
+    "last_used_at",
+    "usage_count",
+    "revoked",
+    "expired",
+    "user_id",
+    "workspace_id",
+    "expires_at",
+    "scopes",
+    "rate_limit_rpm",
+    "ip_allowlist",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.label),
+        csvCell(r.prefix),
+        csvCell(r.createdAt),
+        csvCell(r.lastUsedAt ?? null),
+        csvCell(r.usageCount),
+        csvCell(r.revoked === true),
+        csvCell(r.expired === true),
+        csvCell(r.userId ?? null),
+        csvCell(r.workspaceId ?? null),
+        csvCell(r.expiresAt ?? null),
+        csvCell(Array.isArray(r.scopes) ? r.scopes.join(" ") : ""),
+        csvCell(r.rateLimit?.rpm ?? null),
+        csvCell(Array.isArray(r.ipAllowlist) ? r.ipAllowlist.join(" ") : ""),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export async function GET(req: Request) {
   const user = await currentUserFromCookieHeader(req.headers.get("cookie"));
   if (!user) return unauthorized();
+
+  const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "format must be 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
+
   try {
     const items = await listKeys(user.id);
+    void tryRecordAudit(req, {
+      action: "api_keys.read",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "api_key_inventory", id: user.id },
+      status: "ok",
+      meta: { count: items.length, format },
+    });
+    if (format === "csv") {
+      const csv = keysToCsv(items);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-api-keys.csv"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     return NextResponse.json({ items, count: items.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);

@@ -455,7 +455,23 @@ export default function ApiKeysPage() {
         </div>
       </div>
 
-      <H2 eyebrow="keys">Your keys</H2>
+      <H2
+        eyebrow="keys"
+        right={
+          status === "ready" && items.length > 0 ? (
+            <a
+              href="/api/api-keys?format=csv"
+              download="codeclone-api-keys.csv"
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
+              title="Download your API key inventory as CSV for SOC2 rotation evidence"
+            >
+              Download CSV
+            </a>
+          ) : null
+        }
+      >
+        Your keys
+      </H2>
       {error && <div className="mb-4"><ErrorBlock message={error} /></div>}
 
       {status === "signedout" && (
