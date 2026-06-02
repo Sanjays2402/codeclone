@@ -2,6 +2,7 @@ import Link from "next/link";
 import { loadPairsList } from "../../lib/data";
 import { H1 } from "../../components/Headings";
 import { Empty } from "../../components/States";
+import PairsFilterBar from "../../components/PairsFilterBar";
 import { fmtInt, shortHash } from "../../lib/format";
 
 export const dynamic = "force-dynamic";
@@ -16,21 +17,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
     <div>
       <H1 eyebrow={`pairs · ${fmtInt(total)} rows`}>Clone-pair index.</H1>
 
-      <form className="mb-4 flex items-center gap-2" action="/pairs">
-        <input
-          name="q"
-          defaultValue={q ?? ""}
-          placeholder="filter id, repo, path"
-          className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-72 focus:border-[var(--color-accent)] outline-none"
-        />
-        <input
-          name="lang"
-          defaultValue={lang ?? ""}
-          placeholder="lang"
-          className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-24 focus:border-[var(--color-accent)] outline-none"
-        />
-        <button className="mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 border border-[var(--color-rule-strong)] rounded-sm hover:bg-[var(--color-paper-2)]">apply</button>
-      </form>
+      <PairsFilterBar defaultQ={q} defaultLang={lang} />
 
       {items.length === 0 ? (
         <Empty title="No pairs match." hint="Try clearing filters or run the preprocess pipeline." mono="codeclone preprocess --recipe recipes/default.yaml" />
