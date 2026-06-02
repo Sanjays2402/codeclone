@@ -1060,7 +1060,9 @@ export const ENDPOINTS: SpecEndpoint[] = [
     routeFile: "app/api/v1/sessions/route.ts",
     summary: "List active dashboard sessions for every member of the calling workspace. SOC2 CC6.1 access reviews.",
     scope: "sessions:read",
-    params: [],
+    params: [
+      { name: "format", kind: "query", required: false, type: "string", description: "Response format. 'json' (default) or 'csv' returns the active-session inventory as an RFC 4180 download for SIEM and SOC2 CC6.1 access-review ingest." },
+    ],
     sampleResponse: JSON.stringify({ workspace_id: "ws_acme", sessions: [{ jti: "k7Q1...", user_id: "u_42", created_at: 1717000000000, expires_at: 1719600000000, last_seen_at: 1717003600000, ip: "203.0.113.7", user_agent: "Mozilla/5.0", created_ip: "203.0.113.7", created_user_agent: "Mozilla/5.0" }], total: 1 }, null, 2),
     curl: (host, key) => `curl -sS ${host}/v1/sessions -H "Authorization: Bearer ${key}"`,
   },

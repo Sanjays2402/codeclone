@@ -27,6 +27,13 @@
  * metadata the settings UI already exposes (jti, userId, createdAt,
  * expiresAt, lastSeenAt, ip, userAgent).
  *
+ * Query: ?format=json|csv (default json). CSV returns an RFC 4180
+ *        download (jti,user_id,created_at,expires_at,last_seen_at,
+ *        ip,user_agent,created_ip,created_user_agent) so SIEM and
+ *        SOC2 CC6.1 access reviewers can pipe the active-session
+ *        inventory straight into Splunk, Excel, or csvkit without a
+ *        JSON decode step. Unknown formats return 400.
+ *
  * Still enforced: revocation, expiry, workspace IP allowlist, per-key
  * IP allowlist, residency, workspace API key policy, lockdown,
  * per-key rate limit (enforce, not peek, so this endpoint is
@@ -113,6 +120,22 @@ export async function GET(req: Request) {
   if (!key.workspaceId) return tenantRequired();
   if (!hasScope(key, "sessions:read")) return insufficientScope("sessions:read", key.scopes);
 
+  const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+
   const ws = await getWorkspace(key.workspaceId);
   if (!ws) {
     return NextResponse.json(
@@ -169,10 +192,77 @@ export async function GET(req: Request) {
     workspaceId: key.workspaceId,
     target: { type: "workspace", id: key.workspaceId },
     status: "ok",
+    meta: {
+      prefix: key.prefix,
+      count: out.length,
+      format,
+    },
   });
+
+  if (format === "csv") {
+    const csv = sessionsToCsv(out);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${ws.id}-sessions.csv"`,
+      },
+    });
+  }
 
   return NextResponse.json(
     { workspace_id: key.workspaceId, sessions: out, total: out.length },
     { headers: rl.headers },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type SessionRow = {
+  jti: string;
+  user_id: string;
+  created_at: number;
+  expires_at: number;
+  last_seen_at: number;
+  ip: string | null;
+  user_agent: string | null;
+  created_ip: string | null;
+  created_user_agent: string | null;
+};
+
+function sessionsToCsv(rows: ReadonlyArray<SessionRow>): string {
+  const header = [
+    "jti",
+    "user_id",
+    "created_at",
+    "expires_at",
+    "last_seen_at",
+    "ip",
+    "user_agent",
+    "created_ip",
+    "created_user_agent",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.jti),
+        csvCell(r.user_id),
+        csvCell(r.created_at),
+        csvCell(r.expires_at),
+        csvCell(r.last_seen_at),
+        csvCell(r.ip),
+        csvCell(r.user_agent),
+        csvCell(r.created_ip),
+        csvCell(r.created_user_agent),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
