@@ -11,7 +11,11 @@
  *       alerting, or compliance retention pipelines off it.
  *
  * Query params:
- *   limit  1..200 (default 50) — most recent N deliveries
+ *   limit   1..200 (default 50) — most recent N deliveries
+ *   format  'json' (default) or 'csv' — csv returns an RFC 4180
+ *           download so on-call managers and SOC2 reviewers can drop
+ *           one webhook's delivery log into a spreadsheet for an
+ *           incident review without writing a JSON-to-CSV step.
  *
  * Standard enforcement chain (lockdown, workspace + key IP allowlists,
  * residency, API key policy, rate limit) matches every other /v1 route.
@@ -132,6 +136,13 @@ export async function GET(req: Request, ctx: Ctx) {
 
   const url = new URL(req.url);
   const limit = clampLimit(url.searchParams.get("limit"));
+  const format = (url.searchParams.get("format") ?? "json").toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: "format must be 'json' or 'csv'." } },
+      { status: 400, headers: rl.headers },
+    );
+  }
 
   const all = await listDeliveriesForWorkspace(id, key.workspaceId);
   // listDeliveriesForWorkspace returns newest-first; slice to limit.
@@ -147,6 +158,18 @@ export async function GET(req: Request, ctx: Ctx) {
     workspaceId: key.workspaceId,
   });
 
+  if (format === "csv") {
+    const csv = deliveriesToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${key.workspaceId}-${rec.id}-deliveries.csv"`,
+      },
+    });
+  }
+
   return NextResponse.json(
     {
       webhook_id: rec.id,
@@ -156,4 +179,57 @@ export async function GET(req: Request, ctx: Ctx) {
     },
     { headers: rl.headers },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type DeliveryRow = {
+  id: string;
+  webhookId: string;
+  event: string;
+  attemptedAt: number;
+  attempts: number;
+  status: number;
+  ok: boolean;
+  durationMs: number;
+  error?: string;
+  redeliveredFrom?: string;
+};
+
+function deliveriesToCsv(rows: ReadonlyArray<DeliveryRow>): string {
+  const header = [
+    "id",
+    "webhookId",
+    "event",
+    "attemptedAt",
+    "attempts",
+    "status",
+    "ok",
+    "durationMs",
+    "error",
+    "redeliveredFrom",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.webhookId),
+        csvCell(r.event),
+        csvCell(r.attemptedAt),
+        csvCell(r.attempts),
+        csvCell(r.status),
+        csvCell(r.ok),
+        csvCell(r.durationMs),
+        csvCell(r.error),
+        csvCell(r.redeliveredFrom),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
