@@ -400,7 +400,9 @@ export const ENDPOINTS: SpecEndpoint[] = [
     routeFile: "app/api/v1/webhooks/route.ts",
     summary: "List the calling workspace's webhook endpoints. Signing secrets are never returned.",
     scope: "webhooks:read",
-    params: [],
+    params: [
+      { name: "format", kind: "query", required: false, type: "'json' | 'csv'", description: "Response shape. Defaults to JSON. 'csv' returns an RFC 4180 download of the workspace's webhook inventory (id, label, url, events, success/failure counts, last status) so an on-call manager can drop it into a spreadsheet for SOC 2 review without writing a JSON-to-CSV step." },
+    ],
     sampleResponse: webhooksListResponse,
     curl: (host, key) =>
       `curl -sS ${host}/v1/webhooks \\\n  -H "Authorization: Bearer ${key}"`,

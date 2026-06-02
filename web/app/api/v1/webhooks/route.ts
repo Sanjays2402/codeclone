@@ -7,7 +7,14 @@
  *
  * GET /v1/webhooks
  *   Requires `webhooks:read`. Returns the workspace's webhook
- *   endpoints (summaries only, no signing secret).
+ *   endpoints (summaries only, no signing secret). Supports
+ *   `?format=json` (default) or `?format=csv` so an on-call manager
+ *   can drop the workspace's webhook inventory straight into a
+ *   spreadsheet for an SOC 2 reviewer (which endpoints exist, which
+ *   events they subscribe to, how many recent failures each has)
+ *   without writing a JSON-to-CSV step. Unknown formats return 400.
+ *   The format choice is recorded in the audit row so a CSV export
+ *   stays distinguishable from a JSON poll.
  *
  * POST /v1/webhooks
  *   Requires `webhooks:write`. Provisions a new endpoint. Returns the
@@ -103,6 +110,22 @@ export async function GET(req: Request) {
 
   if (!key.workspaceId) return tenantRequired();
 
+  const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+
   try {
     const items = await listWebhooksForWorkspace(key.workspaceId);
     void recordUse(key.id, clientIpFromRequest(req));
@@ -114,6 +137,29 @@ export async function GET(req: Request) {
       latencyMs: 0,
       workspaceId: key.workspaceId,
     });
+    void tryRecordAudit(req, {
+      action: "v1.webhooks.read",
+      actorId: key.id,
+      workspaceId: key.workspaceId,
+      target: { type: "workspace_webhooks", id: key.workspaceId },
+      status: "ok",
+      meta: {
+        prefix: key.prefix,
+        count: items.length,
+        format,
+      },
+    });
+    if (format === "csv") {
+      const csv = webhooksToCsv(items);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          ...rl.headers,
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-${key.workspaceId}-webhooks.csv"`,
+        },
+      });
+    }
     return NextResponse.json(
       {
         workspace_id: key.workspaceId,
@@ -130,6 +176,71 @@ export async function GET(req: Request) {
       { status: 500 },
     );
   }
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type WebhookRow = {
+  id: string;
+  label: string;
+  url: string;
+  events: ReadonlyArray<string>;
+  disabled?: boolean;
+  secretPrefix: string;
+  pendingSecretPrefix?: string;
+  createdAt: number;
+  updatedAt?: number;
+  successCount: number;
+  failureCount: number;
+  lastDeliveryAt?: number;
+  lastStatus?: number;
+  lastError?: string;
+};
+
+function webhooksToCsv(rows: ReadonlyArray<WebhookRow>): string {
+  const header = [
+    "id",
+    "label",
+    "url",
+    "events",
+    "disabled",
+    "secret_prefix",
+    "pending_secret_prefix",
+    "created_at",
+    "updated_at",
+    "success_count",
+    "failure_count",
+    "last_delivery_at",
+    "last_status",
+    "last_error",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.label),
+        csvCell(r.url),
+        csvCell((r.events ?? []).join("|")),
+        csvCell(r.disabled ? "true" : "false"),
+        csvCell(r.secretPrefix),
+        csvCell(r.pendingSecretPrefix),
+        csvCell(r.createdAt),
+        csvCell(r.updatedAt),
+        csvCell(r.successCount),
+        csvCell(r.failureCount),
+        csvCell(r.lastDeliveryAt),
+        csvCell(r.lastStatus),
+        csvCell(r.lastError),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
 
 export async function POST(req: Request) {
