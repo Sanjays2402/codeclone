@@ -19,13 +19,30 @@ async function userScope(req: Request): Promise<{ user: Awaited<ReturnType<typeo
 }
 
 export async function GET(
-  _req: Request,
+  req: Request,
   ctx: { params: Promise<{ id: string }> },
 ) {
   const { id } = await ctx.params;
   const rec = await loadShare(id);
   if (!rec) {
     return NextResponse.json({ error: "Share not found." }, { status: 404 });
+  }
+  // ?download=1 makes the JSON body fall out of the browser as a saved
+  // file (and gives curl -OJ a sensible filename) so the public /r/<id>
+  // viewer can offer a one-click "download json" alongside the PDF
+  // report. Same payload either way; only the headers change.
+  const url = new URL(req.url);
+  const download = url.searchParams.get("download");
+  if (download === "1" || download === "true") {
+    const body = JSON.stringify(rec, null, 2);
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        "content-type": "application/json; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-share-${id}.json"`,
+        "cache-control": "no-store",
+      },
+    });
   }
   return NextResponse.json(rec);
 }

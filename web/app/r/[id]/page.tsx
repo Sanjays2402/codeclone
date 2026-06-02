@@ -7,6 +7,7 @@ import {
   ArrowSquareOut,
   LinkSimple,
   FilePdf,
+  BracketsCurly,
 } from "@phosphor-icons/react/dist/ssr";
 import { loadShare, shareSummary } from "../../../lib/share";
 import { DiffViewer } from "../../../components/DiffViewer";
@@ -101,6 +102,15 @@ export default async function SharedResultPage({ params }: PageProps) {
           <div className="flex items-center gap-2">
             <CopyLinkButton url={`/r/${id}`} />
             <AddToCollectionButton shareId={id} />
+            <a
+              href={`/api/share/${id}?download=1`}
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]"
+              aria-label="Download share as JSON"
+              title="Download the raw share record (snippets, scores, alignment, clone label) as JSON"
+              download={`codeclone-share-${id}.json`}
+            >
+              <BracketsCurly weight="duotone" size={13} /> download json
+            </a>
             <a
               href={`/api/share/${id}/pdf`}
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:bg-[var(--color-paper-2)]"
