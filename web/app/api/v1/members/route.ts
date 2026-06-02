@@ -25,6 +25,12 @@
  *        status (retained for forensic continuity but with no
  *        effective access). Default false. ?include_support=true
  *        returns just-in-time support grants. Default false.
+ *        ?format=json|csv (default json). CSV returns an RFC 4180
+ *        roster download (user_id,email,role,status,joined_at,
+ *        suspended_at,suspended_reason,expires_at,granted_by,
+ *        grant_reason) so IGA reconcilers can pipe the workspace
+ *        roster straight into Excel, csvkit, or SailPoint's flat-file
+ *        loader without a JSON decode step. Unknown formats return 400.
  *
  * Still enforced: revocation, expiry, workspace IP allowlist, per-key
  * IP allowlist, residency, workspace API key policy, lockdown.
@@ -139,6 +145,20 @@ export async function GET(req: Request) {
     url.searchParams.get("include_suspended"),
   );
   const includeSupport = parseBoolFlag(url.searchParams.get("include_support"));
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
 
   const ws = await getWorkspace(key.workspaceId);
   if (!ws) {
@@ -190,8 +210,21 @@ export async function GET(req: Request) {
       count: items.length,
       include_suspended: includeSuspended,
       include_support: includeSupport,
+      format,
     },
   });
+
+  if (format === "csv") {
+    const csv = membersToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rlHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${ws.id}-members.csv"`,
+      },
+    });
+  }
 
   const body = {
     workspace: {
@@ -208,6 +241,59 @@ export async function GET(req: Request) {
   };
 
   return NextResponse.json(body, { headers: rlHeaders });
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type MemberRow = {
+  user_id: string;
+  email: string;
+  role: string;
+  status: string;
+  joined_at: number;
+  suspended_at: number | null;
+  suspended_reason: string | null;
+  expires_at: number | null;
+  granted_by: string | null;
+  grant_reason: string | null;
+};
+
+function membersToCsv(rows: ReadonlyArray<MemberRow>): string {
+  const header = [
+    "user_id",
+    "email",
+    "role",
+    "status",
+    "joined_at",
+    "suspended_at",
+    "suspended_reason",
+    "expires_at",
+    "granted_by",
+    "grant_reason",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.user_id),
+        csvCell(r.email),
+        csvCell(r.role),
+        csvCell(r.status),
+        csvCell(r.joined_at),
+        csvCell(r.suspended_at),
+        csvCell(r.suspended_reason),
+        csvCell(r.expires_at),
+        csvCell(r.granted_by),
+        csvCell(r.grant_reason),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
 
 /**

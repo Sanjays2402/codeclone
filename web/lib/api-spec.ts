@@ -468,6 +468,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
     params: [
       { name: "include_suspended", kind: "query", required: false, type: "boolean", description: "Include members retained in 'suspended' status for forensic continuity. Default false." },
       { name: "include_support", kind: "query", required: false, type: "boolean", description: "Include just-in-time support access grants. Default false." },
+      { name: "format", kind: "query", required: false, type: "string", description: "Response format. 'json' (default) or 'csv' returns the roster as an RFC 4180 download for SailPoint, Excel, and csvkit IGA reconciliation." },
     ],
     sampleResponse: JSON.stringify(
       {
