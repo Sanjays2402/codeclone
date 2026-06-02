@@ -461,6 +461,10 @@ export async function exportShares(opts: ExportOptions = {}): Promise<ExportResu
     limit: opts.limit,
     q: opts.q,
     tag: opts.tag,
+    language: opts.language,
+    cloneLabel: opts.cloneLabel,
+    minScore: opts.minScore,
+    maxScore: opts.maxScore,
     workspaceId: opts.workspaceId,
     allowLegacy: opts.allowLegacy,
   });

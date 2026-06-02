@@ -78,3 +78,56 @@ test("exportShares: JSON shape is stable", async () => {
     assert.ok(it.url.endsWith(`/r/${it.id}`));
   }
 });
+
+test("exportShares: honors language, cloneLabel, minScore, maxScore filters", async () => {
+  // Two shares already created above (python, j=0.9 + 0.1). Add a JS one.
+  const jsResult = {
+    language: "javascript",
+    scores: { shingleJaccard: 0.5, tokenJaccard: 0.5, containment: 0.6 },
+    alignment: { rows: [] },
+    clone: {
+      label: "Type-3",
+      confidence: 0.7,
+      structuralSim: 0.5,
+      rawTokenSim: 0.6,
+      rationale: [],
+    },
+    bytes: { a: 10, b: 12 },
+    latency_ms: 1,
+    method: "test",
+  } as any;
+  await createShare({
+    a: "const x = 1;\n",
+    b: "const y = 1;\n",
+    language: "javascript",
+    result: jsResult,
+  });
+
+  // language=python should drop the JS row.
+  const pyOnly = await exportShares({ format: "json", language: "python" });
+  const pyParsed = JSON.parse(pyOnly.body);
+  assert.ok(pyParsed.count >= 2);
+  for (const it of pyParsed.items) assert.equal(it.language, "python");
+
+  // language=all is a no-op (UI sentinel).
+  const allLangs = await exportShares({ format: "json", language: "all" });
+  assert.ok(JSON.parse(allLangs.body).count >= pyParsed.count + 1);
+
+  // cloneLabel filter narrows by label.
+  const t3 = await exportShares({ format: "json", cloneLabel: "Type-3" });
+  const t3Parsed = JSON.parse(t3.body);
+  assert.equal(t3Parsed.count, 1);
+  assert.equal(t3Parsed.items[0].cloneLabel, "Type-3");
+
+  // minScore drops the low-similarity row.
+  const hi = await exportShares({ format: "json", minScore: 0.8 });
+  const hiParsed = JSON.parse(hi.body);
+  assert.ok(hiParsed.count >= 1);
+  for (const it of hiParsed.items) assert.ok(it.shingleJaccard >= 0.8);
+
+  // maxScore drops the high-similarity row.
+  const lo = await exportShares({ format: "json", maxScore: 0.2 });
+  const loParsed = JSON.parse(lo.body);
+  assert.ok(loParsed.count >= 1);
+  for (const it of loParsed.items) assert.ok(it.shingleJaccard <= 0.2);
+});

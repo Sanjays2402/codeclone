@@ -81,10 +81,20 @@ function buildQuery(params: {
   return sp.toString();
 }
 
-function exportHref(format: "csv" | "json", q: string, tag: string): string {
+function exportHref(
+  format: "csv" | "json",
+  q: string,
+  tag: string,
+  language: string,
+  cloneLabel: string,
+  minScore: number,
+): string {
   const params = new URLSearchParams({ format });
   if (q.trim()) params.set("q", q.trim());
   if (tag.trim()) params.set("tag", tag.trim());
+  if (language && language !== "all") params.set("language", language);
+  if (cloneLabel && cloneLabel !== "all") params.set("label", cloneLabel);
+  if (minScore > 0) params.set("minScore", minScore.toFixed(2));
   return `/api/share/export?${params.toString()}`;
 }
 
@@ -337,7 +347,7 @@ export default function HistoryPage() {
           </label>
           <div className="flex items-center gap-1.5">
             <a
-              href={exportHref("csv", debouncedQ, activeTag)}
+              href={exportHref("csv", debouncedQ, activeTag, language, cloneLabel, minScore)}
               aria-disabled={total === 0}
               onClick={(e) => {
                 if (total === 0) e.preventDefault();
@@ -350,7 +360,7 @@ export default function HistoryPage() {
               <DownloadSimple weight="duotone" size={13} /> csv
             </a>
             <a
-              href={exportHref("json", debouncedQ, activeTag)}
+              href={exportHref("json", debouncedQ, activeTag, language, cloneLabel, minScore)}
               aria-disabled={total === 0}
               onClick={(e) => {
                 if (total === 0) e.preventDefault();

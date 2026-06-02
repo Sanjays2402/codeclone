@@ -17,6 +17,36 @@ export async function GET(req: Request) {
   }
   const q = url.searchParams.get("q") ?? undefined;
   const tag = url.searchParams.get("tag") ?? undefined;
+  const languageRaw = url.searchParams.get("language");
+  const language =
+    languageRaw && languageRaw.toLowerCase() !== "all" ? languageRaw : undefined;
+  const labelRaw = url.searchParams.get("label");
+  const cloneLabel =
+    labelRaw && labelRaw.toLowerCase() !== "all" ? labelRaw : undefined;
+  const minScoreRaw = url.searchParams.get("minScore");
+  let minScore: number | undefined;
+  if (minScoreRaw !== null && minScoreRaw !== "") {
+    const n = Number(minScoreRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 1) {
+      return NextResponse.json(
+        { error: "minScore must be a number in [0, 1]." },
+        { status: 400 },
+      );
+    }
+    minScore = n;
+  }
+  const maxScoreRaw = url.searchParams.get("maxScore");
+  let maxScore: number | undefined;
+  if (maxScoreRaw !== null && maxScoreRaw !== "") {
+    const n = Number(maxScoreRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 1) {
+      return NextResponse.json(
+        { error: "maxScore must be a number in [0, 1]." },
+        { status: 400 },
+      );
+    }
+    maxScore = n;
+  }
   const limitParam = url.searchParams.get("limit");
   let limit: number | undefined;
   if (limitParam) {
@@ -43,6 +73,10 @@ export async function GET(req: Request) {
       format: fmtRaw as ExportFormat,
       q,
       tag,
+      language,
+      cloneLabel,
+      minScore,
+      maxScore,
       limit,
       origin,
       workspaceId,
