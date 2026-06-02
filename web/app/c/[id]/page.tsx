@@ -4,6 +4,7 @@ import Link from "next/link";
 import {
   FolderSimple,
   ArrowSquareOut,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { expandCollection } from "../../../lib/collections";
 import { CopyLinkButton } from "../../../components/CopyLinkButton";
@@ -68,6 +69,17 @@ export default async function PublicCollectionPage({ params }: PageProps) {
           {fmtTs(rec.updatedAt)}
         </span>
         <CopyLinkButton url={`/c/${rec.id}`} />
+        {rec.items.length > 0 && (
+          <a
+            href={`/api/collections/${rec.id}?format=csv`}
+            download={`codeclone-collection-${rec.id}-items.csv`}
+            className="mono text-[11px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)] inline-flex items-center gap-1"
+            title="Download every comparison in this collection as a spreadsheet (share id, language, clone label, shingle Jaccard, byte sizes, created at)"
+            aria-label="Download collection items as CSV"
+          >
+            <DownloadSimple weight="duotone" size={13} /> csv
+          </a>
+        )}
       </div>
 
       <div className="mt-8">
