@@ -1140,6 +1140,39 @@ export const ENDPOINTS: SpecEndpoint[] = [
     curl: (host, key) => `curl -sS ${host}/v1/runs/r_2024_05_31_a -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "keys-list",
+    method: "GET",
+    path: "/v1/keys",
+    routeFile: "app/api/v1/keys/route.ts",
+    summary: "List the calling workspace's API keys (metadata only, never hashes or plaintext) for SOC2 CC6.1/CC6.3 key inventory and rotation tracking. Tenant-scoped to the calling key's workspace.",
+    scope: "keys:read",
+    params: [
+      { name: "format", kind: "query", required: false, type: "string", description: "Response format. 'json' (default) or 'csv' returns the inventory as an RFC 4180 download for SOC2 reviewers, csvkit, Excel, and SOAR rotation runbooks." },
+    ],
+    sampleResponse: JSON.stringify(
+      {
+        workspace_id: "ws_acme",
+        count: 1,
+        items: [
+          {
+            id: "k_abc123",
+            label: "ci",
+            prefix: "ck_live_",
+            createdAt: 1717000000000,
+            usageCount: 42,
+            workspaceId: "ws_acme",
+            scopes: ["compare:write", "keys:read"],
+            rateLimit: { rpm: 60 },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+    curl: (host, key) =>
+      `curl -sS ${host}/v1/keys -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "keys-id-usage",
     method: "GET",
     path: "/v1/keys/{id}/usage",

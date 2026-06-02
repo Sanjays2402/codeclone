@@ -26,6 +26,14 @@
  * the metadata the dashboard already exposes (id, label, prefix,
  * scopes, rate limit, expiry, last-used, usage count, recent IPs).
  *
+ * Query: ?format=json|csv (default json). CSV returns an RFC 4180
+ *        inventory download (id,label,prefix,created_at,last_used_at,
+ *        usage_count,revoked,expired,user_id,workspace_id,expires_at,
+ *        scopes,rate_limit_rpm,ip_allowlist) so SOC2 reviewers and
+ *        FinOps can pipe the workspace key inventory straight into
+ *        Excel, csvkit, or a SOAR rotation runbook without a JSON
+ *        decode step. Unknown formats return 400.
+ *
  * Still enforced: revocation, expiry, workspace IP allowlist, per-key
  * IP allowlist, residency, workspace API key policy, lockdown,
  * per-key rate limit.
@@ -110,6 +118,22 @@ export async function GET(req: Request) {
 
   if (!key.workspaceId) return tenantRequired();
 
+  const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+
   try {
     const items = await listKeysForWorkspace(key.workspaceId);
     void recordUse(key.id, clientIpFromRequest(req));
@@ -127,8 +151,19 @@ export async function GET(req: Request) {
       workspaceId: key.workspaceId,
       target: { type: "workspace", id: key.workspaceId },
       status: "ok",
-      meta: { count: items.length },
+      meta: { count: items.length, format },
     });
+    if (format === "csv") {
+      const csv = keysToCsv(items);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          ...rl.headers,
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-${key.workspaceId}-keys.csv"`,
+        },
+      });
+    }
     return NextResponse.json(
       {
         workspace_id: key.workspaceId,
@@ -144,4 +179,69 @@ export async function GET(req: Request) {
       { status: 500 },
     );
   }
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type KeyRow = {
+  id: string;
+  label: string;
+  prefix: string;
+  createdAt: number;
+  lastUsedAt?: number;
+  usageCount: number;
+  revoked?: boolean;
+  expired?: boolean;
+  userId?: string;
+  workspaceId?: string;
+  expiresAt?: number;
+  scopes?: ReadonlyArray<string>;
+  rateLimit?: { rpm: number };
+  ipAllowlist?: ReadonlyArray<string>;
+};
+
+function keysToCsv(rows: ReadonlyArray<KeyRow>): string {
+  const header = [
+    "id",
+    "label",
+    "prefix",
+    "created_at",
+    "last_used_at",
+    "usage_count",
+    "revoked",
+    "expired",
+    "user_id",
+    "workspace_id",
+    "expires_at",
+    "scopes",
+    "rate_limit_rpm",
+    "ip_allowlist",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.label),
+        csvCell(r.prefix),
+        csvCell(r.createdAt),
+        csvCell(r.lastUsedAt ?? null),
+        csvCell(r.usageCount),
+        csvCell(r.revoked === true),
+        csvCell(r.expired === true),
+        csvCell(r.userId ?? null),
+        csvCell(r.workspaceId ?? null),
+        csvCell(r.expiresAt ?? null),
+        csvCell(Array.isArray(r.scopes) ? r.scopes.join(" ") : ""),
+        csvCell(r.rateLimit?.rpm ?? null),
+        csvCell(Array.isArray(r.ipAllowlist) ? r.ipAllowlist.join(" ") : ""),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
