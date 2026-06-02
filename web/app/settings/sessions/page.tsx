@@ -9,6 +9,7 @@ import {
   Warning,
   Clock,
   Trash,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../../components/Headings";
 import { ErrorBlock, LoadingRow, Empty } from "../../../components/States";
@@ -196,13 +197,22 @@ export default function SessionsPage() {
       {status === "ready" && data && (
         <>
           <H2 eyebrow="Devices" right={
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)]"
-            >
-              <ArrowsClockwise weight="duotone" size={14} /> Refresh
-            </button>
+            <div className="inline-flex items-center gap-3">
+              <a
+                href="/api/sessions?format=csv"
+                className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)]"
+                title="Download active sessions as CSV"
+              >
+                <DownloadSimple weight="duotone" size={14} /> Download CSV
+              </a>
+              <button
+                type="button"
+                onClick={() => void refresh()}
+                className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)]"
+              >
+                <ArrowsClockwise weight="duotone" size={14} /> Refresh
+              </button>
+            </div>
           }>
             Signed-in devices
           </H2>
