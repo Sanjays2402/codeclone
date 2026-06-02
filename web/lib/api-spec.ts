@@ -796,6 +796,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "classification", kind: "query", required: false, type: "string", description: "One of public, internal, confidential, restricted." },
       { name: "limit", kind: "query", required: false, type: "integer", description: "1..100, default 25." },
       { name: "offset", kind: "query", required: false, type: "integer", description: ">= 0, default 0." },
+      { name: "format", kind: "query", required: false, type: "string", description: "json (default) or csv. CSV returns the same snippet inventory as a spreadsheet (RFC 4180) with bytes per snippet and a per-user download filename, for audit and bulk review." },
     ],
     sampleResponse: JSON.stringify(
       {

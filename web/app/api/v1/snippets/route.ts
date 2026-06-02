@@ -154,12 +154,27 @@ export async function GET(req: Request) {
   if (rl.response) return rl.response;
 
   const url = new URL(req.url);
-  const q = url.searchParams.get("q") ?? undefined;
-  const tag = url.searchParams.get("tag") ?? undefined;
-  const language = url.searchParams.get("language") ?? undefined;
-  const classification = url.searchParams.get("classification") ?? undefined;
-  const limit = parsePositiveInt(url.searchParams.get("limit"), 25, 100);
-  const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
+  const sp = url.searchParams;
+  const formatRaw = sp.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
+  const q = sp.get("q") ?? undefined;
+  const tag = sp.get("tag") ?? undefined;
+  const language = sp.get("language") ?? undefined;
+  const classification = sp.get("classification") ?? undefined;
+  const limit = parsePositiveInt(sp.get("limit"), 25, 100);
+  const offset = parsePositiveInt(sp.get("offset"), 0, 1_000_000);
 
   const started = performance.now();
   const items = await listSnippets(key.userId, {
@@ -185,6 +200,7 @@ export async function GET(req: Request) {
       filters: { q: q ?? null, tag: tag ?? null, language: language ?? null, classification: classification ?? null },
       limit,
       offset,
+      format,
     },
   });
   void logUsage({
@@ -196,6 +212,18 @@ export async function GET(req: Request) {
     workspaceId: key.workspaceId,
   });
 
+  if (format === "csv") {
+    const csv = snippetsToCsv(items.map(presentSnippet));
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${key.userId}-snippets.csv"`,
+      },
+    });
+  }
+
   return NextResponse.json(
     {
       count: items.length,
@@ -205,6 +233,53 @@ export async function GET(req: Request) {
     },
     { headers: rl.headers },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type SnippetCsvRow = {
+  id: string;
+  title: string;
+  language: string;
+  body: string;
+  tags: string[];
+  classification: string;
+  created_at: number;
+  updated_at: number;
+};
+
+function snippetsToCsv(rows: ReadonlyArray<SnippetCsvRow>): string {
+  const header = [
+    "id",
+    "title",
+    "language",
+    "classification",
+    "tags",
+    "bytes",
+    "created_at",
+    "updated_at",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.title),
+        csvCell(r.language),
+        csvCell(r.classification),
+        csvCell((r.tags ?? []).join("|")),
+        csvCell(Buffer.byteLength(r.body ?? "", "utf-8")),
+        csvCell(new Date(r.created_at).toISOString()),
+        csvCell(new Date(r.updated_at).toISOString()),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
 
 export async function POST(req: Request) {
