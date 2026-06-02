@@ -41,6 +41,22 @@ const routeSrc = fs.readFileSync(
 const { createKey, hasScope, ALL_SCOPES } = await import("../lib/api-keys.ts");
 const { logUsage, summarize } = await import("../lib/usage.ts");
 
+test("v1/usage: route source wires format=csv, rejects unknown formats, audits format choice", () => {
+  // Param parsed and validated.
+  assert.match(routeSrc, /searchParams\.get\("format"\)/);
+  assert.match(routeSrc, /Invalid 'format' value/);
+  // CSV branch must emit the SOC2-friendly content-type and a filename so
+  // browsers and curl -OJ save it as a real spreadsheet, not inline JSON.
+  assert.match(routeSrc, /text\/csv/);
+  assert.match(routeSrc, /content-disposition[\s\S]*codeclone-usage\.csv/);
+  // The audit row must include the format so finance reviewers can tell
+  // a JSON poll apart from a CSV chargeback export after the fact.
+  assert.match(routeSrc, /format,?\s*\n/);
+  // CSV cell escaping must follow RFC 4180 (double-quote double-up).
+  assert.match(routeSrc, /csvCell/);
+  assert.match(routeSrc, /replace\(\/"\/g, '""'\)/);
+});
+
 test("v1/usage: route source wires scope, rate-limit, scope filter, and audit", () => {
   assert.match(routeSrc, /hasScope\(key, "usage:read"\)/);
   // Must call enforce, not peek — /v1/usage is billable against the per-key

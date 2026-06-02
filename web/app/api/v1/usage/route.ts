@@ -23,6 +23,11 @@
  *        so finance can read them.
  * Query: ?days=1..90 (default 7), ?recent=0..200 (default 0, omit
  *        the recent-events array). Out-of-range values return 400.
+ *        ?format=csv returns the per-day call counts as an RFC 4180
+ *        CSV download (date,count) for Excel and csvkit chargeback
+ *        pipelines that do not want to write a JSON-to-CSV middle
+ *        step. The CSV honors the same `days` window. Default is
+ *        `json`. Unknown values return 400.
  *
  * Still enforced: revocation, expiry, workspace IP allowlist, per-key
  * IP allowlist, residency, workspace API key policy, lockdown.
@@ -110,6 +115,11 @@ export async function GET(req: Request) {
   if (!daysParsed.ok) return badRequest("days must be an integer in [1, 90].");
   const recentParsed = parseIntInRange(url.searchParams.get("recent"), 0, 0, 200);
   if (!recentParsed.ok) return badRequest("recent must be an integer in [0, 200].");
+  const formatRaw = url.searchParams.get("format");
+  const format = formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return badRequest("Invalid 'format' value. Use 'json' (default) or 'csv'.");
+  }
 
   // Spend a rate-limit slot. /v1/usage is cheap but it is still a real
   // request against the customer's key; we do not want it to be a free
@@ -151,8 +161,22 @@ export async function GET(req: Request) {
       days: daysParsed.value,
       recent: recentParsed.value,
       total_calls: summary.totalCalls,
+      format,
     },
   });
+
+  if (format === "csv") {
+    const csv = byDayToCsv(summary.byDay);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rlHeaders,
+        ...planHdrs,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-usage.csv"`,
+      },
+    });
+  }
 
   const body = {
     workspace: ws
@@ -198,4 +222,19 @@ export async function GET(req: Request) {
   return NextResponse.json(body, {
     headers: { ...rlHeaders, ...planHdrs },
   });
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function byDayToCsv(rows: ReadonlyArray<{ date: string; count: number }>): string {
+  const lines: string[] = ["date,count"];
+  for (const r of rows) {
+    lines.push([csvCell(r.date), csvCell(r.count)].join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
 }
