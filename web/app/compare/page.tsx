@@ -251,6 +251,36 @@ function ComparePageInner() {
 
   const charCounts = useMemo(() => ({ a: a.length, b: b.length }), [a, b]);
 
+  // Keyboard shortcut: Cmd/Ctrl+Enter triggers compare from anywhere on the page,
+  // including while focused inside either textarea. This is the main action on
+  // the only "try it" page, so taking the user's hand off the mouse to run a
+  // comparison is a real friction win, especially when iterating on snippet B.
+  const canCompareRef = useRef(canCompare);
+  canCompareRef.current = canCompare;
+  const submitRef = useRef(submit);
+  submitRef.current = submit;
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Enter") return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (!canCompareRef.current) return;
+      e.preventDefault();
+      void submitRef.current();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // Show the platform-appropriate modifier hint on the compare button.
+  const [shortcutHint, setShortcutHint] = useState<string>("Ctrl+Enter");
+  useEffect(() => {
+    if (typeof navigator === "undefined") return;
+    const ua = navigator.userAgent || "";
+    const plat = (navigator as Navigator & { platform?: string }).platform || "";
+    const isMac = /Mac|iPhone|iPad|iPod/.test(plat) || /Mac OS X/.test(ua);
+    setShortcutHint(isMac ? "\u2318+Enter" : "Ctrl+Enter");
+  }, []);
+
   return (
     <div className="flex flex-col gap-6">
       {(rerunLoading || rerun || rerunError) && (
@@ -349,10 +379,15 @@ function ComparePageInner() {
           type="button"
           onClick={submit}
           disabled={!canCompare}
+          title={`Run comparison (${shortcutHint})`}
+          aria-keyshortcuts="Meta+Enter Control+Enter"
           className="inline-flex items-center gap-1.5 mono text-[11.5px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)] hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <Lightning weight="duotone" size={13} />
           {loading ? "comparing…" : "compare"}
+          <span aria-hidden className="hidden sm:inline mono text-[10px] normal-case tracking-normal opacity-70 ml-1">
+            {shortcutHint}
+          </span>
         </button>
       </section>
 
