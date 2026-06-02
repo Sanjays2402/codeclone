@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   BookmarksSimple,
@@ -106,6 +106,33 @@ export default function SnippetsPage() {
     refresh();
   }, [refresh]);
 
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keyboard shortcut: "/" focuses the search box from anywhere on the page,
+  // matching the convention used by GitHub, Linear, and Slack. Skipped while
+  // the user is already typing in another input/textarea/select or a
+  // contenteditable surface, so we never hijack a literal slash they meant to
+  // type (for example inside the new-snippet body editor).
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
   const remove = useCallback(
     async (id: string) => {
       if (!confirm("Delete this snippet?")) return;
@@ -176,12 +203,21 @@ export default function SnippetsPage() {
         <div className="flex items-center gap-2 ruled rounded-md px-3 py-2 bg-[var(--color-paper)] flex-1 max-w-[420px]">
           <MagnifyingGlass size={14} weight="duotone" className="text-[var(--color-ink-4)]" />
           <input
+            ref={searchInputRef}
             type="search"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Search title, body, tag"
+            aria-keyshortcuts="/"
             className="bg-transparent outline-none flex-1 text-[13px] mono"
           />
+          <kbd
+            aria-hidden="true"
+            className="hidden sm:inline mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)]"
+            title="Press / to focus search"
+          >
+            /
+          </kbd>
         </div>
         <button
           type="button"
