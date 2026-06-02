@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-  GridFour, Lightning, Plus, Trash, ArrowsLeftRight, FileCode, Sparkle,
+  GridFour, Lightning, Plus, Trash, ArrowsLeftRight, FileCode, Sparkle, DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { ErrorBlock } from "../../components/States";
@@ -119,6 +119,57 @@ export default function BatchPage() {
     setSnippets(prev => prev.filter((_, i) => i !== idx));
     setActiveSet(null);
   };
+
+  const downloadMatrixCsv = useCallback(() => {
+    if (!result) return;
+    const esc = (v: string) => {
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const labels = result.snippets.map(s => s.label);
+    const lines: string[] = [];
+    // Section 1: similarity matrix (shingle Jaccard, the heatmap value).
+    lines.push(["label", ...labels].map(esc).join(","));
+    for (let i = 0; i < result.matrix.length; i++) {
+      const row = result.matrix[i].map(v => v.toFixed(4));
+      lines.push([labels[i], ...row].map(esc).join(","));
+    }
+    // Section 2: pair-level breakdown so reviewers can sort and filter.
+    lines.push("");
+    lines.push(
+      [
+        "a_index", "a_label", "b_index", "b_label",
+        "shingle_jaccard", "token_jaccard", "containment",
+        "clone_type", "clone_confidence",
+      ].map(esc).join(","),
+    );
+    for (const c of result.cells) {
+      lines.push(
+        [
+          String(c.i),
+          labels[c.i] ?? "",
+          String(c.j),
+          labels[c.j] ?? "",
+          c.scores.shingleJaccard.toFixed(4),
+          c.scores.tokenJaccard.toFixed(4),
+          c.scores.containment.toFixed(4),
+          c.clone.type,
+          c.clone.confidence.toFixed(4),
+        ].map(esc).join(","),
+      );
+    }
+    const csv = lines.join("\n") + "\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.download = `codeclone-batch-${stamp}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [result]);
 
   const cellMap = useMemo(() => {
     const m = new Map<string, BatchCell>();
@@ -259,9 +310,20 @@ export default function BatchPage() {
                 Pairwise shingle Jaccard across {result.n} snippets.
               </h2>
             </div>
-            <div className="mono text-[11px] text-[var(--color-ink-4)] tnum text-right">
-              {result.cells.length} pairs · {result.latency_ms.toFixed(2)} ms
-              <div className="text-[10px] uppercase tracking-[0.14em] mt-1">{result.method}</div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={downloadMatrixCsv}
+                className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-2 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+                title="Download the similarity matrix and pair scores as CSV"
+              >
+                <DownloadSimple size={12} weight="duotone" />
+                Download CSV
+              </button>
+              <div className="mono text-[11px] text-[var(--color-ink-4)] tnum text-right">
+                {result.cells.length} pairs · {result.latency_ms.toFixed(2)} ms
+                <div className="text-[10px] uppercase tracking-[0.14em] mt-1">{result.method}</div>
+              </div>
             </div>
           </div>
 
