@@ -12,6 +12,7 @@ import {
   ShareNetwork,
   Stack,
   Info,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -210,6 +211,19 @@ export default function NotificationsPage() {
           >
             <CheckCircle weight="duotone" size={13} /> mark all read
           </button>
+          <a
+            href={`/api/notifications?format=csv&limit=200${filter === "unread" ? "&unread=1" : ""}`}
+            download="codeclone-notifications.csv"
+            aria-disabled={items.length === 0}
+            tabIndex={items.length === 0 ? -1 : 0}
+            onClick={(e) => {
+              if (items.length === 0) e.preventDefault();
+            }}
+            className={`inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:border-[color:var(--color-accent)] hover:text-[var(--color-ink)] ${items.length === 0 ? "opacity-40 pointer-events-none" : ""}`}
+            title="Download notifications as CSV"
+          >
+            <DownloadSimple weight="duotone" size={13} /> Download CSV
+          </a>
           <button
             onClick={() => void clearAll()}
             disabled={busy === "__all__" || items.length === 0}

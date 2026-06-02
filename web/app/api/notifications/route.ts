@@ -12,7 +12,44 @@ import {
   countUnread,
   listNotifications,
   markAllRead,
+  type NotificationRecord,
 } from "../../../lib/notifications";
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function notificationsToCsv(rows: ReadonlyArray<NotificationRecord>): string {
+  const header = [
+    "id",
+    "kind",
+    "title",
+    "body",
+    "href",
+    "created_at",
+    "read_at",
+    "read",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.kind),
+        csvCell(r.title),
+        csvCell(r.body ?? ""),
+        csvCell(r.href ?? ""),
+        csvCell(r.createdAt),
+        csvCell(r.readAt ?? null),
+        csvCell(r.readAt ? "true" : "false"),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -30,11 +67,44 @@ export async function GET(req: Request) {
     const n = Number.parseInt(limitRaw, 10);
     if (Number.isFinite(n) && n > 0 && n <= 200) limit = n;
   }
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "format must be 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
   try {
     const [items, unread] = await Promise.all([
       listNotifications(user.id, { unreadOnly, limit }),
       countUnread(user.id),
     ]);
+    void tryRecordAudit(req, {
+      action: "notification.read",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "notification" },
+      meta: { count: items.length, format, unreadOnly },
+    });
+    if (format === "csv") {
+      const csv = notificationsToCsv(items);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition":
+            'attachment; filename="codeclone-notifications.csv"',
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     return NextResponse.json({ items, unread, count: items.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
