@@ -13,6 +13,7 @@ import {
   FloppyDisk,
   X,
   Code,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -193,6 +194,17 @@ export default function SnippetsPage() {
           <Plus size={12} weight="bold" />
           New snippet
         </button>
+        {status === "ready" && items.length > 0 ? (
+          <a
+            href="/api/snippets?format=csv"
+            download="codeclone-snippets.csv"
+            className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-2 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+            title="Download your snippet library as CSV"
+          >
+            <DownloadSimple size={12} weight="duotone" />
+            Download CSV
+          </a>
+        ) : null}
       </div>
 
       {tags.length > 0 && (

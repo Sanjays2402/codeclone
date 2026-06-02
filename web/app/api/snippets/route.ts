@@ -11,6 +11,7 @@ import {
   createSnippet,
   listSnippets,
   SnippetError,
+  type SnippetRecord,
 } from "../../../lib/snippets";
 
 export const dynamic = "force-dynamic";
@@ -20,12 +21,64 @@ async function currentUser(req: Request) {
   return currentUserFromCookieHeader(cookieHeader);
 }
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function snippetsToCsv(rows: ReadonlyArray<SnippetRecord>): string {
+  // Mirror the column order of /v1/snippets?format=csv so a dashboard
+  // export and a programmatic export drop into the same template.
+  const header = [
+    "id",
+    "title",
+    "language",
+    "classification",
+    "tags",
+    "bytes",
+    "created_at",
+    "updated_at",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.title),
+        csvCell(r.language),
+        csvCell(r.classification),
+        csvCell((r.tags ?? []).join("|")),
+        csvCell(Buffer.byteLength(r.body ?? "", "utf-8")),
+        csvCell(new Date(r.createdAt).toISOString()),
+        csvCell(new Date(r.updatedAt).toISOString()),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export async function GET(req: Request) {
   const user = await currentUser(req);
   if (!user) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "format must be 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
   const q = url.searchParams.get("q") ?? undefined;
   const tag = url.searchParams.get("tag") ?? undefined;
   const language = url.searchParams.get("language") ?? undefined;
@@ -33,6 +86,25 @@ export async function GET(req: Request) {
   const limit = Number(url.searchParams.get("limit") ?? 200);
   const offset = Number(url.searchParams.get("offset") ?? 0);
   const items = await listSnippets(user.id, { q, tag, language, classification, limit, offset });
+  void tryRecordAudit(req, {
+    action: "snippets.read",
+    actorId: user.id,
+    actorEmail: user.email,
+    target: { type: "snippet_inventory", id: user.id },
+    status: "ok",
+    meta: { count: items.length, format },
+  });
+  if (format === "csv") {
+    const csv = snippetsToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-snippets.csv"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
   return NextResponse.json({ items, count: items.length });
 }
 
