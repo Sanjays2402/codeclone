@@ -11,6 +11,7 @@ import {
   Crown,
   PencilSimple,
   Eye,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -94,16 +95,29 @@ export default function WorkspacesPage() {
         <div className="mono text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">
           {status === "ready" ? `${items.length} total` : status === "unauth" ? "sign in to view" : "loading"}
         </div>
-        {status !== "unauth" && !creating && (
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[13px]"
-          >
-            <Plus weight="duotone" size={14} />
-            new workspace
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {status === "ready" && items.length > 0 && (
+            <a
+              href="/api/workspaces?format=csv"
+              download="codeclone-workspaces.csv"
+              className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[13px] whitespace-nowrap text-[var(--color-ink-2)]"
+              title="Download your workspaces as CSV"
+            >
+              <DownloadSimple weight="duotone" size={14} />
+              CSV
+            </a>
+          )}
+          {status !== "unauth" && !creating && (
+            <button
+              type="button"
+              onClick={() => setCreating(true)}
+              className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[13px]"
+            >
+              <Plus weight="duotone" size={14} />
+              new workspace
+            </button>
+          )}
+        </div>
       </div>
 
       {status === "unauth" && (
