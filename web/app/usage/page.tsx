@@ -298,6 +298,14 @@ export default function UsagePage() {
                     {n}d
                   </button>
                 ))}
+                <a
+                  href={`${usageUrl}${usageUrl.includes("?") ? "&" : "?"}format=csv`}
+                  download="codeclone-usage.csv"
+                  className="ml-2 mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
+                  title="Download per-day call counts as CSV for spreadsheet chargeback"
+                >
+                  Download CSV
+                </a>
               </div>
             }
           >

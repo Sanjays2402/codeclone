@@ -4,6 +4,21 @@ import { currentUserFromCookieHeader } from "../../../lib/auth";
 import { listWorkspacesForUser, getActiveMember, getWorkspace } from "../../../lib/workspaces";
 import { tryRecordAudit } from "../../../lib/audit";
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function byDayToCsv(rows: ReadonlyArray<{ date: string; count: number }>): string {
+  const lines: string[] = ["date,count"];
+  for (const r of rows) {
+    lines.push([csvCell(r.date), csvCell(r.count)].join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -42,6 +57,15 @@ export async function GET(req: Request) {
     windowDays = Math.floor(n);
   }
 
+  const formatRaw = url.searchParams.get("format");
+  const format = formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: "format must be 'json' (default) or 'csv'." } },
+      { status: 400 },
+    );
+  }
+
   const memberWorkspaces = await listWorkspacesForUser(user.id);
   let allowedIds = new Set(memberWorkspaces.map((w) => w.id));
 
@@ -76,8 +100,19 @@ export async function GET(req: Request) {
       workspaceId: requested ?? undefined,
       target: { type: "usage_summary", id: requested ?? "all" },
       status: "ok",
-      meta: { windowDays, workspaces: Array.from(allowedIds) },
+      meta: { windowDays, workspaces: Array.from(allowedIds), format },
     });
+    if (format === "csv") {
+      const csv = byDayToCsv(data.byDay);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-usage.csv"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     return NextResponse.json(
       { ...data, scope: { workspaceIds: Array.from(allowedIds) } },
       { headers: { "Cache-Control": "no-store" } },
