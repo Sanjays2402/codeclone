@@ -25,7 +25,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -46,7 +46,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -70,7 +70,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -93,7 +93,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Trivy config scan
         uses: aquasecurity/trivy-action@v0.36.0
         with:
@@ -115,7 +115,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2

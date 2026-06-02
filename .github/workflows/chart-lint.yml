@@ -14,7 +14,7 @@ jobs:
     if: ${{ vars.ENABLE_CI == '1' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: azure/setup-helm@v5
       - run: helm lint infra/helm/codeclone
       - run: helm template codeclone infra/helm/codeclone > /tmp/render.yaml
