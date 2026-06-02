@@ -200,6 +200,61 @@ function ComparePageInner() {
     URL.revokeObjectURL(url);
   }, [a, b, language, result]);
 
+  // Download the current comparison as a Markdown report. Optimized for
+  // pasting into a PR description, a code-review comment, a Linear/Jira
+  // ticket, or a Slack thread, where a raw JSON blob is unreadable but a
+  // formatted summary with scores, clone verdict, matched tokens, and
+  // fenced snippets is what reviewers actually want to see.
+  const downloadMarkdown = useCallback(() => {
+    if (!result) return;
+    const pct = (n: number) => `${(Math.max(0, Math.min(1, n)) * 100).toFixed(1)}%`;
+    const fence = language && language !== "auto" ? language : "";
+    const lines: string[] = [];
+    lines.push(`# codeclone comparison`);
+    lines.push("");
+    lines.push(`- exported: ${new Date().toISOString()}`);
+    lines.push(`- method: \`${result.method}\` · ${result.latency_ms.toFixed(2)} ms · ${result.bytes.a}/${result.bytes.b} bytes · lang \`${result.language}\``);
+    lines.push(`- clone: **${result.clone.label}** (${result.clone.type}, confidence ${result.clone.confidence.toFixed(2)})`);
+    lines.push("");
+    lines.push(`## scores`);
+    lines.push("");
+    lines.push(`| metric | value |`);
+    lines.push(`| --- | --- |`);
+    lines.push(`| shingle jaccard (5-gram) | ${pct(result.scores.shingleJaccard)} |`);
+    lines.push(`| token jaccard | ${pct(result.scores.tokenJaccard)} |`);
+    lines.push(`| containment (min-side) | ${pct(result.scores.containment)} |`);
+    lines.push(`| shared shingles | ${result.scores.shared.shingles} / ${result.scores.size.aShingles + result.scores.size.bShingles - result.scores.shared.shingles} |`);
+    lines.push("");
+    if (result.scores.matchedTokens.length > 0) {
+      lines.push(`## shared identifiers (${result.scores.matchedTokens.length})`);
+      lines.push("");
+      lines.push(result.scores.matchedTokens.map(t => `\`${t}\``).join(", "));
+      lines.push("");
+    }
+    lines.push(`## snippet A`);
+    lines.push("");
+    lines.push("```" + fence);
+    lines.push(a);
+    lines.push("```");
+    lines.push("");
+    lines.push(`## snippet B`);
+    lines.push("");
+    lines.push("```" + fence);
+    lines.push(b);
+    lines.push("```");
+    lines.push("");
+    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.download = `codeclone-compare-${stamp}.md`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [a, b, language, result]);
+
   const copyShare = useCallback(async () => {
     if (!shareUrl) return;
     try {
@@ -440,6 +495,15 @@ function ComparePageInner() {
             >
               <DownloadSimple weight="duotone" size={13} />
               download json
+            </button>
+            <button
+              type="button"
+              onClick={downloadMarkdown}
+              title="Download this comparison as a Markdown report for a PR, ticket, or Slack thread"
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              <DownloadSimple weight="duotone" size={13} />
+              download md
             </button>
             <button
               type="button"
