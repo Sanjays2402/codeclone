@@ -600,13 +600,25 @@ export default function WebhooksPage() {
       </section>
 
       <H2 eyebrow="endpoints" right={
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          className="inline-flex items-center gap-1.5 mono text-[10.5px] uppercase tracking-[0.16em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
-        >
-          <ArrowClockwise size={11} weight="duotone" /> refresh
-        </button>
+        <div className="flex items-center gap-1.5">
+          {status === "ready" && items.length > 0 && activeWs ? (
+            <a
+              href={`/api/webhooks?workspaceId=${encodeURIComponent(activeWs)}&format=csv`}
+              download={`codeclone-${activeWs}-webhooks.csv`}
+              className="mono text-[10.5px] uppercase tracking-[0.16em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+              title="Download this workspace's webhook inventory as CSV"
+            >
+              Download CSV
+            </a>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void refresh()}
+            className="inline-flex items-center gap-1.5 mono text-[10.5px] uppercase tracking-[0.16em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+          >
+            <ArrowClockwise size={11} weight="duotone" /> refresh
+          </button>
+        </div>
       }>registered webhooks</H2>
 
       {status === "loading" && <LoadingRow rows={3} />}

@@ -3,6 +3,7 @@ import {
   createWebhook,
   listWebhooksForWorkspace,
   validateWorkspaceId,
+  type WebhookSummary,
 } from "../../../lib/webhooks";
 import { tryRecordAudit } from "../../../lib/audit";
 import { currentUserFromCookieHeader } from "../../../lib/auth";
@@ -45,11 +46,92 @@ async function resolveWorkspaceForUser(req: Request, workspaceIdRaw: unknown) {
   return { user, ws, member };
 }
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function webhooksToCsv(rows: ReadonlyArray<WebhookSummary>): string {
+  const header = [
+    "id",
+    "label",
+    "url",
+    "events",
+    "disabled",
+    "secret_prefix",
+    "pending_secret_prefix",
+    "created_at",
+    "updated_at",
+    "success_count",
+    "failure_count",
+    "last_delivery_at",
+    "last_status",
+    "last_error",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.label),
+        csvCell(r.url),
+        csvCell((r.events ?? []).join("|")),
+        csvCell(r.disabled ? "true" : "false"),
+        csvCell(r.secretPrefix),
+        csvCell(r.pendingSecretPrefix),
+        csvCell(r.createdAt),
+        csvCell(r.updatedAt),
+        csvCell(r.successCount),
+        csvCell(r.failureCount),
+        csvCell(r.lastDeliveryAt),
+        csvCell(r.lastStatus),
+        csvCell(r.lastError),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const r = await resolveWorkspaceForUser(req, url.searchParams.get("workspaceId"));
   if ("error" in r) return r.error;
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "format must be 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
   const items = await listWebhooksForWorkspace(r.ws.id);
+  void tryRecordAudit(req, {
+    action: "webhooks.read",
+    actorId: r.user.id,
+    actorEmail: r.user.email,
+    target: { type: "webhook_inventory", id: r.ws.id },
+    status: "ok",
+    meta: { workspaceId: r.ws.id, count: items.length, format },
+  });
+  if (format === "csv") {
+    const csv = webhooksToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${r.ws.id}-webhooks.csv"`,
+        "Cache-Control": "no-store",
+      },
+    });
+  }
   return NextResponse.json({ items, workspaceId: r.ws.id });
 }
 
