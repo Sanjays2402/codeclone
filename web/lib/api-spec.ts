@@ -1198,7 +1198,9 @@ export const ENDPOINTS: SpecEndpoint[] = [
     routeFile: "app/api/v1/allowlist/route.ts",
     summary: "Read the workspace IP CIDR allowlist for SOC2 CC6.6 evidence and SIEM reconciliation.",
     scope: "allowlist:read",
-    params: [],
+    params: [
+      { name: "format", kind: "query", required: false, type: "'json' | 'csv'", description: "Response format. 'json' (default) returns the structured payload. 'csv' returns an RFC 4180 attachment with one row per CIDR entry, stamped with workspace_id, position, enforced flag, and generated_at, for SOC2 CC6.6 evidence collection and SIEM ingest." },
+    ],
     sampleResponse: JSON.stringify({ workspace_id: "w_abc", entries: ["10.0.0.0/8", "203.0.113.4/32"], count: 2, max_entries: 64, enforced: true, server_time: 1717000000000 }, null, 2),
     curl: (host, key) => `curl -sS ${host}/v1/allowlist -H "Authorization: Bearer ${key}"`,
   },

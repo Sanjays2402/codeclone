@@ -204,10 +204,84 @@ async function readJsonBody(req: Request, rlHeaders: Record<string, string>): Pr
   }
 }
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function allowlistToCsv(
+  entries: ReadonlyArray<string>,
+  workspaceId: string,
+  enforced: boolean,
+  generatedAt: number,
+): string {
+  // One row per CIDR entry. workspace_id + generated_at stamps every
+  // row so a SOC2 reviewer collating quarterly evidence across many
+  // workspaces can grep one column and a SIEM can ingest the file
+  // without an out-of-band manifest. position preserves the order
+  // the allowlist was configured in, which matters for downstream
+  // diff tools comparing nightly snapshots.
+  const header = [
+    "workspace_id",
+    "position",
+    "cidr",
+    "enforced",
+    "generated_at",
+  ];
+  const lines: string[] = [header.join(",")];
+  const stamp = new Date(generatedAt).toISOString();
+  if (entries.length === 0) {
+    // Empty allowlist is still meaningful evidence: it means open
+    // access is in effect. Emit a single placeholder row so the file
+    // is never silently empty when imported into Excel.
+    lines.push(
+      [
+        csvCell(workspaceId),
+        csvCell(0),
+        csvCell(""),
+        csvCell(enforced),
+        csvCell(stamp),
+      ].join(","),
+    );
+  } else {
+    entries.forEach((cidr, i) => {
+      lines.push(
+        [
+          csvCell(workspaceId),
+          csvCell(i),
+          csvCell(cidr),
+          csvCell(enforced),
+          csvCell(stamp),
+        ].join(","),
+      );
+    });
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export async function GET(req: Request) {
   const g = await gate(req, "allowlist:read");
   if ("response" in g) return g.response;
   const { key, rlHeaders, workspaceId } = g;
+
+  const url = new URL(req.url);
+  const sp = url.searchParams;
+  const formatRaw = sp.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rlHeaders },
+    );
+  }
 
   const ws = await getWorkspace(workspaceId);
   if (!ws) return notFound();
@@ -219,6 +293,7 @@ export async function GET(req: Request) {
   }
 
   const entries = Array.isArray(ws.ipAllowlist) ? [...ws.ipAllowlist] : [];
+  const enforced = entries.length > 0;
 
   void recordUse(key.id, clientIpFromRequest(req));
   void tryRecordAudit(req, {
@@ -227,8 +302,25 @@ export async function GET(req: Request) {
     workspaceId,
     target: { type: "workspace_ip_allowlist", id: workspaceId },
     status: "ok",
-    meta: { prefix: key.prefix, count: entries.length },
+    meta: {
+      prefix: key.prefix,
+      count: entries.length,
+      format,
+    },
   });
+
+  if (format === "csv") {
+    const filenameWs = workspaceId;
+    const csv = allowlistToCsv(entries, workspaceId, enforced, Date.now());
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rlHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${filenameWs}-allowlist.csv"`,
+      },
+    });
+  }
 
   return NextResponse.json(
     {
@@ -236,7 +328,7 @@ export async function GET(req: Request) {
       entries,
       count: entries.length,
       max_entries: MAX_CIDR_ENTRIES,
-      enforced: entries.length > 0,
+      enforced,
       server_time: Date.now(),
     },
     { headers: rlHeaders },
