@@ -19,7 +19,10 @@
  *        workspaces share the same underlying JSONL store. Keys
  *        without a workspace are refused with 403 tenant_required.
  * Output: NDJSON (one failure per line) when `format=ndjson` (default),
- *        or a JSON object with an `items` array when `format=json`.
+ *        or a JSON object with an `items` array when `format=json`,
+ *        or an RFC 4180 CSV download when `format=csv` so an on-call
+ *        manager can drop the recent-failure feed into a spreadsheet
+ *        for an incident review without writing a JSON-to-CSV step.
  *        NDJSON is the default because every major SIEM ingests it.
  * Query params:
  *   limit   1..200 (default 50)
@@ -153,8 +156,8 @@ export async function GET(req: Request) {
   if (!sinceParsed.ok) return badRequest("since must be a non-negative ms epoch or ISO 8601 timestamp.");
 
   const format = (sp.get("format") ?? "ndjson").toLowerCase();
-  if (format !== "ndjson" && format !== "json") {
-    return badRequest("format must be 'ndjson' or 'json'.");
+  if (format !== "ndjson" && format !== "json" && format !== "csv") {
+    return badRequest("format must be 'ndjson', 'json', or 'csv'.");
   }
 
   // Tenant scope: collectRecentFailures defers to listWebhooksForWorkspace
@@ -207,6 +210,18 @@ export async function GET(req: Request) {
     });
   }
 
+  if (format === "csv") {
+    const csv = failuresToCsv(items);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...baseHeaders,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${key.workspaceId}-webhook-failures.csv"`,
+      },
+    });
+  }
+
   return NextResponse.json(
     {
       workspace_id: key.workspaceId,
@@ -216,4 +231,51 @@ export async function GET(req: Request) {
     },
     { headers: baseHeaders },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type FailureRow = {
+  webhookId: string;
+  label: string;
+  url: string;
+  event: string;
+  attemptedAt: number;
+  status: number;
+  attempts: number;
+  error?: string;
+};
+
+function failuresToCsv(rows: ReadonlyArray<FailureRow>): string {
+  const header = [
+    "webhookId",
+    "label",
+    "url",
+    "event",
+    "attemptedAt",
+    "status",
+    "attempts",
+    "error",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.webhookId),
+        csvCell(r.label),
+        csvCell(r.url),
+        csvCell(r.event),
+        csvCell(r.attemptedAt),
+        csvCell(r.status),
+        csvCell(r.attempts),
+        csvCell(r.error),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }

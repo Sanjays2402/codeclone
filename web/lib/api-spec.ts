@@ -432,7 +432,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
     params: [
       { name: "limit", kind: "query", required: false, type: "integer", description: "1..200, newest-first. Default 50." },
       { name: "since", kind: "query", required: false, type: "ms epoch or ISO 8601", description: "Only failures attempted at or after this timestamp." },
-      { name: "format", kind: "query", required: false, type: "'ndjson' | 'json'", description: "Response shape. Defaults to ndjson (one failure per line) for SIEM ingestion." },
+      { name: "format", kind: "query", required: false, type: "'ndjson' | 'json' | 'csv'", description: "Response shape. Defaults to ndjson (one failure per line) for SIEM ingestion. 'csv' returns an RFC 4180 download for spreadsheet incident review." },
     ],
     sampleResponse: JSON.stringify(
       {
