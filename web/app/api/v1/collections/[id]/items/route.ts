@@ -170,6 +170,20 @@ export async function GET(req: Request, ctx: Ctx) {
   if (!existing || !workspaceOwns(existing, key.workspaceId)) return notFound();
 
   const url = new URL(req.url);
+  const formatRaw = url.searchParams.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
   const rawLimit = url.searchParams.get("limit");
   let limit = 25;
   if (rawLimit !== null) {
@@ -212,6 +226,7 @@ export async function GET(req: Request, ctx: Ctx) {
       cursor: cursor ?? null,
       returned: page.items.length,
       total: page.total,
+      format,
     },
   });
   void logUsage({
@@ -223,6 +238,23 @@ export async function GET(req: Request, ctx: Ctx) {
     workspaceId: key.workspaceId,
   });
 
+  if (format === "csv") {
+    const filenameWs = key.workspaceId ?? "legacy";
+    const csv = itemsToCsv(
+      page.collectionId,
+      key.workspaceId ?? null,
+      page.items,
+    );
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-${filenameWs}-collection-${page.collectionId}-items.csv"`,
+      },
+    });
+  }
+
   return NextResponse.json(
     {
       collection_id: page.collectionId,
@@ -232,6 +264,63 @@ export async function GET(req: Request, ctx: Ctx) {
     },
     { headers: rl.headers },
   );
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type ItemCsvRow = {
+  id: string;
+  title?: string;
+  language: string;
+  cloneLabel: string;
+  shingleJaccard: number;
+  createdAt: number;
+  bytes: { a: number; b: number };
+  missing?: boolean;
+};
+
+function itemsToCsv(
+  collectionId: string,
+  workspaceId: string | null,
+  rows: ReadonlyArray<ItemCsvRow>,
+): string {
+  const header = [
+    "collection_id",
+    "workspace_id",
+    "share_id",
+    "title",
+    "language",
+    "clone_label",
+    "shingle_jaccard",
+    "bytes_a",
+    "bytes_b",
+    "created_at",
+    "missing",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(collectionId),
+        csvCell(workspaceId),
+        csvCell(r.id),
+        csvCell(r.title ?? ""),
+        csvCell(r.language),
+        csvCell(r.cloneLabel),
+        csvCell(r.shingleJaccard),
+        csvCell(r.bytes?.a ?? 0),
+        csvCell(r.bytes?.b ?? 0),
+        csvCell(r.createdAt ? new Date(r.createdAt).toISOString() : ""),
+        csvCell(r.missing ? "true" : "false"),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }
 
 export async function POST(req: Request, ctx: Ctx) {

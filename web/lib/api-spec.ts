@@ -1053,6 +1053,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "id", kind: "path", required: true, type: "string", description: "Collection id." },
       { name: "limit", kind: "query", required: false, type: "number", description: "Page size, 1..100. Defaults to 25." },
       { name: "cursor", kind: "query", required: false, type: "string", description: "Opaque cursor returned in `next_cursor` from a previous page." },
+      { name: "format", kind: "query", required: false, type: "'json' | 'csv'", description: "Response format. 'json' (default) returns the paginated items array. 'csv' returns an RFC 4180 attachment of the same page for spreadsheet audit of a collection's contents." },
     ],
     sampleResponse: JSON.stringify({ collection_id: "abc1234567", items: [{ id: "def4567890", title: "login flow vs onboarding flow", language: "typescript", cloneLabel: "near-duplicate", shingleJaccard: 0.82, createdAt: 1717000000000, bytes: { a: 1240, b: 1310 } }], total: 1, next_cursor: null }, null, 2),
     curl: (host, key) => `curl -sS "${host}/v1/collections/abc1234567/items?limit=25" -H "Authorization: Bearer ${key}"`,
