@@ -109,6 +109,31 @@ export default function HistoryPage() {
   const [tagDraft, setTagDraft] = useState("");
   const [busy, setBusy] = useState<string>("");
   const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keyboard shortcut: "/" focuses the search box from anywhere on the page,
+  // matching the convention used by GitHub, Linear, and Slack. Skipped while
+  // the user is already typing in another input/textarea or editing a title,
+  // so we never hijack a literal slash they meant to type.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   // Debounce search input by 250ms so we do not spam the server.
   useEffect(() => {
@@ -295,11 +320,20 @@ export default function HistoryPage() {
           <label className="flex-1 flex items-center gap-2 px-2.5 py-1.5 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper-2)] focus-within:border-[color:var(--color-accent)]">
             <MagnifyingGlass weight="duotone" size={14} className="text-[var(--color-ink-3)]" />
             <input
+              ref={searchInputRef}
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search by title, id, language, or label"
+              aria-keyshortcuts="/"
               className="flex-1 bg-transparent outline-none text-[13px] placeholder:text-[var(--color-ink-4)]"
             />
+            <kbd
+              aria-hidden="true"
+              className="hidden sm:inline mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)]"
+              title="Press / to focus search"
+            >
+              /
+            </kbd>
           </label>
           <div className="flex items-center gap-1.5">
             <a
