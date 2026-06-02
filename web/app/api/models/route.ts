@@ -29,6 +29,10 @@ export async function GET(req: Request) {
 
   const backendFilter = url.searchParams.get("backend") ?? undefined;
   const baseFilter = url.searchParams.get("base") ?? undefined;
+  // Free-text filter matches adapter name or base model substring (case
+  // insensitive). Mirrors the q box on the /models page so the CSV export
+  // and the on-screen table stay in sync when a researcher narrows the view.
+  const qFilter = (url.searchParams.get("q") ?? "").trim().toLowerCase();
 
   let adapters = await loadAdapters();
   if (backendFilter) {
@@ -36,6 +40,13 @@ export async function GET(req: Request) {
   }
   if (baseFilter) {
     adapters = adapters.filter((a) => a.base_model === baseFilter);
+  }
+  if (qFilter) {
+    adapters = adapters.filter(
+      (a) =>
+        a.name.toLowerCase().includes(qFilter) ||
+        a.base_model.toLowerCase().includes(qFilter),
+    );
   }
 
   if (format === "csv") {
