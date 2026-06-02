@@ -33,6 +33,15 @@ interface Notification {
 
 type Status = "loading" | "ready" | "error" | "unauth";
 type Filter = "all" | "unread";
+type KindFilter = "all" | Kind;
+
+const KIND_FILTERS: ReadonlyArray<{ value: KindFilter; label: string }> = [
+  { value: "all", label: "all kinds" },
+  { value: "share.created", label: "shares" },
+  { value: "batch.completed", label: "batches" },
+  { value: "webhook.failed", label: "webhooks" },
+  { value: "system", label: "system" },
+];
 
 function iconFor(kind: Kind) {
   switch (kind) {
@@ -66,11 +75,14 @@ export default function NotificationsPage() {
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [busy, setBusy] = useState("");
 
   const refresh = useCallback(async () => {
     try {
-      const res = await fetch("/api/notifications?limit=200", { cache: "no-store" });
+      const qs = new URLSearchParams({ limit: "200" });
+      if (kindFilter !== "all") qs.set("kind", kindFilter);
+      const res = await fetch(`/api/notifications?${qs.toString()}`, { cache: "no-store" });
       if (res.status === 401) {
         setStatus("unauth");
         return;
@@ -87,7 +99,7 @@ export default function NotificationsPage() {
       setError(e instanceof Error ? e.message : String(e));
       setStatus("error");
     }
-  }, []);
+  }, [kindFilter]);
 
   useEffect(() => {
     void refresh();
@@ -96,6 +108,13 @@ export default function NotificationsPage() {
   const visible = useMemo(() => {
     return filter === "unread" ? items.filter((n) => !n.readAt) : items;
   }, [items, filter]);
+
+  const csvHref = useMemo(() => {
+    const qs = new URLSearchParams({ format: "csv", limit: "200" });
+    if (filter === "unread") qs.set("unread", "1");
+    if (kindFilter !== "all") qs.set("kind", kindFilter);
+    return `/api/notifications?${qs.toString()}`;
+  }, [filter, kindFilter]);
 
   const toggleRead = async (n: Notification) => {
     setBusy(n.id);
@@ -184,20 +203,38 @@ export default function NotificationsPage() {
 
       <section className="ruled rounded-md p-3 mb-5 bg-[var(--color-paper)] flex flex-col sm:flex-row gap-3 sm:items-center">
         <div className="flex items-center gap-1.5">
-          {(["all", "unread"] as Filter[]).map((f) => (
+          {(['all', 'unread'] as Filter[]).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
               className={`mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border ${
                 filter === f
-                  ? "border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)]"
-                  : "border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]"
+                  ? 'border-[color:var(--color-accent)] bg-[var(--color-accent)] text-[var(--color-paper)]'
+                  : 'border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)]'
               }`}
             >
               {f}
-              {f === "unread" && unread > 0 ? ` · ${unread}` : ""}
+              {f === 'unread' && unread > 0 ? ` · ${unread}` : ''}
             </button>
           ))}
+        </div>
+        <div className="flex items-center gap-1">
+          <label htmlFor="notif-kind" className="mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-4)]">
+            kind
+          </label>
+          <select
+            id="notif-kind"
+            value={kindFilter}
+            onChange={(e) => setKindFilter(e.target.value as KindFilter)}
+            className="mono text-[11px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:border-[color:var(--color-accent)]"
+            title="Filter notifications by kind"
+          >
+            {KIND_FILTERS.map((k) => (
+              <option key={k.value} value={k.value}>
+                {k.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="flex items-center gap-2 mono text-[11px] text-[var(--color-ink-3)] sm:ml-2">
           <Bell weight="duotone" size={13} />
@@ -212,7 +249,7 @@ export default function NotificationsPage() {
             <CheckCircle weight="duotone" size={13} /> mark all read
           </button>
           <a
-            href={`/api/notifications?format=csv&limit=200${filter === "unread" ? "&unread=1" : ""}`}
+            href={csvHref}
             download="codeclone-notifications.csv"
             aria-disabled={items.length === 0}
             tabIndex={items.length === 0 ? -1 : 0}

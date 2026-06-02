@@ -55,6 +55,18 @@ export interface CreateInput {
 export interface ListOptions {
   limit?: number;
   unreadOnly?: boolean;
+  kinds?: ReadonlyArray<NotificationKind>;
+}
+
+const VALID_KINDS: ReadonlySet<NotificationKind> = new Set<NotificationKind>([
+  "share.created",
+  "batch.completed",
+  "webhook.failed",
+  "system",
+]);
+
+export function isNotificationKind(v: unknown): v is NotificationKind {
+  return typeof v === "string" && VALID_KINDS.has(v as NotificationKind);
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{8,32}$/;
@@ -161,7 +173,11 @@ export async function listNotifications(
   opts: ListOptions = {},
 ): Promise<NotificationRecord[]> {
   const all = await readAll(userId);
-  const filtered = opts.unreadOnly ? all.filter((r) => !r.readAt) : all;
+  let filtered = opts.unreadOnly ? all.filter((r) => !r.readAt) : all;
+  if (opts.kinds && opts.kinds.length > 0) {
+    const allow = new Set<NotificationKind>(opts.kinds);
+    filtered = filtered.filter((r) => allow.has(r.kind));
+  }
   const limit = Math.max(1, Math.min(MAX_PER_USER, opts.limit ?? 100));
   return filtered.slice(0, limit);
 }

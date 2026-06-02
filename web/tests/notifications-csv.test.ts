@@ -70,14 +70,23 @@ test("/api/notifications route audits the format in the read row", () => {
 
 test("/notifications page renders a Download CSV link to the format=csv endpoint", () => {
   assert.match(pageSrc, /Download CSV/);
-  assert.match(pageSrc, /\/api\/notifications\?format=csv/);
+  // The page may build the URL inline as a string literal or via
+  // URLSearchParams; either way the request must hit
+  // /api/notifications with format=csv set.
+  assert.match(pageSrc, /\/api\/notifications/);
+  assert.match(pageSrc, /format["=:\s]+"?csv"?/);
   assert.match(pageSrc, /download="codeclone-notifications\.csv"/);
 });
 
 test("/notifications page CSV link respects the active unread filter", () => {
   // When the user has filter === "unread" the CSV should also be the
   // unread subset so the spreadsheet matches what they see on screen.
-  assert.match(pageSrc, /filter === "unread"[^]*unread=1/);
+  // Accept either an inline string literal or a URLSearchParams set
+  // call, as long as the unread=1 flag is conditional on the filter.
+  assert.match(
+    pageSrc,
+    /filter === "unread"[^]*unread["=,\s]+1|unread=1[^]*filter === "unread"/,
+  );
 });
 
 test("notificationsToCsv emits an RFC 4180 header row + CRLF lines", () => {

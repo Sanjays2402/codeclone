@@ -10,8 +10,10 @@ import { tryRecordAudit } from "../../../lib/audit";
 import {
   clearAll,
   countUnread,
+  isNotificationKind,
   listNotifications,
   markAllRead,
+  type NotificationKind,
   type NotificationRecord,
 } from "../../../lib/notifications";
 
@@ -81,9 +83,39 @@ export async function GET(req: Request) {
       { status: 400 },
     );
   }
+  // Optional kind filter: pass ?kind=webhook.failed (repeat or comma-separate to
+  // include multiple). Unknown values are rejected so a typo does not silently
+  // return everything.
+  const kindRaw = url.searchParams.getAll("kind");
+  const kindTokens: string[] = [];
+  for (const v of kindRaw) {
+    for (const part of v.split(",")) {
+      const t = part.trim();
+      if (t) kindTokens.push(t);
+    }
+  }
+  const kinds: NotificationKind[] = [];
+  for (const t of kindTokens) {
+    if (!isNotificationKind(t)) {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message: `unknown kind '${t}'. expected one of: share.created, batch.completed, webhook.failed, system.`,
+          },
+        },
+        { status: 400 },
+      );
+    }
+    if (!kinds.includes(t)) kinds.push(t);
+  }
   try {
     const [items, unread] = await Promise.all([
-      listNotifications(user.id, { unreadOnly, limit }),
+      listNotifications(user.id, {
+        unreadOnly,
+        limit,
+        kinds: kinds.length > 0 ? kinds : undefined,
+      }),
       countUnread(user.id),
     ]);
     void tryRecordAudit(req, {
@@ -91,7 +123,12 @@ export async function GET(req: Request) {
       actorId: user.id,
       actorEmail: user.email,
       target: { type: "notification" },
-      meta: { count: items.length, format, unreadOnly },
+      meta: {
+        count: items.length,
+        format,
+        unreadOnly,
+        kinds: kinds.length > 0 ? kinds.join(",") : "",
+      },
     });
     if (format === "csv") {
       const csv = notificationsToCsv(items);
