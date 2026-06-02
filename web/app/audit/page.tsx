@@ -86,6 +86,7 @@ export default function AuditPage() {
   }, []);
   const [actor, setActor] = useState("");
   const [workspaceId, setWorkspaceId] = useState("");
+  const [requestId, setRequestId] = useState("");
   const [status, setStatus] = useState<"" | "ok" | "denied" | "error">("");
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [verifying, setVerifying] = useState(false);
@@ -160,10 +161,11 @@ export default function AuditPage() {
     if (action.trim()) q.set("action", action.trim());
     if (actor.trim()) q.set("actorId", actor.trim());
     if (workspaceId.trim()) q.set("workspaceId", workspaceId.trim());
+    if (requestId.trim()) q.set("requestId", requestId.trim());
     if (status) q.set("status", status);
     q.set("limit", "200");
     return q.toString();
-  }, [action, actor, workspaceId, status]);
+  }, [action, actor, workspaceId, requestId, status]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -258,6 +260,17 @@ export default function AuditPage() {
             value={workspaceId}
             onChange={(e) => setWorkspaceId(e.target.value)}
             placeholder="workspace id"
+            className="mono text-[12px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 border border-[var(--color-rule)]"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">
+            request id
+          </span>
+          <input
+            value={requestId}
+            onChange={(e) => setRequestId(e.target.value)}
+            placeholder="req_... from response"
             className="mono text-[12px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 border border-[var(--color-rule)]"
           />
         </label>

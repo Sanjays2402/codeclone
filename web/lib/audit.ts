@@ -425,6 +425,11 @@ export interface ListAuditOptions {
   action?: string; // exact match or prefix with trailing "."
   targetType?: string;
   targetId?: string;
+  // Exact-match filter on the request id captured from the X-Request-Id
+  // header at write time. Lets operators pivot from an error response
+  // (which echoes the request id back to the client) straight to the
+  // audit row(s) for that single HTTP call, without scanning by time.
+  requestId?: string;
   status?: "ok" | "denied" | "error";
   since?: number; // ms epoch
   until?: number; // ms epoch
@@ -486,6 +491,7 @@ export async function listAudit(opts: ListAuditOptions = {}): Promise<AuditEntry
       }
       if (opts.targetType && entry.target?.type !== opts.targetType) continue;
       if (opts.targetId && entry.target?.id !== opts.targetId) continue;
+      if (opts.requestId && entry.requestId !== opts.requestId) continue;
       if (opts.status && entry.status !== opts.status) continue;
       if (opts.since && entry.ts < opts.since) continue;
       if (opts.until && entry.ts > opts.until) continue;

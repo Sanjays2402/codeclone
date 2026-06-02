@@ -98,6 +98,30 @@ test("audit: cross-actor isolation when filtering by actorId", async () => {
   assert.ok(keyOps.every((e) => e.action.startsWith("api_key.")));
 });
 
+test("audit: filter by requestId returns only rows from that HTTP call", async () => {
+  // Two writes share one request id (the same HTTP call recorded twice,
+  // for example a deny + a fallback success), a third write is from an
+  // unrelated call. Filtering by the shared id must return exactly the
+  // two related rows and nothing from the unrelated call.
+  await recordAudit(
+    fakeReq({ "x-request-id": "req_trace_1" }),
+    { action: "snippet.create", actorId: "user_alice", status: "ok" },
+  );
+  await recordAudit(
+    fakeReq({ "x-request-id": "req_trace_1" }),
+    { action: "snippet.update", actorId: "user_alice", status: "ok" },
+  );
+  await recordAudit(
+    fakeReq({ "x-request-id": "req_trace_other" }),
+    { action: "snippet.create", actorId: "user_alice", status: "ok" },
+  );
+  const traced = await listAudit({ requestId: "req_trace_1" });
+  assert.equal(traced.length, 2);
+  assert.ok(traced.every((e) => e.requestId === "req_trace_1"));
+  const missing = await listAudit({ requestId: "req_does_not_exist" });
+  assert.equal(missing.length, 0);
+});
+
 test("audit: denied entries are recorded and filterable", async () => {
   await recordAudit(fakeReq(), {
     action: "workspace.update",

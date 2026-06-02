@@ -15,6 +15,7 @@ export const dynamic = "force-dynamic";
  *
  * Query params:
  *   actorId, workspaceId, action, targetType, targetId, status
+ *   requestId              exact-match X-Request-Id from a prior response
  *   since, until           ISO 8601 or ms epoch
  *   limit                  1..500 (default 100)
  *   format                 json (default) | csv
@@ -94,6 +95,7 @@ export async function GET(req: Request) {
     action: sp.get("action") ?? undefined,
     targetType: sp.get("targetType") ?? undefined,
     targetId: sp.get("targetId") ?? undefined,
+    requestId: sp.get("requestId") ?? undefined,
     status: validStatus,
     since: parseTime(sp.get("since")),
     until: parseTime(sp.get("until")),
