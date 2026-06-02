@@ -1,3 +1,4 @@
+import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { loadAdapters, loadEvalReports } from "../../lib/data";
 import { H1 } from "../../components/Headings";
 import { Empty } from "../../components/States";
@@ -17,6 +18,18 @@ export default async function Page() {
       {adapters.length === 0 ? (
         <Empty title="No adapters registered." hint="Train an adapter to populate adapters/index.json." mono="codeclone train --recipe recipes/default.yaml" />
       ) : (
+        <>
+        <div className="flex flex-wrap items-center justify-end gap-3 mb-3">
+          <a
+            href="/api/models?format=csv"
+            download="codeclone-models.csv"
+            className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+            title="Download the adapter index (joined with eval metrics) as CSV"
+          >
+            <DownloadSimple size={12} weight="duotone" />
+            Download CSV
+          </a>
+        </div>
         <div className="ruled rounded-md overflow-hidden">
           <div className="grid grid-cols-[14rem_1fr_5rem_8rem_6rem_6rem_6rem] gap-3 px-4 h-8 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
             <div>name</div><div>base</div><div>backend</div><div>recipe</div><div>loss</div><div>pass@1</div><div className="text-right">created</div>
@@ -36,6 +49,7 @@ export default async function Page() {
             );
           })}
         </div>
+        </>
       )}
     </div>
   );
