@@ -16,9 +16,12 @@
  *        if both workspaces share the same underlying JSONL store. Keys
  *        without a workspace get an empty result set rather than the
  *        platform-wide log.
- * Output: NDJSON (one entry per line) when `format=ndjson` (default), or
- *        a JSON object with an `items` array when `format=json`. NDJSON is
- *        the default because every major SIEM ingests it natively.
+ * Output: NDJSON (one entry per line) when `format=ndjson` (default), a
+ *        JSON object with an `items` array when `format=json`, or a CSV
+ *        file when `format=csv`. NDJSON is the default because every major
+ *        SIEM ingests it natively; CSV exists for SOC2 reviewers and
+ *        spreadsheet-driven workflows (Excel, csvkit, Google Sheets) that
+ *        do not want to write a JSON-to-CSV middlestep.
  * Side effects: increments the per-key rate-limit window, audits one
  *        `v1.audit.read` event (so audit reads are themselves auditable),
  *        and updates the key's `lastUsedAt`/`recentIps` ring. Does not
@@ -38,7 +41,7 @@ import { clientIpFromRequest } from "../../../../lib/ip-allowlist";
 import { enforceWorkspaceResidencyForKey } from "../../../../lib/residency-enforce";
 import { enforceWorkspaceApiKeyPolicyForKey } from "../../../../lib/api-key-policy-enforce";
 import { enforceWorkspaceLockdownForKey } from "../../../../lib/lockdown-enforce";
-import { listAudit, tryRecordAudit, MAX_LIST } from "../../../../lib/audit";
+import { listAudit, toCsv, tryRecordAudit, MAX_LIST } from "../../../../lib/audit";
 import { getWorkspace, retentionCutoffMs } from "../../../../lib/workspaces";
 
 export const runtime = "nodejs";
@@ -140,8 +143,8 @@ export async function GET(req: Request) {
   const status = statusRaw as "ok" | "denied" | "error" | null;
 
   const format = (sp.get("format") ?? "ndjson").toLowerCase();
-  if (format !== "ndjson" && format !== "json") {
-    return badRequest("format must be 'ndjson' or 'json'.");
+  if (format !== "ndjson" && format !== "json" && format !== "csv") {
+    return badRequest("format must be 'ndjson', 'json', or 'csv'.");
   }
 
   // Spend a rate-limit slot. Pulling the audit log is cheap but still a real
@@ -227,6 +230,26 @@ export async function GET(req: Request) {
       headers: {
         ...baseHeaders,
         "Content-Type": "application/x-ndjson; charset=utf-8",
+      },
+    });
+  }
+
+  if (format === "csv") {
+    // RFC 4180-ish: header row, CRLF line endings, double-quote escaping
+    // for any cell containing a comma, quote, or newline. toCsv() already
+    // handles the per-cell escaping; we only need to normalize line endings
+    // and add a trailing CRLF so Excel and csvkit treat the last row as
+    // terminated. Filename pins the workspace id so a SIEM operator pulling
+    // multiple tenants does not overwrite one tenant's file with another.
+    const body = toCsv(entries).replace(/\r?\n/g, "\r\n") + "\r\n";
+    const wsTag = key.workspaceId ?? "workspace";
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        ...baseHeaders,
+        "Content-Type": "text/csv; charset=utf-8",
+        "Content-Disposition": `attachment; filename="codeclone-audit-${wsTag}.csv"`,
+        "Cache-Control": "no-store",
       },
     });
   }

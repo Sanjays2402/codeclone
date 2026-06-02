@@ -159,3 +159,61 @@ test("v1/audit: listAudit allowedWorkspaceIds gives strict cross-tenant isolatio
   const adminView = await listAudit({ limit: 100 });
   assert.ok(adminView.length >= 4, "unscoped listAudit should still see all rows");
 });
+
+test("v1/audit: route source advertises csv format alongside ndjson/json", () => {
+  // The csv branch must exist, validate alongside ndjson/json, set the
+  // SIEM-friendly content-type, and emit a workspace-tagged filename so
+  // multi-tenant pulls don't overwrite each other.
+  assert.match(routeSrc, /format !== "csv"/);
+  assert.match(routeSrc, /text\/csv/);
+  assert.match(routeSrc, /codeclone-audit-/);
+  assert.match(routeSrc, /toCsv\(/);
+});
+
+test("v1/audit: toCsv emits RFC 4180-ish rows with header, escaping, and one line per entry", async () => {
+  const { toCsv } = await import("../lib/audit.ts");
+  const sample = [
+    {
+      v: 1 as const,
+      id: "a1",
+      ts: Date.UTC(2025, 0, 2, 3, 4, 5),
+      actorId: "u_alice",
+      actorEmail: "alice@acme.com",
+      workspaceId: "ws_tenanta",
+      action: "share.create",
+      target: { type: "share", id: "s_a1" },
+      status: "ok" as const,
+      ip: "203.0.113.7",
+      userAgent: null,
+      requestId: "req_1",
+    },
+    {
+      v: 1 as const,
+      id: "a2",
+      ts: Date.UTC(2025, 0, 2, 3, 4, 6),
+      actorId: "u_bob",
+      actorEmail: "bob@globex.com",
+      workspaceId: "ws_tenanta",
+      action: "share.create",
+      // Exercise the escaper: the label contains a comma and a quote.
+      target: { type: "share", id: 'has,"comma' },
+      status: "denied" as const,
+      ip: null,
+      userAgent: null,
+      requestId: null,
+    },
+  ];
+  const csv = toCsv(sample);
+  const lines = csv.split("\n");
+  assert.equal(lines.length, 3, "header + two rows");
+  assert.equal(
+    lines[0],
+    "ts,id,actorId,actorEmail,workspaceId,action,targetType,targetId,status,ip",
+  );
+  // ISO timestamp first column, no accidental locale formatting.
+  assert.ok(lines[1]!.startsWith("2025-01-02T03:04:05.000Z,a1,u_alice,"));
+  // Comma + quote in the targetId must be wrapped in double quotes with
+  // internal quotes doubled, per RFC 4180.
+  assert.match(lines[2]!, /"has,""comma"/);
+  assert.ok(lines[2]!.endsWith(",denied,"));
+});

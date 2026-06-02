@@ -330,7 +330,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
     scope: "audit:read",
     params: [
       { name: "limit", kind: "query", required: false, type: "1..500", description: "Page size. Default 100." },
-      { name: "format", kind: "query", required: false, type: "ndjson|json", description: "Response format. Default ndjson (one entry per line). 'json' returns an object with an items array." },
+      { name: "format", kind: "query", required: false, type: "ndjson|json|csv", description: "Response format. Default ndjson (one entry per line). 'json' returns an object with an items array. 'csv' returns an RFC 4180 CSV download for Excel, csvkit, and SOC2 evidence pulls." },
       { name: "action", kind: "query", required: false, type: "string", description: "Exact action match (e.g. 'snippet.create') or prefix with trailing dot ('snippet.')." },
       { name: "status", kind: "query", required: false, type: "ok|denied|error", description: "Filter by outcome. Useful for surfacing only policy denials." },
       { name: "actorId", kind: "query", required: false, type: "string", description: "Filter by acting user or API key id." },
