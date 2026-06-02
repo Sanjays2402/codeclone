@@ -123,6 +123,38 @@ test("v1/runs/:id (detail): wires scope, rate-limit enforce, full enforcement ch
   assert.equal(re.test(""), false);
 });
 
+test("v1/runs (list): accepts model, backend, and since filters; rejects bad since with 400", () => {
+  // The new filters must be wired in the route source so MLOps
+  // pipelines can scope by exact model id, training backend, and
+  // a started_at cutoff without paginating the entire run feed.
+  assert.match(listRouteSrc, /searchParams\.get\("model"\)/);
+  assert.match(listRouteSrc, /searchParams\.get\("backend"\)/);
+  assert.match(listRouteSrc, /searchParams\.get\("since"\)/);
+  // since="garbage" must be a 400, not silently ignored.
+  assert.match(listRouteSrc, /invalid_request[\s\S]*since/);
+  // Filters must still ride the audit row so SOC2 reviewers can
+  // see what scope was actually applied.
+  assert.match(listRouteSrc, /model:\s*model\s*\?\?\s*null/);
+  assert.match(listRouteSrc, /backend:\s*backend\s*\?\?\s*null/);
+  assert.match(listRouteSrc, /since:\s*since/);
+  // Filters must remain workspace-agnostic: still no workspace_id
+  // override via query string.
+  assert.ok(
+    !/searchParams\.get\(\s*["']workspace/.test(listRouteSrc),
+    "v1/runs must not accept workspace_id from query string",
+  );
+});
+
+test("api-spec documents model, backend, and since query params for runs-list", async () => {
+  const { ENDPOINTS } = await import("../lib/api-spec.ts");
+  const list = ENDPOINTS.find((e) => e.id === "runs-list");
+  assert.ok(list, "runs-list must be in ENDPOINTS");
+  const names = new Set((list!.params ?? []).map((p: any) => p.name));
+  for (const n of ["status", "model", "backend", "since", "limit", "offset"]) {
+    assert.ok(names.has(n), `runs-list api-spec must document the '${n}' query param`);
+  }
+});
+
 test("api-spec registers runs-list and runs-get under runs:read", async () => {
   const { ENDPOINTS } = await import("../lib/api-spec.ts");
   const list = ENDPOINTS.find((e) => e.id === "runs-list");

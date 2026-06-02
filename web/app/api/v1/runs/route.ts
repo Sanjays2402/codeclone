@@ -117,6 +117,34 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const status = url.searchParams.get("status");
+  const model = url.searchParams.get("model");
+  const backend = url.searchParams.get("backend");
+  const sinceRaw = url.searchParams.get("since");
+  let since: number | null = null;
+  if (sinceRaw !== null && sinceRaw !== "") {
+    // Accept either epoch milliseconds or an ISO-8601 timestamp.
+    // Anything that fails to parse is a 400 so MLOps pipelines
+    // notice the typo instead of silently returning every run.
+    const asInt = Number(sinceRaw);
+    if (Number.isFinite(asInt) && /^-?\d+$/.test(sinceRaw.trim())) {
+      since = asInt;
+    } else {
+      const parsed = Date.parse(sinceRaw);
+      if (!Number.isNaN(parsed)) since = parsed;
+    }
+    if (since === null) {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message:
+              "Invalid 'since' value. Pass either epoch milliseconds or an ISO-8601 timestamp.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+  }
   const limit = parsePositiveInt(url.searchParams.get("limit"), 50, 200);
   const offset = parsePositiveInt(url.searchParams.get("offset"), 0, 1_000_000);
 
@@ -124,6 +152,16 @@ export async function GET(req: Request) {
   let runs = await loadRuns();
   if (status && ["queued", "running", "passed", "failed"].includes(status)) {
     runs = runs.filter((r) => r.status === status);
+  }
+  if (model) {
+    runs = runs.filter((r) => r.model === model);
+  }
+  if (backend) {
+    runs = runs.filter((r) => r.backend === backend);
+  }
+  if (since !== null) {
+    const cutoff = since;
+    runs = runs.filter((r) => r.startedAt >= cutoff);
   }
   const total = runs.length;
   const items = runs.slice(offset, offset + limit).map(presentRun);
@@ -140,7 +178,12 @@ export async function GET(req: Request) {
       prefix: key.prefix,
       count: items.length,
       total,
-      filters: { status: status ?? null },
+      filters: {
+        status: status ?? null,
+        model: model ?? null,
+        backend: backend ?? null,
+        since: since,
+      },
       limit,
       offset,
     },

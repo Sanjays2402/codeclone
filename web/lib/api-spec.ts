@@ -1112,6 +1112,9 @@ export const ENDPOINTS: SpecEndpoint[] = [
     scope: "runs:read",
     params: [
       { name: "status", kind: "query", required: false, type: "string", description: "Filter by run status: queued, running, passed, failed." },
+      { name: "model", kind: "query", required: false, type: "string", description: "Filter by exact model id (matches the 'model' field returned by this endpoint)." },
+      { name: "backend", kind: "query", required: false, type: "string", description: "Filter by training backend (e.g. mlx, torch)." },
+      { name: "since", kind: "query", required: false, type: "string", description: "Only runs with started_at >= this value. Accepts epoch milliseconds or ISO-8601." },
       { name: "limit", kind: "query", required: false, type: "integer", description: "Max items to return. Default 50, max 200." },
       { name: "offset", kind: "query", required: false, type: "integer", description: "Page offset. Default 0." },
     ],
