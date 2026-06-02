@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy, ClockClockwise, X as XIcon } from "@phosphor-icons/react/dist/ssr";
+import { ArrowsLeftRight, Lightning, Sparkle, Trash, GitDiff, Code, ShieldCheck, Share as ShareIcon, Check, Copy, ClockClockwise, X as XIcon, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { DiffViewer } from "../../components/DiffViewer";
 import { AlignmentMap } from "../../components/AlignmentMap";
 import { ErrorBlock } from "../../components/States";
@@ -173,6 +173,32 @@ function ComparePageInner() {
       setSharing(false);
     }
   }, [a, b, language]);
+
+  // Download the current comparison (inputs + scores + alignment + clone label)
+  // as a JSON file. Runs entirely in the browser so it works for users who
+  // don't want to mint a public /r/<id> share link or who need to attach the
+  // raw result to an internal ticket or code-review thread.
+  const downloadJson = useCallback(() => {
+    if (!result) return;
+    const payload = {
+      schema: "codeclone.compare.result/v1",
+      exported_at: new Date().toISOString(),
+      inputs: { a, b, language },
+      result,
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], {
+      type: "application/json",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    link.download = `codeclone-compare-${stamp}.json`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [a, b, language, result]);
 
   const copyShare = useCallback(async () => {
     if (!shareUrl) return;
@@ -406,6 +432,15 @@ function ComparePageInner() {
               {result.method} · {result.latency_ms.toFixed(2)} ms · {result.bytes.a}/{result.bytes.b} bytes · lang {result.language}
             </span>
             <div className="flex-1" />
+            <button
+              type="button"
+              onClick={downloadJson}
+              title="Download this comparison as JSON"
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              <DownloadSimple weight="duotone" size={13} />
+              download json
+            </button>
             <button
               type="button"
               onClick={share}
