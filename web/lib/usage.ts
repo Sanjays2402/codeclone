@@ -160,6 +160,7 @@ export async function summarize(
   windowDays = 30,
   now: number = Date.now(),
   scope: WorkspaceScope = null,
+  keyIdFilter: string | null = null,
 ): Promise<UsageSummary> {
   await ensureDir();
   const days = buildEmptyDays(windowDays, now);
@@ -176,6 +177,7 @@ export async function summarize(
   for (const list of events) {
     for (const ev of list) {
       if (!passesScope(ev, scope)) continue;
+      if (keyIdFilter !== null && ev.keyId !== keyIdFilter) continue;
       const dk = dayKey(ev.ts);
       if (!counts.has(dk)) continue;
       counts.set(dk, (counts.get(dk) ?? 0) + 1);
@@ -248,6 +250,7 @@ export async function recentEvents(
   windowDays = 7,
   now: number = Date.now(),
   scope: WorkspaceScope = null,
+  keyIdFilter: string | null = null,
 ): Promise<RecentCall[]> {
   await ensureDir();
   const cap = Math.max(1, Math.min(500, Math.floor(limit)));
@@ -258,6 +261,7 @@ export async function recentEvents(
   for (const list of events) {
     for (const ev of list) {
       if (!passesScope(ev, scope)) continue;
+      if (keyIdFilter !== null && ev.keyId !== keyIdFilter) continue;
       flat.push({
         ts: ev.ts,
         keyId: ev.keyId,
