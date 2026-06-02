@@ -15,6 +15,10 @@
  *   label      clone label (e.g. "near-duplicate")
  *   minScore   0..1
  *   maxScore   0..1
+ *   format     'json' (default) or 'csv'. CSV returns an RFC 4180
+ *              attachment so a compliance reviewer can open the saved
+ *              share inventory in Excel/csvkit without writing a
+ *              JSON-to-CSV step.
  */
 import { NextResponse } from "next/server";
 import {
@@ -95,6 +99,20 @@ export async function GET(req: Request) {
 
   const url = new URL(req.url);
   const sp = url.searchParams;
+  const formatRaw = sp.get("format");
+  const format =
+    formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "Invalid 'format' value. Use 'json' (default) or 'csv'.",
+        },
+      },
+      { status: 400, headers: rl.headers },
+    );
+  }
   const limitParam = sp.get("limit");
   const offsetParam = sp.get("offset");
   let limit = 25;
@@ -134,6 +152,19 @@ export async function GET(req: Request) {
       latencyMs: 0,
       workspaceId: key.workspaceId,
     });
+
+    if (format === "csv") {
+      const filenameWs = key.workspaceId ?? "legacy";
+      const csv = sharesToCsv(page.items);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          ...rl.headers,
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-${filenameWs}-shares.csv"`,
+        },
+      });
+    }
 
     return NextResponse.json({
       items: page.items,
@@ -396,4 +427,59 @@ export async function POST(req: Request) {
       { status: 500, headers: rl.headers },
     );
   }
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+type ShareCsvRow = {
+  id: string;
+  language: string;
+  cloneLabel: string;
+  shingleJaccard: number;
+  createdAt: number;
+  updatedAt?: number;
+  title?: string;
+  tags?: string[];
+  bytes: { a: number; b: number };
+  workspaceId: string | null;
+};
+
+function sharesToCsv(rows: ReadonlyArray<ShareCsvRow>): string {
+  const header = [
+    "id",
+    "workspace_id",
+    "language",
+    "clone_label",
+    "shingle_jaccard",
+    "bytes_a",
+    "bytes_b",
+    "title",
+    "tags",
+    "created_at",
+    "updated_at",
+  ];
+  const lines: string[] = [header.join(",")];
+  for (const r of rows) {
+    lines.push(
+      [
+        csvCell(r.id),
+        csvCell(r.workspaceId),
+        csvCell(r.language),
+        csvCell(r.cloneLabel),
+        csvCell(r.shingleJaccard),
+        csvCell(r.bytes?.a),
+        csvCell(r.bytes?.b),
+        csvCell(r.title),
+        csvCell((r.tags ?? []).join("|")),
+        csvCell(r.createdAt),
+        csvCell(r.updatedAt),
+      ].join(","),
+    );
+  }
+  return lines.join("\r\n") + "\r\n";
 }

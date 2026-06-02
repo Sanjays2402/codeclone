@@ -234,6 +234,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "label", kind: "query", required: false, type: "string", description: "Filter by clone label (e.g. near-duplicate)." },
       { name: "minScore", kind: "query", required: false, type: "0..1", description: "Lower bound on shingle Jaccard." },
       { name: "maxScore", kind: "query", required: false, type: "0..1", description: "Upper bound on shingle Jaccard." },
+      { name: "format", kind: "query", required: false, type: "'json' | 'csv'", description: "Response format. 'json' (default) returns the paginated list. 'csv' returns an RFC 4180 attachment of the same page for spreadsheet ingest." },
     ],
     sampleResponse: sharesListResponse,
     curl: (host, key) =>
