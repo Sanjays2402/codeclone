@@ -1,13 +1,20 @@
 /**
- * Public DELETE /v1/sessions/[jti]: programmatic single-session revoke.
+ * Public /v1/sessions/[jti]:
  *
- * Companion to GET /v1/sessions (../route.ts) and POST
- * /v1/sessions/revoke-all (../revoke-all/route.ts). Together they give
- * SecOps a tenant-scoped, audit-logged incident-response primitive:
- * locate a suspicious session by jti, force-logout that one device
- * without disturbing the user's other sessions.
+ *   GET    -> fetch one session's metadata (jti, user_id, created/
+ *             expires/last_seen, ip, user_agent) without paginating
+ *             the full workspace inventory. Used by SecOps runbooks
+ *             and SOAR bots that already know a suspicious jti (from
+ *             a SIEM alert, a phishing report, or a previous
+ *             /v1/sessions snapshot) and want to confirm it is still
+ *             active and resolve the owning user before revoking.
+ *             Scope: `sessions:read`.
  *
- * Auth: Bearer or `x-api-key`. Scope: `sessions:write`.
+ *   DELETE -> programmatic single-session revoke. Force-logout one
+ *             device without disturbing the user's other sessions.
+ *             Scope: `sessions:write`.
+ *
+ * Auth: Bearer or `x-api-key`.
  *
  * Tenant scope: we resolve the session's owning userId on the server
  * via findSessionOwner(jti). If that user is not an active member of
@@ -16,7 +23,8 @@
  * The caller never gets to name a userId in the URL or body.
  *
  * Idempotent: revoking an already-revoked or unknown jti returns 404.
- * Successful revoke writes an audit row under `v1.sessions.revoke`.
+ * Successful revoke writes an audit row under `v1.sessions.revoke`;
+ * GET writes one under `v1.sessions.get`.
  */
 import { NextResponse } from "next/server";
 import {
@@ -37,7 +45,7 @@ import { enforceWorkspaceLockdownForKey } from "../../../../../lib/lockdown-enfo
 import { tryRecordAudit } from "../../../../../lib/audit";
 import { logUsage } from "../../../../../lib/usage";
 import { getWorkspace } from "../../../../../lib/workspaces";
-import { findSessionOwner, revokeSession } from "../../../../../lib/sessions";
+import { findSessionOwner, getSession, isRevoked, revokeSession } from "../../../../../lib/sessions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -90,6 +98,87 @@ type Ctx = { params: Promise<{ jti: string }> | { jti: string } };
 async function resolveParams(ctx: Ctx): Promise<{ jti: string }> {
   const p = (ctx as { params: { jti: string } | Promise<{ jti: string }> }).params;
   return p instanceof Promise ? await p : p;
+}
+
+export async function GET(req: Request, ctx: Ctx) {
+  const token = extractBearer(req);
+  if (!token) return unauthorized("Missing API key. Pass 'Authorization: Bearer <key>'.");
+  const key = await findByPlaintext(token);
+  if (!key) return unauthorized("Invalid or revoked API key.");
+
+  const lockdownBlocked = await enforceWorkspaceLockdownForKey(req, key, { route: "/v1/sessions/[jti]" });
+  if (lockdownBlocked) return lockdownBlocked;
+  const wsBlocked = await enforceWorkspaceAllowlistForKey(req, key);
+  if (wsBlocked) return wsBlocked;
+  const keyBlocked = await enforceKeyAllowlist(req, key);
+  if (keyBlocked) return keyBlocked;
+  const residencyBlocked = await enforceWorkspaceResidencyForKey(req, key);
+  if (residencyBlocked) return residencyBlocked;
+  const policyBlocked = await enforceWorkspaceApiKeyPolicyForKey(req, key);
+  if (policyBlocked) return policyBlocked;
+
+  const rl = await enforceRateLimit(key);
+  if (rl.response) return rl.response;
+
+  if (!key.workspaceId) return tenantRequired();
+  if (!hasScope(key, "sessions:read")) return insufficientScope("sessions:read", key.scopes);
+
+  const { jti } = await resolveParams(ctx);
+  if (!jti || typeof jti !== "string" || jti.length > 256) return notFound();
+
+  const owner = await findSessionOwner(jti);
+  if (!owner) return notFound();
+
+  const ws = await getWorkspace(key.workspaceId);
+  if (!ws) return notFound();
+  const memberIds = new Set(ws.members.map((m) => m.userId));
+  if (!memberIds.has(owner.userId)) {
+    // Session exists, but for a user not in this workspace. Surface
+    // as 404 so cross-tenant probes cannot distinguish "unknown jti"
+    // from "jti belongs to another tenant".
+    return notFound();
+  }
+
+  // findSessionOwner already filters out expired/revoked sessions,
+  // but re-read through getSession + isRevoked so a session that
+  // expired or got revoked between the two awaits surfaces as 404
+  // rather than a stale snapshot.
+  const record = await getSession(owner.userId, jti);
+  if (!record) return notFound();
+  if (await isRevoked(jti)) return notFound();
+  if (record.expiresAt <= Date.now()) return notFound();
+
+  void recordUse(key.id, clientIpFromRequest(req));
+  void logUsage({
+    ts: Date.now(),
+    keyId: key.id,
+    endpoint: "GET /v1/sessions/:jti",
+    bytes: 0,
+    latencyMs: 0,
+    workspaceId: key.workspaceId,
+  });
+  void tryRecordAudit(req, {
+    action: "v1.sessions.get",
+    actorId: key.id,
+    workspaceId: key.workspaceId,
+    target: { type: "session", id: jti },
+    status: "ok",
+  });
+
+  return NextResponse.json(
+    {
+      jti: record.jti,
+      user_id: record.userId,
+      created_at: record.createdAt,
+      expires_at: record.expiresAt,
+      last_seen_at: record.lastSeenAt,
+      ip: record.ip,
+      user_agent: record.userAgent,
+      created_ip: record.createdIp,
+      created_user_agent: record.createdUserAgent,
+    },
+    { headers: rl.headers },
+  );
 }
 
 export async function DELETE(req: Request, ctx: Ctx) {

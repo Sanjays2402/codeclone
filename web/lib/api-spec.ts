@@ -1064,6 +1064,19 @@ export const ENDPOINTS: SpecEndpoint[] = [
     curl: (host, key) => `curl -sS ${host}/v1/sessions -H "Authorization: Bearer ${key}"`,
   },
   {
+    id: "sessions-get",
+    method: "GET",
+    path: "/v1/sessions/{jti}",
+    routeFile: "app/api/v1/sessions/[jti]/route.ts",
+    summary: "Fetch one dashboard session's metadata by jti. SOAR-friendly single-session lookup so runbooks can confirm a SIEM-flagged jti is still active before revoking, without paginating /v1/sessions.",
+    scope: "sessions:read",
+    params: [
+      { name: "jti", kind: "path", required: true, type: "string", description: "Session id from /v1/sessions or a SIEM alert." },
+    ],
+    sampleResponse: JSON.stringify({ jti: "k7Q1abcDEF", user_id: "u_42", created_at: 1717000000000, expires_at: 1719600000000, last_seen_at: 1717003600000, ip: "203.0.113.7", user_agent: "Mozilla/5.0", created_ip: "203.0.113.7", created_user_agent: "Mozilla/5.0" }, null, 2),
+    curl: (host, key) => `curl -sS ${host}/v1/sessions/k7Q1abcDEF -H "Authorization: Bearer ${key}"`,
+  },
+  {
     id: "sessions-revoke",
     method: "DELETE",
     path: "/v1/sessions/{jti}",
