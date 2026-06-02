@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { loadPairsList } from "../../lib/data";
 import { H1 } from "../../components/Headings";
 import { Empty } from "../../components/States";
@@ -13,11 +14,32 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
   const q = sp.q;
   const { items, total } = await loadPairsList({ limit: 300, lang, q });
 
+  // Preserve active filters in the CSV download so a researcher who
+  // narrowed the view to e.g. lang=python or a repo substring gets that
+  // exact filtered slice in their spreadsheet, not the unfiltered corpus.
+  const csvParams = new URLSearchParams({ format: "csv" });
+  if (q) csvParams.set("q", q);
+  if (lang) csvParams.set("lang", lang);
+  const csvHref = `/api/pairs?${csvParams.toString()}`;
+
   return (
     <div>
       <H1 eyebrow={`pairs · ${fmtInt(total)} rows`}>Clone-pair index.</H1>
 
-      <PairsFilterBar defaultQ={q} defaultLang={lang} />
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <PairsFilterBar defaultQ={q} defaultLang={lang} />
+        {items.length > 0 ? (
+          <a
+            href={csvHref}
+            download="codeclone-pairs.csv"
+            className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+            title="Download the filtered clone-pair index as CSV"
+          >
+            <DownloadSimple size={12} weight="duotone" />
+            Download CSV
+          </a>
+        ) : null}
+      </div>
 
       {items.length === 0 ? (
         <Empty title="No pairs match." hint="Try clearing filters or run the preprocess pipeline." mono="codeclone preprocess --recipe recipes/default.yaml" />
