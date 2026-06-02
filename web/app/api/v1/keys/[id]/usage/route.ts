@@ -30,7 +30,13 @@
  *        cannot be used to probe for the existence of other
  *        tenants' key ids. Keys with no workspace binding receive
  *        `tenant_required`.
- * Query: ?days=1..90 (default 7), ?recent=0..200 (default 0).
+ * Query: ?days=1..90 (default 7), ?recent=0..200 (default 0),
+ *        ?format=json|csv (default json). CSV returns the per-day
+ *        call counts for this one key (date,count) as an RFC 4180
+ *        download, mirroring /v1/usage?format=csv so FinOps
+ *        chargeback pipelines can pull a single key's daily
+ *        timeline straight into Excel or csvkit without a JSON
+ *        decode step. Unknown formats return 400.
  * Side effects: increments the per-key rate-limit window, writes
  *        one audit row (`v1.keys.usage.read`) so per-key usage
  *        reads are themselves auditable, logs one usage event so
@@ -173,6 +179,11 @@ export async function GET(req: Request, ctx: Ctx) {
   if (!daysParsed.ok) return badRequest("days must be an integer in [1, 90].");
   const recentParsed = parseIntInRange(url.searchParams.get("recent"), 0, 0, 200);
   if (!recentParsed.ok) return badRequest("recent must be an integer in [0, 200].");
+  const formatRaw = url.searchParams.get("format");
+  const format = formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return badRequest("Invalid 'format' value. Use 'json' (default) or 'csv'.");
+  }
 
   const rl = await enforceRateLimit(key);
   if (rl.response) return rl.response;
@@ -215,8 +226,21 @@ export async function GET(req: Request, ctx: Ctx) {
       days: daysParsed.value,
       recent: recentParsed.value,
       total_calls: summary.totalCalls,
+      format,
     },
   });
+
+  if (format === "csv") {
+    const csv = byDayToCsv(summary.byDay);
+    return new NextResponse(csv, {
+      status: 200,
+      headers: {
+        ...rl.headers,
+        "content-type": "text/csv; charset=utf-8",
+        "content-disposition": `attachment; filename="codeclone-key-${target.id}-usage.csv"`,
+      },
+    });
+  }
 
   const body = {
     key: {
@@ -248,4 +272,19 @@ export async function GET(req: Request, ctx: Ctx) {
   };
 
   return NextResponse.json(body, { headers: rl.headers });
+}
+
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+function byDayToCsv(rows: ReadonlyArray<{ date: string; count: number }>): string {
+  const lines: string[] = ["date,count"];
+  for (const r of rows) {
+    lines.push([csvCell(r.date), csvCell(r.count)].join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
 }

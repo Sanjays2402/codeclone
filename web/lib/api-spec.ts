@@ -1146,6 +1146,7 @@ export const ENDPOINTS: SpecEndpoint[] = [
       { name: "id", kind: "path", required: true, type: "string", description: "API key id from /v1/keys." },
       { name: "days", kind: "query", required: false, type: "integer", description: "Trailing window in days (1..90). Default 7." },
       { name: "recent", kind: "query", required: false, type: "integer", description: "Include up to N most recent events for this key (0..200). Default 0." },
+      { name: "format", kind: "query", required: false, type: "string", description: "Response format. 'json' (default) or 'csv' (per-day date,count) for spreadsheet ingest. CSV honors the same `days` window." },
     ],
     sampleResponse: JSON.stringify({ key: { id: "k_abc123", prefix: "ck_live_abcd", label: "ci pipeline", revoked: false, expires_at: null, last_used_at: 1717000000000 }, window_days: 7, total_calls: 42, month_to_date: 211, last_event_at: 1717000000000, by_day: [{ date: "2024-05-31", count: 12 }], by_endpoint: [{ endpoint: "/v1/compare", count: 30, avg_latency_ms: 42.1, total_bytes: 12345 }], recent: [], server_time: 1717000000000 }, null, 2),
     curl: (host, key) => `curl -sS ${host}/v1/keys/k_abc123/usage?days=30 -H "Authorization: Bearer ${key}"`,
