@@ -82,6 +82,8 @@ function ComparePageInner() {
   const [sharing, setSharing] = useState(false);
   const [shareError, setShareError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [mdCopied, setMdCopied] = useState(false);
+  const [mdCopyError, setMdCopyError] = useState<string | null>(null);
   const [rerun, setRerun] = useState<RerunInfo | null>(null);
   const [rerunLoading, setRerunLoading] = useState<boolean>(Boolean(fromId));
   const [rerunError, setRerunError] = useState<string | null>(null);
@@ -200,13 +202,11 @@ function ComparePageInner() {
     URL.revokeObjectURL(url);
   }, [a, b, language, result]);
 
-  // Download the current comparison as a Markdown report. Optimized for
-  // pasting into a PR description, a code-review comment, a Linear/Jira
-  // ticket, or a Slack thread, where a raw JSON blob is unreadable but a
-  // formatted summary with scores, clone verdict, matched tokens, and
-  // fenced snippets is what reviewers actually want to see.
-  const downloadMarkdown = useCallback(() => {
-    if (!result) return;
+  // Build the Markdown report string for the current comparison. Shared by
+  // the "download md" file-export button and the "copy md" clipboard button
+  // so both surfaces emit byte-identical output.
+  const buildMarkdownReport = useCallback((): string | null => {
+    if (!result) return null;
     const pct = (n: number) => `${(Math.max(0, Math.min(1, n)) * 100).toFixed(1)}%`;
     const fence = language && language !== "auto" ? language : "";
     const lines: string[] = [];
@@ -243,7 +243,19 @@ function ComparePageInner() {
     lines.push(b);
     lines.push("```");
     lines.push("");
-    const blob = new Blob([lines.join("\n")], { type: "text/markdown" });
+    return lines.join("\n");
+  }, [a, b, language, result]);
+
+  // Download the current comparison as a Markdown report. Optimized for
+  // pasting into a PR description, a code-review comment, a Linear/Jira
+  // ticket, or a Slack thread, where a raw JSON blob is unreadable but a
+  // formatted summary with scores, clone verdict, matched tokens, and
+  // fenced snippets is what reviewers actually want to see.
+  const downloadMarkdown = useCallback(() => {
+    if (!result) return;
+    const md = buildMarkdownReport();
+    if (md === null) return;
+    const blob = new Blob([md], { type: "text/markdown" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
@@ -253,7 +265,30 @@ function ComparePageInner() {
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-  }, [a, b, language, result]);
+  }, [result, buildMarkdownReport]);
+
+  // Copy the same Markdown report straight to the clipboard. Most users who
+  // want to share a comparison are pasting into a PR description, a Slack
+  // thread, or a ticket; making them route through a downloaded .md file is
+  // friction. This skips the file step entirely and shows a transient
+  // "copied" confirmation, falling back to a visible error message when the
+  // clipboard is blocked (insecure context, permissions, missing API).
+  const copyMarkdown = useCallback(async () => {
+    if (!result) return;
+    const md = buildMarkdownReport();
+    if (md === null) return;
+    setMdCopyError(null);
+    try {
+      if (!navigator.clipboard?.writeText) {
+        throw new Error("Clipboard not available in this browser.");
+      }
+      await navigator.clipboard.writeText(md);
+      setMdCopied(true);
+      setTimeout(() => setMdCopied(false), 1400);
+    } catch (e) {
+      setMdCopyError(e instanceof Error ? e.message : String(e));
+    }
+  }, [result, buildMarkdownReport]);
 
   const copyShare = useCallback(async () => {
     if (!shareUrl) return;
@@ -507,6 +542,16 @@ function ComparePageInner() {
             </button>
             <button
               type="button"
+              onClick={copyMarkdown}
+              title="Copy a Markdown report of this comparison to the clipboard, ready to paste into a PR, ticket, or Slack thread"
+              aria-label="Copy Markdown report to clipboard"
+              className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)]"
+            >
+              {mdCopied ? <Check weight="duotone" size={13} /> : <Copy weight="duotone" size={13} />}
+              {mdCopied ? "copied" : "copy md"}
+            </button>
+            <button
+              type="button"
               onClick={share}
               disabled={sharing}
               className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] disabled:opacity-40"
@@ -516,6 +561,11 @@ function ComparePageInner() {
             </button>
           </div>
 
+          {mdCopyError && (
+            <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
+              copy failed: {mdCopyError}
+            </div>
+          )}
           {shareError && (
             <div className="ruled rounded-md p-3 bg-[var(--color-neg-soft)] border-[color:var(--color-neg-bar)] mono text-[12px] text-[var(--color-neg)]">
               share failed: {shareError}
