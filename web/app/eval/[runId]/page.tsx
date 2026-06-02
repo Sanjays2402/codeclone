@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { loadRun } from "../../../lib/data";
 import { H1 } from "../../../components/Headings";
 import { MetricChip } from "../../../components/MetricChip";
@@ -54,9 +55,22 @@ export default async function Page({ params }: { params: Promise<{ runId: string
         <LossChart data={run.metrics.map(m => ({ step: m.step, loss: m.loss }))} />
       </div>
 
-      <div className="mt-10 mb-3">
-        <div className="eyebrow mb-1">eval · per-case heatmap</div>
-        <h2 className="text-[17px] tracking-tight font-medium">Case grid</h2>
+      <div className="mt-10 mb-3 flex items-end justify-between gap-3">
+        <div>
+          <div className="eyebrow mb-1">eval · per-case heatmap</div>
+          <h2 className="text-[17px] tracking-tight font-medium">Case grid</h2>
+        </div>
+        {ev?.mini_scores && ev.mini_scores.length > 0 ? (
+          <a
+            href={`/api/runs/${encodeURIComponent(run.id)}/cases?format=csv`}
+            download={`codeclone-run-${run.id.replace(/[^A-Za-z0-9._-]+/g, "_")}-cases.csv`}
+            className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
+            title="Download the per-case eval results for this run as CSV"
+          >
+            <DownloadSimple size={12} weight="duotone" />
+            Download cases CSV
+          </a>
+        ) : null}
       </div>
       <EvalGrid cases={ev?.mini_scores ?? []} />
 
