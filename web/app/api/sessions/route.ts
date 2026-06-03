@@ -109,7 +109,7 @@ export async function GET(req: Request) {
   }
   const sessions = await listSessions(ctx.user.id);
   const ttlSec = await getUserTtl(ctx.user.id);
-  const rows: SessionCsvRow[] = sessions.map((s) => ({
+  const allRows: SessionCsvRow[] = sessions.map((s) => ({
     jti: s.jti,
     createdAt: s.createdAt,
     expiresAt: s.expiresAt,
@@ -120,13 +120,33 @@ export async function GET(req: Request) {
     createdUserAgent: s.createdUserAgent,
     current: ctx.jti === s.jti,
   }));
+  // Honor the on-screen filter for the CSV export so an admin who narrowed
+  // the device list by browser/OS/IP gets that exact slice when they hit
+  // Download CSV, instead of the full unfiltered roster. JSON callers
+  // intentionally always get the full list because the dashboard does its
+  // own client-side filtering against that source of truth (and the JSON
+  // shape includes `currentJti` which has to resolve against the unfiltered
+  // set).
+  const qRaw = url.searchParams.get("q");
+  const needle = qRaw ? qRaw.trim().toLowerCase() : "";
+  const rows = needle && format === "csv"
+    ? allRows.filter((r) => {
+        const hay = [
+          r.userAgent ?? "",
+          r.ip ?? "",
+          r.createdIp ?? "",
+          r.createdUserAgent ?? "",
+        ].join(" ").toLowerCase();
+        return hay.includes(needle);
+      })
+    : allRows;
   void tryRecordAudit(req, {
     action: "auth.sessions_read",
     actorId: ctx.user.id,
     actorEmail: ctx.user.email,
     target: { type: "user", id: ctx.user.id },
     status: "ok",
-    meta: { count: rows.length, format },
+    meta: { count: rows.length, total: allRows.length, q: needle || undefined, format },
   });
   if (format === "csv") {
     const csv = sessionsToCsv(rows);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ShieldCheck,
   DesktopTower,
@@ -81,6 +81,65 @@ export default function SessionsPage() {
   const [busy, setBusy] = useState<string | null>(null);
   const [ttlBusy, setTtlBusy] = useState(false);
   const [ttlMsg, setTtlMsg] = useState("");
+  const [q, setQ] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Global "/" shortcut focuses the session filter so an admin reviewing
+  // a long device list (think "which laptop is this stale IP?") can jump
+  // to the filter box without reaching for the mouse, matching the same
+  // shortcut already live on /history, /snippets, /collections, /pairs,
+  // /audit, /models, /api-keys, /notifications, /webhooks, /workspaces,
+  // /eval, and /usage. Skipped while focus is in another input, textarea,
+  // select, or contenteditable surface so we never hijack a literal slash
+  // the user meant to type. Ignores modifier combos so browser shortcuts
+  // like Cmd+/ keep working.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const filteredSessions = useMemo(() => {
+    if (!data) return [] as SessionItem[];
+    const needle = q.trim().toLowerCase();
+    if (!needle) return data.sessions;
+    return data.sessions.filter((s) => {
+      const hay = [
+        parseUA(s.userAgent),
+        s.userAgent ?? "",
+        s.ip ?? "",
+        s.createdIp ?? "",
+        s.createdUserAgent ?? "",
+      ].join(" ").toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [data, q]);
+
+  // Preserve the active filter in the CSV download so an admin who
+  // narrowed the on-screen list (e.g. one office IP range, or just
+  // Firefox sessions) gets that exact slice in their spreadsheet, not
+  // the unfiltered roster. The unfiltered link is href="/api/sessions?format=csv".
+  const csvHref = useMemo(() => {
+    const base = "/api/sessions?format=csv";
+    const needle = q.trim();
+    return needle
+      ? `${base}&q=${encodeURIComponent(needle)}`
+      : base;
+  }, [q]);
 
   const refresh = useCallback(async () => {
     try {
@@ -199,9 +258,9 @@ export default function SessionsPage() {
           <H2 eyebrow="Devices" right={
             <div className="inline-flex items-center gap-3">
               <a
-                href="/api/sessions?format=csv"
+                href={csvHref}
                 className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)]"
-                title="Download active sessions as CSV"
+                title="Download the filtered session list as CSV"
               >
                 <DownloadSimple weight="duotone" size={14} /> Download CSV
               </a>
@@ -217,14 +276,55 @@ export default function SessionsPage() {
             Signed-in devices
           </H2>
 
+          {data.sessions.length > 0 && (
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <div className="relative flex-1 min-w-[14rem] max-w-md">
+                <input
+                  ref={searchInputRef}
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="Filter by browser, OS, or IP"
+                  aria-keyshortcuts="/"
+                  aria-label="Filter sessions by browser, OS, or IP"
+                  className="mono text-[12.5px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 pr-7 border border-[var(--color-rule)] w-full outline-none focus:border-[var(--color-ink-3)]"
+                />
+                <kbd
+                  aria-hidden="true"
+                  title="Press / to focus search"
+                  className="hidden sm:inline absolute right-1.5 top-1/2 -translate-y-1/2 mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)] bg-[var(--color-paper)]"
+                >
+                  /
+                </kbd>
+              </div>
+              {q.trim() !== "" && (
+                <button
+                  type="button"
+                  onClick={() => setQ("")}
+                  className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink-1)] hover:bg-[var(--color-paper-2)]"
+                  title="Clear filter"
+                >
+                  clear
+                </button>
+              )}
+              <span className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+                {filteredSessions.length} of {data.sessions.length}
+              </span>
+            </div>
+          )}
+
           {data.sessions.length === 0 ? (
             <Empty
               title="No tracked sessions yet."
               hint="Sessions appear here after you sign in. Older cookies issued before this feature shipped expire on their own."
             />
+          ) : filteredSessions.length === 0 ? (
+            <Empty
+              title="No sessions match the filter."
+              hint="Clear the filter or try a different browser, OS, or IP fragment."
+            />
           ) : (
             <ul className="ruled rounded-md overflow-hidden">
-              {data.sessions.map((s) => (
+              {filteredSessions.map((s) => (
                 <li
                   key={s.jti}
                   className="border-b border-[var(--color-rule)] last:border-b-0 px-4 sm:px-5 py-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4"
