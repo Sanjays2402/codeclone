@@ -30,6 +30,7 @@ export default async function Page({
   const statusParam = sp.status?.trim() ?? "";
   const status = ALLOWED_STATUS.has(statusParam) ? statusParam : "";
   const backend = sp.backend?.trim() ?? "";
+  const model = sp.model?.trim() ?? "";
 
   const all = await loadRuns();
 
@@ -39,11 +40,15 @@ export default async function Page({
   const backends = Array.from(
     new Set(all.map((r) => r.backend).filter((b): b is string => !!b)),
   ).sort();
+  const models = Array.from(
+    new Set(all.map((r) => r.model).filter((m): m is string => !!m)),
+  ).sort();
 
   const ql = q.toLowerCase();
   const runs = all.filter((r) => {
     if (status && r.status !== status) return false;
     if (backend && r.backend !== backend) return false;
+    if (model && r.model !== model) return false;
     if (ql) {
       const hay = (
         r.id +
@@ -66,9 +71,10 @@ export default async function Page({
     "/api/runs?format=csv" +
     (q ? `&q=${encodeURIComponent(q)}` : "") +
     (status ? `&status=${encodeURIComponent(status)}` : "") +
-    (backend ? `&backend=${encodeURIComponent(backend)}` : "");
+    (backend ? `&backend=${encodeURIComponent(backend)}` : "") +
+    (model ? `&model=${encodeURIComponent(model)}` : "");
 
-  const filtering = !!(q || status || backend);
+  const filtering = !!(q || status || backend || model);
 
   return (
     <div>
@@ -82,8 +88,10 @@ export default async function Page({
             defaultQ={q}
             defaultStatus={status}
             defaultBackend={backend}
+            defaultModel={model}
             statuses={statuses}
             backends={backends}
+            models={models}
           />
           <a
             href={csvHref}

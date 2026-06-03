@@ -13,14 +13,18 @@ export default function EvalFilterBar({
   defaultQ,
   defaultStatus,
   defaultBackend,
+  defaultModel,
   statuses,
   backends,
+  models,
 }: {
   defaultQ?: string;
   defaultStatus?: string;
   defaultBackend?: string;
+  defaultModel?: string;
   statuses: string[];
   backends: string[];
+  models: string[];
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -88,6 +92,18 @@ export default function EvalFilterBar({
         {backends.map((b) => (
           <option key={b} value={b}>
             {b}
+          </option>
+        ))}
+      </select>
+      <select
+        name="model"
+        defaultValue={defaultModel ?? ""}
+        className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm focus:border-[var(--color-accent)] outline-none"
+      >
+        <option value="">model</option>
+        {models.map((m) => (
+          <option key={m} value={m}>
+            {m}
           </option>
         ))}
       </select>
