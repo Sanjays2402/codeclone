@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Bell,
@@ -76,7 +76,37 @@ export default function NotificationsPage() {
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Global "/" shortcut focuses the text filter so power users skimming a
+  // noisy inbox can jump straight to search without reaching for the mouse,
+  // matching the convention used by GitHub, Linear, and Slack (and the same
+  // shortcut already live on /collections, /history, /snippets, /api-keys,
+  // /audit, /pairs, and /models). Skipped while the user is already typing in
+  // another input/textarea/select or a contenteditable surface so we never
+  // hijack a literal slash, and modifier combos are ignored so browser
+  // shortcuts like Cmd+/ keep working.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -106,8 +136,15 @@ export default function NotificationsPage() {
   }, [refresh]);
 
   const visible = useMemo(() => {
-    return filter === "unread" ? items.filter((n) => !n.readAt) : items;
-  }, [items, filter]);
+    const base = filter === "unread" ? items.filter((n) => !n.readAt) : items;
+    const q = query.trim().toLowerCase();
+    if (!q) return base;
+    return base.filter((n) => {
+      if (n.title && n.title.toLowerCase().includes(q)) return true;
+      if (n.body && n.body.toLowerCase().includes(q)) return true;
+      return false;
+    });
+  }, [items, filter, query]);
 
   const csvHref = useMemo(() => {
     const qs = new URLSearchParams({ format: "csv", limit: "200" });
@@ -219,6 +256,22 @@ export default function NotificationsPage() {
           ))}
         </div>
         <div className="flex items-center gap-1">
+          <label htmlFor="notif-search" className="mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-4)]">
+            search
+          </label>
+          <input
+            id="notif-search"
+            ref={searchInputRef}
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="title or body"
+            aria-keyshortcuts="/"
+            title="Press / to focus search"
+            className="mono text-[11px] px-2 py-1 rounded-sm border border-[var(--color-rule)] bg-[var(--color-paper)] text-[var(--color-ink-2)] hover:border-[color:var(--color-accent)] focus:border-[color:var(--color-accent)] outline-none w-44"
+          />
+        </div>
+        <div className="flex items-center gap-1">
           <label htmlFor="notif-kind" className="mono text-[11px] uppercase tracking-[0.14em] text-[var(--color-ink-4)]">
             kind
           </label>
@@ -282,10 +335,18 @@ export default function NotificationsPage() {
       )}
       {status === "ready" && visible.length === 0 && (
         <Empty
-          title={items.length === 0 ? "No activity yet." : "All caught up."}
+          title={
+            items.length === 0
+              ? "No activity yet."
+              : query.trim()
+              ? "No matches."
+              : "All caught up."
+          }
           hint={
             items.length === 0
               ? "Run a comparison, ship a batch, or trigger a webhook to see updates here."
+              : query.trim()
+              ? "Nothing matches that search. Clear the filter or try fewer letters."
               : "Nothing unread. Switch filter to 'all' to review past activity."
           }
           mono={items.length === 0 ? "open /compare to start" : undefined}
