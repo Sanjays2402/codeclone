@@ -236,6 +236,15 @@ export default function ManageCollectionPage({
                   public view
                 </Link>
                 {publicUrl && <CopyLinkButton url={publicUrl} />}
+                <a
+                  href={`/api/collections/${id}?format=json`}
+                  download={`codeclone-collection-${id}.json`}
+                  className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[13px]"
+                  title="Download this collection (title, description, items) as JSON. Preserves the full record so you can re-import or back it up; the CSV only ships the items table."
+                >
+                  <DownloadSimple weight="duotone" size={14} />
+                  JSON
+                </a>
                 {data.items.length > 0 && (
                   <a
                     href={`/api/collections/${id}?format=csv`}
