@@ -339,6 +339,14 @@ export async function loadRun(id: string): Promise<RunDetail | null> {
   }
   let status: RunSummary["status"] = steps > 0 ? "running" : "queued";
   if (evalReport) status = evalReport.mini_pass_rate >= 0.5 ? "passed" : "failed";
+  // Honour the DONE marker the same way loadRuns() does so a finished run
+  // without an eval_report.json doesn't keep rendering as "running" on the
+  // detail page while the index already shows it as "passed". Without this
+  // the list and detail pages disagreed for any finished run that hadn't
+  // produced an eval report yet.
+  if (await safeStat(path.join(dir, "DONE"))) {
+    status = evalReport && evalReport.mini_pass_rate < 0.5 ? "failed" : "passed";
+  }
   return {
     id,
     params: params ?? null,
