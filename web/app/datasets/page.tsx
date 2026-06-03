@@ -4,6 +4,7 @@ import { MetricChip } from "../../components/MetricChip";
 import { Empty } from "../../components/States";
 import { fmtInt, fmtPct } from "../../lib/format";
 import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
+import DatasetsFilterBar from "../../components/DatasetsFilterBar";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +31,13 @@ function LangBar({ entries, total }: { entries: Array<[string, number]>; total: 
   );
 }
 
-export default async function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | undefined>>;
+}) {
+  const sp = await searchParams;
+  const q = sp.q?.trim() ?? "";
   const stats = await loadDatasetStats();
   if (!stats) {
     return (
@@ -44,16 +51,32 @@ export default async function Page() {
   const val = stats.val?.total ?? 0;
   const test = stats.test?.total ?? 0;
   const total = train + val + test;
-  const langs = stats.train?.by_language
+  const allLangs = stats.train?.by_language
     ? Object.entries(stats.train.by_language).sort((a, b) => b[1] - a[1])
     : [];
+  // Filter the per-language rows by a case-insensitive substring on the
+  // language name so a researcher who only cares about, say, python or ts
+  // can narrow the table without scrolling. The split totals above keep
+  // showing the full unfiltered counts so the filter never silently lies
+  // about the size of the dataset.
+  const ql = q.toLowerCase();
+  const langs = ql ? allLangs.filter(([lang]) => lang.toLowerCase().includes(ql)) : allLangs;
+
+  // Preserve the active language filter in the CSV download so a researcher
+  // who narrowed to one language gets that exact slice in their spreadsheet,
+  // not the unfiltered per-language matrix.
+  const extraCsvParams = new URLSearchParams();
+  if (q) extraCsvParams.set("q", q);
+  const extraQs = extraCsvParams.toString();
+  const csvHref = `/api/datasets?format=csv${extraQs ? `&${extraQs}` : ""}`;
 
   return (
     <div>
-      <H1 eyebrow="datasets · splits + mix">Dataset stats.</H1>
-      <div className="flex flex-wrap items-center justify-end gap-3 mb-3">
+      <H1 eyebrow={`datasets · ${langs.length} of ${allLangs.length} languages`}>Dataset stats.</H1>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+        <DatasetsFilterBar defaultQ={q} />
         <a
-          href="/api/datasets?format=csv"
+          href={csvHref}
           download="codeclone-datasets.csv"
           className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
           title="Download the per-language pair counts across splits as CSV"
@@ -72,7 +95,7 @@ export default async function Page() {
       <H2 eyebrow="train · by language">Language mix</H2>
       {langs.length > 0
         ? <LangBar entries={langs} total={train} />
-        : <Empty title="No language stats." />}
+        : <Empty title={q ? "No languages match the filter." : "No language stats."} hint={q ? "Clear the filter or try a different name." : undefined} mono="" />}
 
       <H2 eyebrow="report · raw">preprocess_report.json</H2>
       <pre className="ruled rounded-md p-4 mono text-[11.5px] overflow-auto max-h-[360px]">

@@ -59,12 +59,21 @@ export async function GET(req: Request) {
     return NextResponse.json({ stats: null, items: [], total: 0 });
   }
 
+  // Optional case-insensitive substring filter on the language name so the
+  // CSV download matches the filtered slice the /datasets page is showing.
+  const qRaw = url.searchParams.get("q");
+  const qFilter = (qRaw ?? "").trim().toLowerCase();
+
   const splits: Array<["train" | "val" | "test", number, Record<string, number>]> = [];
   for (const name of ["train", "val", "test"] as const) {
     if (split !== "all" && split !== name) continue;
     const s = stats[name];
     if (!s) continue;
-    splits.push([name, s.total ?? 0, s.by_language ?? {}]);
+    const byLang = s.by_language ?? {};
+    const filtered = qFilter
+      ? Object.fromEntries(Object.entries(byLang).filter(([lang]) => lang.toLowerCase().includes(qFilter)))
+      : byLang;
+    splits.push([name, s.total ?? 0, filtered]);
   }
 
   if (format === "csv") {
