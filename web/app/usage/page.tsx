@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
 import {
   ChartLineUp,
@@ -411,6 +411,44 @@ function RecentCallsPanel() {
     { refreshInterval: 15_000 },
   );
   const now = Date.now();
+  const [q, setQ] = useState("");
+  const filterInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Global "/" shortcut to focus the recent-calls filter, matching the
+  // convention already live on /history, /snippets, /collections, /pairs,
+  // /audit, /models, /api-keys, /notifications, /webhooks, /workspaces, /eval.
+  // Skipped while the user is already typing in another input/textarea/select
+  // or a contenteditable surface so we never hijack a literal slash they meant
+  // to type. Modifier combos are ignored so browser shortcuts keep working.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = filterInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const ql = q.trim().toLowerCase();
+  const filtered = useMemo(() => {
+    if (!data) return [] as RecentCall[];
+    if (!ql) return data.events;
+    return data.events.filter((ev) =>
+      ev.endpoint.toLowerCase().includes(ql) || ev.keyId.toLowerCase().includes(ql),
+    );
+  }, [data, ql]);
+
   return (
     <>
       <H2
@@ -438,6 +476,41 @@ function RecentCallsPanel() {
       >
         Recent API calls
       </H2>
+      {data && data.events.length > 0 && (
+        <div className="mb-2 flex items-center gap-2">
+          <div className="relative">
+            <input
+              ref={filterInputRef}
+              type="text"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="filter endpoint or key"
+              aria-keyshortcuts="/"
+              aria-label="Filter recent API calls by endpoint or key"
+              className="mono text-[12px] px-2.5 py-1.5 pr-8 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-72 focus:border-[var(--color-accent)] outline-none"
+            />
+            <kbd
+              aria-hidden="true"
+              title="Press / to focus search"
+              className="hidden sm:inline absolute right-1.5 top-1/2 -translate-y-1/2 mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)] bg-[var(--color-paper)]"
+            >
+              /
+            </kbd>
+          </div>
+          <span className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
+            {ql ? `${filtered.length} of ${data.events.length}` : `${data.events.length} calls`}
+          </span>
+          {ql && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule)]"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
       {error && <ErrorBlock message={(error as Error).message} />}
       {isLoading && !data && <LoadingRow rows={3} />}
       {data && data.events.length === 0 && (
@@ -447,7 +520,13 @@ function RecentCallsPanel() {
           mono="curl -H 'Authorization: Bearer cc_live_...' http://localhost:3000/v1/compare"
         />
       )}
-      {data && data.events.length > 0 && (
+      {data && data.events.length > 0 && filtered.length === 0 && (
+        <Empty
+          title="No calls match the filter"
+          hint="Clear the filter or try a different endpoint or key fragment."
+        />
+      )}
+      {data && filtered.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
           <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-2 mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] bg-[var(--color-paper-2)]">
             <div>When</div>
@@ -456,7 +535,7 @@ function RecentCallsPanel() {
             <div className="text-right">Latency</div>
             <div className="text-right">Bytes</div>
           </div>
-          {data.events.map((ev, i) => (
+          {filtered.map((ev, i) => (
             <div
               key={`${ev.ts}-${i}`}
               className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-4 px-4 py-2 border-t border-[var(--color-rule)] items-center"
