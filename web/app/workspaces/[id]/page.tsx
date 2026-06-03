@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useState, use } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, use } from "react";
 import Link from "next/link";
 import {
   UsersThree,
+  MagnifyingGlass,
   EnvelopeSimple,
   Trash,
   Copy,
@@ -87,6 +88,35 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
   const [invites, setInvites] = useState<Invite[]>([]);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+
+  const [memberQuery, setMemberQuery] = useState("");
+  const memberSearchRef = useRef<HTMLInputElement | null>(null);
+
+  // Keyboard shortcut: "/" focuses the member filter from anywhere on the
+  // page, matching the convention already live on /workspaces, /snippets,
+  // /history, /api-keys, /webhooks, /models, /notifications, /collections,
+  // /pairs, and /audit. Skipped while the user is typing in another
+  // input/textarea/select or a contenteditable surface so we never hijack a
+  // literal slash typed inside the invite-email field.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = memberSearchRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"editor" | "viewer">("viewer");
@@ -290,6 +320,13 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
   const canManage = ws.myRole === "owner";
   const canInvite = ws.myRole === "owner" || ws.myRole === "editor";
   const pendingInvites = invites.filter(i => i.status === "pending");
+  const memberQ = memberQuery.trim().toLowerCase();
+  const filteredMembers = memberQ
+    ? ws.members.filter((m) => {
+        const hay = `${m.email} ${m.role} ${m.status ?? "active"}`.toLowerCase();
+        return hay.includes(memberQ);
+      })
+    : ws.members;
 
   return (
     <div>
@@ -353,9 +390,41 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
       )}
 
       <section className="mb-6">
-        <div className="mono text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-3)] mb-2">members</div>
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <div className="mono text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">
+            members{memberQuery.trim() ? ` (${filteredMembers.length} of ${ws.members.length})` : ""}
+          </div>
+          {ws.members.length > 1 && (
+            <div className="flex items-center gap-2 ruled rounded-md px-2.5 h-8 bg-[var(--color-paper)]">
+              <MagnifyingGlass size={13} weight="duotone" className="text-[var(--color-ink-4)]" />
+              <input
+                ref={memberSearchRef}
+                type="search"
+                value={memberQuery}
+                onChange={(e) => setMemberQuery(e.target.value)}
+                placeholder="Filter by email, role, status"
+                aria-keyshortcuts="/"
+                title="Press / to focus search"
+                className="bg-transparent outline-none w-[220px] text-[12px] mono"
+              />
+              <kbd
+                aria-hidden="true"
+                className="hidden sm:inline mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)]"
+                title="Press / to focus search"
+              >
+                /
+              </kbd>
+            </div>
+          )}
+        </div>
+        {ws.members.length > 0 && filteredMembers.length === 0 ? (
+          <div className="ruled rounded-md px-4 py-6 text-center">
+            <div className="text-[13px] text-[var(--color-ink-2)]">No members match the filter.</div>
+            <div className="mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-4)] mt-1">Try a different email, role, or status</div>
+          </div>
+        ) : (
         <div className="ruled rounded-md overflow-hidden">
-          {ws.members.map((m, i) => {
+          {filteredMembers.map((m, i) => {
             const suspended = m.status === "suspended";
             return (
             <div key={m.userId} className={`px-4 py-3 flex items-center gap-3 ${i > 0 ? "border-t border-[var(--color-rule)]" : ""} ${suspended ? "opacity-60" : ""}`}>
@@ -420,6 +489,7 @@ export default function WorkspaceDetailPage({ params }: { params: Promise<{ id: 
           );
           })}
         </div>
+        )}
       </section>
 
       {canInvite && pendingInvites.length > 0 && (
