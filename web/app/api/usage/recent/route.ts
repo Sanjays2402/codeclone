@@ -4,6 +4,36 @@ import { currentUserFromCookieHeader } from "../../../../lib/auth";
 import { listWorkspacesForUser, getActiveMember, getWorkspace } from "../../../../lib/workspaces";
 import { tryRecordAudit } from "../../../../lib/audit";
 
+function csvCell(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  const s = typeof v === "string" ? v : String(v);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+
+interface RecentEventRow {
+  ts: number;
+  keyId: string;
+  endpoint: string;
+  bytes?: number;
+  latencyMs?: number;
+}
+
+function recentToCsv(rows: ReadonlyArray<RecentEventRow>): string {
+  const lines: string[] = ["timestamp_iso,timestamp_ms,key_id,endpoint,latency_ms,bytes"];
+  for (const r of rows) {
+    lines.push([
+      csvCell(new Date(r.ts).toISOString()),
+      csvCell(r.ts),
+      csvCell(r.keyId),
+      csvCell(r.endpoint),
+      csvCell(r.latencyMs ?? ""),
+      csvCell(r.bytes ?? ""),
+    ].join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
@@ -37,6 +67,15 @@ export async function GET(req: Request) {
       );
     }
     limit = Math.floor(n);
+  }
+
+  const formatRaw = url.searchParams.get("format");
+  const format = formatRaw === null || formatRaw === "" ? "json" : formatRaw.toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      { error: { type: "invalid_request", message: "format must be 'json' (default) or 'csv'." } },
+      { status: 400 },
+    );
   }
 
   let days = 7;
@@ -78,6 +117,26 @@ export async function GET(req: Request) {
 
   try {
     const events = await recentEvents(limit, days, Date.now(), allowedIds);
+    void tryRecordAudit(req, {
+      action: "usage.recent.read",
+      actorId: user.id,
+      actorEmail: user.email,
+      workspaceId: requested ?? undefined,
+      target: { type: "usage_recent", id: requested ?? "all" },
+      status: "ok",
+      meta: { windowDays: days, limit, workspaces: Array.from(allowedIds), format },
+    });
+    if (format === "csv") {
+      const csv = recentToCsv(events as RecentEventRow[]);
+      return new NextResponse(csv, {
+        status: 200,
+        headers: {
+          "content-type": "text/csv; charset=utf-8",
+          "content-disposition": `attachment; filename="codeclone-usage-recent.csv"`,
+          "Cache-Control": "no-store",
+        },
+      });
+    }
     return NextResponse.json(
       {
         events,

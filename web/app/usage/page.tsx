@@ -416,14 +416,24 @@ function RecentCallsPanel() {
       <H2
         eyebrow="Log"
         right={
-          <button
-            type="button"
-            onClick={() => void mutate()}
-            className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule)] inline-flex items-center gap-1.5"
-            aria-label="Refresh recent calls"
-          >
-            <ArrowsClockwise size={12} weight="duotone" /> Refresh
-          </button>
+          <div className="flex items-center gap-1">
+            <a
+              href="/api/usage/recent?limit=500&days=7&format=csv"
+              download="codeclone-usage-recent.csv"
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
+              title="Download the last 7 days of recent API calls as CSV for audit"
+            >
+              Download CSV
+            </a>
+            <button
+              type="button"
+              onClick={() => void mutate()}
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-transparent text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:border-[var(--color-rule)] inline-flex items-center gap-1.5"
+              aria-label="Refresh recent calls"
+            >
+              <ArrowsClockwise size={12} weight="duotone" /> Refresh
+            </button>
+          </div>
         }
       >
         Recent API calls
