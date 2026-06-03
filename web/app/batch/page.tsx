@@ -57,6 +57,7 @@ export default function BatchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<{ i: number; j: number } | null>(null);
+  const [minScore, setMinScore] = useState<number>(0);
 
   const canRun = useMemo(
     () => snippets.length >= 2 && snippets.every(s => s.code.trim().length > 0) && !loading,
@@ -135,6 +136,8 @@ export default function BatchPage() {
       lines.push([labels[i], ...row].map(esc).join(","));
     }
     // Section 2: pair-level breakdown so reviewers can sort and filter.
+    // Honor the on-screen min-similarity threshold so the CSV matches
+    // what the user sees in the heatmap (matrix stays rectangular).
     lines.push("");
     lines.push(
       [
@@ -143,7 +146,8 @@ export default function BatchPage() {
         "clone_type", "clone_confidence",
       ].map(esc).join(","),
     );
-    for (const c of result.cells) {
+    const pairCells = result.cells.filter(c => c.scores.shingleJaccard >= minScore);
+    for (const c of pairCells) {
       lines.push(
         [
           String(c.i),
@@ -164,12 +168,13 @@ export default function BatchPage() {
     const link = document.createElement("a");
     link.href = url;
     const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    link.download = `codeclone-batch-${stamp}.csv`;
+    const suffix = minScore > 0 ? `-min${minScore.toFixed(2)}` : "";
+    link.download = `codeclone-batch-${stamp}${suffix}.csv`;
     document.body.appendChild(link);
     link.click();
     link.remove();
     URL.revokeObjectURL(url);
-  }, [result]);
+  }, [result, minScore]);
 
   const cellMap = useMemo(() => {
     const m = new Map<string, BatchCell>();
@@ -311,6 +316,20 @@ export default function BatchPage() {
               </h2>
             </div>
             <div className="flex items-center gap-3">
+              <label className="flex items-center gap-2 mono text-[10.5px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]" title="Dim matrix cells whose shingle Jaccard falls below this threshold. Filters the CSV pair section too.">
+                <span>min</span>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={minScore}
+                  onChange={e => setMinScore(Number(e.target.value))}
+                  aria-label="Minimum shingle Jaccard threshold"
+                  className="w-24 accent-[color:var(--color-accent)]"
+                />
+                <span className="tnum text-[var(--color-ink)] w-8 text-right">{minScore.toFixed(2)}</span>
+              </label>
               <button
                 type="button"
                 onClick={downloadMatrixCsv}
@@ -368,15 +387,16 @@ export default function BatchPage() {
                     {row.map((v, j) => {
                       const isDiag = i === j;
                       const isSel = selected && ((selected.i === i && selected.j === j) || (selected.i === j && selected.j === i));
+                      const belowMin = !isDiag && v < minScore;
                       const ink = v > 0.55 ? "var(--color-paper)" : "var(--color-ink)";
                       return (
                         <td key={j} className="p-0">
                           <button
                             type="button"
-                            disabled={isDiag}
+                            disabled={isDiag || belowMin}
                             onClick={() => setSelected({ i, j })}
                             className={`mono text-[11px] tnum w-14 h-9 rounded-sm flex items-center justify-center transition-shadow ${
-                              isDiag ? "cursor-default opacity-50" : "hover:ring-2 hover:ring-[color:var(--color-accent)] cursor-pointer"
+                              isDiag ? "cursor-default opacity-50" : belowMin ? "cursor-not-allowed opacity-25" : "hover:ring-2 hover:ring-[color:var(--color-accent)] cursor-pointer"
                             } ${isSel ? "ring-2 ring-[color:var(--color-ink)]" : ""}`}
                             style={{ backgroundColor: isDiag ? "var(--color-paper-3)" : heatColor(v), color: ink }}
                             aria-label={`Similarity between ${result.snippets[i].label} and ${result.snippets[j].label}: ${v.toFixed(2)}`}

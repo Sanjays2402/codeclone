@@ -45,7 +45,7 @@ test("downloadMatrixCsv builds a CSV with the matrix and per-pair scores", () =>
   assert.match(pageSrc, /type: "text\/csv;charset=utf-8"/, "must set the CSV MIME type so browsers handle it correctly");
   assert.match(pageSrc, /URL\.createObjectURL\(blob\)/, "must create an object URL for the download anchor");
   assert.match(pageSrc, /URL\.revokeObjectURL\(url\)/, "must release the object URL after the click");
-  assert.match(pageSrc, /link\.download = `codeclone-batch-\$\{stamp\}\.csv`/, "must use a timestamped, namespaced filename");
+  assert.match(pageSrc, /link\.download = `codeclone-batch-\$\{stamp\}\$\{suffix\}\.csv`/, "must use a timestamped, namespaced filename (with optional min-score suffix)");
 });
 
 test("CSV escaper handles quotes, commas, and newlines in snippet labels", () => {
