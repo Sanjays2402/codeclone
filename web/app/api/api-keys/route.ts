@@ -83,14 +83,36 @@ export async function GET(req: Request) {
   }
 
   try {
-    const items = await listKeys(user.id);
+    const all = await listKeys(user.id);
+
+    // Apply the same q / status filters the dashboard exposes so a CSV pulled
+    // from /api-keys?status=revoked (or a free-text label/prefix search) gives
+    // the auditor exactly the slice they see on screen, not the full inventory.
+    const qRaw = url.searchParams.get("q");
+    const q = typeof qRaw === "string" ? qRaw.trim().toLowerCase() : "";
+    const statusRaw = url.searchParams.get("status");
+    const statusFilter =
+      statusRaw === "active" || statusRaw === "revoked" || statusRaw === "expired"
+        ? statusRaw
+        : "all";
+    const items = all.filter((k) => {
+      if (statusFilter === "revoked" && k.revoked !== true) return false;
+      if (statusFilter === "expired" && !(k.expired === true && k.revoked !== true)) return false;
+      if (statusFilter === "active" && (k.revoked === true || k.expired === true)) return false;
+      if (q) {
+        const hay = ((k.label ?? "") + " " + (k.prefix ?? "")).toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
     void tryRecordAudit(req, {
       action: "api_keys.read",
       actorId: user.id,
       actorEmail: user.email,
       target: { type: "api_key_inventory", id: user.id },
       status: "ok",
-      meta: { count: items.length, format },
+      meta: { count: items.length, total: all.length, format, q: q || undefined, status_filter: statusFilter === "all" ? undefined : statusFilter },
     });
     if (format === "csv") {
       const csv = keysToCsv(items);

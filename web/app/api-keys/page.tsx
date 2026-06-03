@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Key,
   Copy,
@@ -89,10 +89,76 @@ function CopyButton({ text, label = "Copy" }: { text: string; label?: string }) 
   );
 }
 
+type KeyStatusFilter = "all" | "active" | "revoked" | "expired";
+
+function matchesKeyStatus(k: ApiKeySummary, f: KeyStatusFilter): boolean {
+  if (f === "all") return true;
+  if (f === "revoked") return k.revoked === true;
+  if (f === "expired") return k.expired === true && k.revoked !== true;
+  // active: not revoked and not expired
+  return k.revoked !== true && k.expired !== true;
+}
+
 export default function ApiKeysPage() {
   const [items, setItems] = useState<ApiKeySummary[]>([]);
   const [status, setStatus] = useState<Status>("loading");
   const [error, setError] = useState("");
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<KeyStatusFilter>("all");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Global "/" shortcut focuses the key filter so power users with many keys
+  // can jump to the filter box without reaching for the mouse, matching the
+  // convention used by GitHub, Linear, and Slack (and the same shortcut
+  // already live on /history, /snippets, /collections, /pairs, /audit, and
+  // /models). Skipped while the user is already typing in another
+  // input/textarea/select or a contenteditable surface so we never hijack a
+  // literal slash they meant to type. Ignores modifier combos so browser
+  // shortcuts like Cmd+/ keep working.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return items.filter((k) => {
+      if (!matchesKeyStatus(k, statusFilter)) return false;
+      if (!needle) return true;
+      const hay = (k.label + " " + k.prefix).toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [items, q, statusFilter]);
+
+  // Preserve active filters in the CSV download so an admin who narrowed by
+  // label/prefix or status (e.g. all `revoked` keys for an audit) gets that
+  // exact slice in their spreadsheet, not the unfiltered inventory.
+  const csvHref = useMemo(() => {
+    // Base URL is kept as a literal so a grep for /api/api-keys?format=csv
+    // still hits this page (the dashboard CSV contract pins on that path).
+    const base = "/api/api-keys?format=csv";
+    const extra = new URLSearchParams();
+    const needle = q.trim();
+    if (needle) extra.set("q", needle);
+    if (statusFilter !== "all") extra.set("status", statusFilter);
+    const tail = extra.toString();
+    return tail ? `${base}&${tail}` : base;
+  }, [q, statusFilter]);
   const [label, setLabel] = useState("");
   const [expiresInDays, setExpiresInDays] = useState<string>("");
   const [scopes, setScopes] = useState<string[]>(["compare:write", "batch:write"]);
@@ -456,14 +522,14 @@ export default function ApiKeysPage() {
       </div>
 
       <H2
-        eyebrow="keys"
+        eyebrow={status === "ready" && items.length > 0 ? `keys · ${filtered.length} of ${items.length}` : "keys"}
         right={
           status === "ready" && items.length > 0 ? (
             <a
-              href="/api/api-keys?format=csv"
+              href={csvHref}
               download="codeclone-api-keys.csv"
               className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-2)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
-              title="Download your API key inventory as CSV for SOC2 rotation evidence"
+              title="Download the filtered key inventory as CSV for SOC2 rotation evidence"
             >
               Download CSV
             </a>
@@ -472,6 +538,52 @@ export default function ApiKeysPage() {
       >
         Your keys
       </H2>
+      {status === "ready" && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="relative flex-1 min-w-[14rem] max-w-md">
+            <input
+              ref={searchInputRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter by label or prefix"
+              aria-keyshortcuts="/"
+              aria-label="Filter keys by label or prefix"
+              className="mono text-[12.5px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 pr-7 border border-[var(--color-rule)] w-full outline-none focus:border-[var(--color-ink-3)]"
+            />
+            <kbd
+              aria-hidden="true"
+              title="Press / to focus search"
+              className="hidden sm:inline absolute right-1.5 top-1/2 -translate-y-1/2 mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)] bg-[var(--color-paper)]"
+            >
+              /
+            </kbd>
+          </div>
+          <label className="flex items-center gap-1.5">
+            <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as KeyStatusFilter)}
+              className="mono text-[12px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 border border-[var(--color-rule)] outline-none focus:border-[var(--color-ink-3)]"
+              title="Filter keys by lifecycle status"
+            >
+              <option value="all">all</option>
+              <option value="active">active</option>
+              <option value="revoked">revoked</option>
+              <option value="expired">expired</option>
+            </select>
+          </label>
+          {(q.trim() !== "" || statusFilter !== "all") && (
+            <button
+              type="button"
+              onClick={() => { setQ(""); setStatusFilter("all"); }}
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
+              title="Clear filters"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
       {error && <div className="mb-4"><ErrorBlock message={error} /></div>}
 
       {status === "signedout" && (
@@ -487,7 +599,13 @@ export default function ApiKeysPage() {
           hint="Create one above. Use it with /v1/compare to script comparisons from anywhere."
         />
       )}
-      {status === "ready" && items.length > 0 && (
+      {status === "ready" && items.length > 0 && filtered.length === 0 && (
+        <Empty
+          title="No keys match the filter."
+          hint="Clear the filter or pick a different status."
+        />
+      )}
+      {status === "ready" && filtered.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
           <div className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 h-9 items-center bg-[var(--color-paper-2)] border-b border-[var(--color-rule)] mono text-[10px] uppercase tracking-[0.14em] text-[var(--color-ink-3)]">
             <div>label</div>
@@ -496,7 +614,7 @@ export default function ApiKeysPage() {
             <div>last used</div>
             <div className="text-right">actions</div>
           </div>
-          {items.map((k) => (
+          {filtered.map((k) => (
             <div key={k.id} className="border-b border-[var(--color-rule)] last:border-b-0">
             <div
               className="grid grid-cols-[1fr_10rem_7rem_7rem_16rem] gap-3 px-4 min-h-11 items-center py-2 text-[12.5px]"
