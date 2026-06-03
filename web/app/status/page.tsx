@@ -1,7 +1,7 @@
 "use client";
 
 import useSWR from "swr";
-import { Heartbeat, Pulse, Gauge, Activity, ArrowsClockwise } from "@phosphor-icons/react/dist/ssr";
+import { Heartbeat, Pulse, Gauge, Activity, ArrowsClockwise, DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
 import { fmtInt, fmtTs } from "../../lib/format";
@@ -70,13 +70,23 @@ export default function StatusPage() {
 
       <div className="flex items-center justify-between">
         <H2 eyebrow="latency">By route</H2>
-        <button
-          type="button"
-          onClick={() => mutate()}
-          className="text-[12.5px] text-[var(--color-ink-2)] hover:text-[var(--color-ink-1)] inline-flex items-center gap-1.5"
-        >
-          <ArrowsClockwise weight="duotone" /> Refresh
-        </button>
+        <div className="flex items-center gap-4">
+          <a
+            href="/api/observability/snapshot?format=csv"
+            download="codeclone-status.csv"
+            className="text-[12.5px] text-[var(--color-ink-2)] hover:text-[var(--color-ink-1)] inline-flex items-center gap-1.5"
+            title="Snapshot per-route latency and status mix as CSV"
+          >
+            <DownloadSimple weight="duotone" /> Download CSV
+          </a>
+          <button
+            type="button"
+            onClick={() => mutate()}
+            className="text-[12.5px] text-[var(--color-ink-2)] hover:text-[var(--color-ink-1)] inline-flex items-center gap-1.5"
+          >
+            <ArrowsClockwise weight="duotone" /> Refresh
+          </button>
+        </div>
       </div>
 
       {isLoading && !data && (
