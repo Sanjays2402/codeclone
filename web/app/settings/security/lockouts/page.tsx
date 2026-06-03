@@ -14,6 +14,7 @@ import {
   EnvelopeSimple,
   Globe,
   Clock,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../../../components/States";
@@ -110,14 +111,25 @@ export default function LockoutsPage() {
             client IPs.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
-        >
-          <ArrowsClockwise weight="duotone" className="size-4" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-2">
+          <a
+            href="/api/security/lockouts?format=csv"
+            download="codeclone-security-lockouts.csv"
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+            title="Download the active lockouts as CSV for an incident report"
+          >
+            <DownloadSimple weight="duotone" className="size-4" />
+            Download CSV
+          </a>
+          <button
+            type="button"
+            onClick={() => void load()}
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-200 bg-white px-3 py-1.5 text-sm font-medium text-zinc-700 shadow-sm hover:bg-zinc-50"
+          >
+            <ArrowsClockwise weight="duotone" className="size-4" />
+            Refresh
+          </button>
+        </div>
       </div>
 
       {data && (
