@@ -10,6 +10,7 @@ import {
   Copy,
   XCircle,
   Gauge,
+  DownloadSimple,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1, H2 } from "../../../components/Headings";
 import { ErrorBlock } from "../../../components/States";
@@ -190,6 +191,35 @@ export default function MfaSettingsPage() {
 
   const copyAll = useCallback((codes: string[]) => {
     void navigator.clipboard.writeText(codes.join("\n"));
+  }, []);
+
+  // Save MFA backup codes to a local .txt file. These codes are shown
+  // exactly once and a user who loses them has to regenerate, which
+  // invalidates the old set; offering a downloadable file is the most
+  // common path users actually use (password-manager attachment, printed
+  // copy in a safe). The file is a plain newline-delimited list with a
+  // short header so the user knows what they are looking at later, and
+  // is stamped with the issue date so multiple regenerations don't
+  // collide on disk. Pure client-side: codes never leave the browser.
+  const downloadCodes = useCallback((codes: string[]) => {
+    if (!codes || codes.length === 0) return;
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const header = [
+      "# codeclone MFA backup codes",
+      `# issued: ${new Date().toISOString()}`,
+      "# Each code works once. Store this file somewhere safe.",
+      "",
+    ].join("\n");
+    const body = codes.join("\n") + "\n";
+    const blob = new Blob([header + body], { type: "text/plain;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `codeclone-backup-codes-${stamp}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   }, []);
 
   const [regenToken, setRegenToken] = useState("");
@@ -390,14 +420,25 @@ export default function MfaSettingsPage() {
                   </li>
                 ))}
               </ul>
-              <button
-                type="button"
-                onClick={() => copyAll(backupCodes)}
-                className="mt-3 inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-amber-900 ring-1 ring-inset ring-amber-200 hover:bg-amber-100"
-              >
-                <Copy weight="duotone" className="size-3.5" />
-                Copy all
-              </button>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => copyAll(backupCodes)}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-amber-900 ring-1 ring-inset ring-amber-200 hover:bg-amber-100"
+                >
+                  <Copy weight="duotone" className="size-3.5" />
+                  Copy all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadCodes(backupCodes)}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-xs font-medium text-amber-900 ring-1 ring-inset ring-amber-200 hover:bg-amber-100"
+                  title="Download your backup codes as a .txt file"
+                >
+                  <DownloadSimple weight="duotone" className="size-3.5" />
+                  Download .txt
+                </button>
+              </div>
             </div>
           </div>
         </section>
