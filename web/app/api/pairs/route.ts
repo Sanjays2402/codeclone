@@ -28,12 +28,29 @@ export async function GET(req: Request) {
   }
   const q = url.searchParams.get("q") ?? undefined;
   const lang = url.searchParams.get("lang") ?? undefined;
+  const minSimRaw = url.searchParams.get("minSim");
+  let minSim: number | undefined = undefined;
+  if (minSimRaw !== null && minSimRaw !== "") {
+    const n = Number(minSimRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 1) {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message: "minSim must be a number between 0 and 1.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    minSim = n;
+  }
 
   if (format === "csv") {
     // Export every row that matches the filters, not just the on-screen page,
     // so a researcher who filtered to "python" or a specific repo gets the
     // full filtered slice in their spreadsheet rather than the first 300.
-    const { items } = await loadPairsList({ limit: Number.MAX_SAFE_INTEGER, offset: 0, q, lang });
+    const { items } = await loadPairsList({ limit: Number.MAX_SAFE_INTEGER, offset: 0, q, lang, minSim });
     const header = [
       "id",
       "language",
@@ -78,6 +95,6 @@ export async function GET(req: Request) {
 
   const limit = Number(url.searchParams.get("limit") ?? 100);
   const offset = Number(url.searchParams.get("offset") ?? 0);
-  const data = await loadPairsList({ limit, offset, q, lang });
+  const data = await loadPairsList({ limit, offset, q, lang, minSim });
   return NextResponse.json(data);
 }

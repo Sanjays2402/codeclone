@@ -39,6 +39,6 @@ test("pairs filter bar advertises the / shortcut", async () => {
 test("pairs page mounts the client filter bar in place of the inline form", async () => {
   const src = await read("app/pairs/page.tsx");
   assert.match(src, /import PairsFilterBar from "\.\.\/\.\.\/components\/PairsFilterBar"/, "must import the client filter bar");
-  assert.match(src, /<PairsFilterBar defaultQ=\{q\} defaultLang=\{lang\} \/>/, "must render the filter bar with the current query state");
+  assert.match(src, /<PairsFilterBar defaultQ=\{q\} defaultLang=\{lang\}/, "must render the filter bar with the current query state");
   assert.doesNotMatch(src, /<form className="mb-4 flex items-center gap-2" action="\/pairs">/, "must not keep the old inline form once the client bar is wired");
 });

@@ -9,9 +9,11 @@ import { useEffect, useRef } from "react";
 export default function PairsFilterBar({
   defaultQ,
   defaultLang,
+  defaultMinSim,
 }: {
   defaultQ?: string;
   defaultLang?: string;
+  defaultMinSim?: number;
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -63,6 +65,18 @@ export default function PairsFilterBar({
         defaultValue={defaultLang ?? ""}
         placeholder="lang"
         className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-24 focus:border-[var(--color-accent)] outline-none"
+      />
+      <input
+        name="minSim"
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        defaultValue={defaultMinSim !== undefined && defaultMinSim > 0 ? String(defaultMinSim) : ""}
+        placeholder="min sim"
+        aria-label="Minimum similarity (0 to 1)"
+        title="Only show clone pairs with similarity at least this value (0 to 1)"
+        className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-24 focus:border-[var(--color-accent)] outline-none tnum"
       />
       <button className="mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 border border-[var(--color-rule-strong)] rounded-sm hover:bg-[var(--color-paper-2)]">
         apply
