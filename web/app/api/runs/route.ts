@@ -32,6 +32,7 @@ export async function GET(req: Request) {
   const statusFilter = url.searchParams.get("status") ?? undefined;
   const backendFilter = url.searchParams.get("backend") ?? undefined;
   const modelFilter = url.searchParams.get("model") ?? undefined;
+  const qFilter = (url.searchParams.get("q") ?? "").trim().toLowerCase();
 
   let runs = await loadRuns();
   if (statusFilter && ALLOWED_STATUS.has(statusFilter)) {
@@ -42,6 +43,18 @@ export async function GET(req: Request) {
   }
   if (modelFilter) {
     runs = runs.filter((r) => r.model === modelFilter);
+  }
+  if (qFilter) {
+    runs = runs.filter((r) => {
+      const id = r.id.toLowerCase();
+      const recipe = (r.recipeHash ?? "").toLowerCase();
+      const model = (r.model ?? "").toLowerCase();
+      return (
+        id.includes(qFilter) ||
+        recipe.includes(qFilter) ||
+        model.includes(qFilter)
+      );
+    });
   }
 
   if (format === "csv") {
