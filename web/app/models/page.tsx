@@ -15,6 +15,16 @@ export default async function Page({
   const sp = await searchParams;
   const q = sp.q?.trim() ?? "";
   const backend = sp.backend?.trim() ?? "";
+  // minPass narrows the registry to adapters that cleared a pass@1 (or
+  // mini_pass_rate fallback) quality bar. Empty / invalid box is a no-op
+  // so the unfiltered registry still renders by default and a fat-finger
+  // doesn't blank the page.
+  const minPassRaw = sp.minPass;
+  let minPass: number | undefined = undefined;
+  if (minPassRaw !== undefined && minPassRaw !== "") {
+    const n = Number(minPassRaw);
+    if (Number.isFinite(n) && n >= 0 && n <= 1) minPass = n;
+  }
 
   const [all, evals] = await Promise.all([loadAdapters(), loadEvalReports()]);
   // join eval by model name
@@ -32,6 +42,12 @@ export default async function Page({
       const hay = a.name.toLowerCase() + " " + a.base_model.toLowerCase();
       if (!hay.includes(ql)) return false;
     }
+    if (minPass !== undefined && minPass > 0) {
+      const ev = byModel.get(a.name);
+      if (!ev) return false;
+      const score = ev.pass_at_1 ?? ev.mini_pass_rate;
+      if (typeof score !== "number" || score < minPass) return false;
+    }
     return true;
   });
 
@@ -43,6 +59,7 @@ export default async function Page({
   const csvParams = new URLSearchParams({ format: "csv" });
   if (q) csvParams.set("q", q);
   if (backend) csvParams.set("backend", backend);
+  if (minPass !== undefined) csvParams.set("minPass", String(minPass));
   const csvHref = `/api/models?${csvParams.toString()}`;
 
   return (
@@ -53,7 +70,7 @@ export default async function Page({
       ) : (
         <>
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-          <ModelsFilterBar defaultQ={q} defaultBackend={backend} backends={backends} />
+          <ModelsFilterBar defaultQ={q} defaultBackend={backend} defaultMinPass={minPass} backends={backends} />
           <a
             href={csvHref}
             download="codeclone-models.csv"

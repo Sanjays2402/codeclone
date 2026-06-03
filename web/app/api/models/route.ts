@@ -33,6 +33,28 @@ export async function GET(req: Request) {
   // insensitive). Mirrors the q box on the /models page so the CSV export
   // and the on-screen table stay in sync when a researcher narrows the view.
   const qFilter = (url.searchParams.get("q") ?? "").trim().toLowerCase();
+  // Minimum pass@1 threshold (0..1). Lets a researcher narrow the registry
+  // to adapters that cleared a quality bar (e.g. minPass=0.5) without
+  // hand-grepping eval reports. Falls back to mini_pass_rate when an
+  // adapter has no pass_at_1 row, matching the on-screen join. Empty box
+  // is a no-op so the unfiltered registry still ships by default.
+  const minPassRaw = url.searchParams.get("minPass");
+  let minPass: number | undefined = undefined;
+  if (minPassRaw !== null && minPassRaw !== "") {
+    const n = Number(minPassRaw);
+    if (!Number.isFinite(n) || n < 0 || n > 1) {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message: "minPass must be a number between 0 and 1.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    minPass = n;
+  }
 
   let adapters = await loadAdapters();
   if (backendFilter) {
@@ -49,15 +71,26 @@ export async function GET(req: Request) {
     );
   }
 
-  if (format === "csv") {
-    // Join the eval report by model name so the spreadsheet row carries
-    // the headline pass@1 / mini_pass_rate next to the adapter, matching
-    // what the /models page joins on screen. An adapter with no eval row
-    // gets blank metric cells rather than a missing column.
-    const evals = await loadEvalReports();
-    const byModel = new Map<string, (typeof evals)[number]>();
-    for (const e of evals) byModel.set(e.model, e);
+  // Eval reports are loaded once and reused for both the minPass filter and
+  // the CSV join below, so we never read the registry twice per request.
+  const evals = await loadEvalReports();
+  const byModel = new Map<string, (typeof evals)[number]>();
+  for (const e of evals) byModel.set(e.model, e);
 
+  if (minPass !== undefined && minPass > 0) {
+    const threshold = minPass;
+    adapters = adapters.filter((a) => {
+      const ev = byModel.get(a.name);
+      if (!ev) return false;
+      const score = ev.pass_at_1 ?? ev.mini_pass_rate;
+      return typeof score === "number" && score >= threshold;
+    });
+  }
+
+  if (format === "csv") {
+    // CSV row carries the headline pass@1 / mini_pass_rate next to the
+    // adapter, matching what the /models page joins on screen. An adapter
+    // with no eval row gets blank metric cells rather than a missing column.
     const header = [
       "name",
       "base_model",

@@ -11,10 +11,12 @@ import { useEffect, useRef } from "react";
 export default function ModelsFilterBar({
   defaultQ,
   defaultBackend,
+  defaultMinPass,
   backends,
 }: {
   defaultQ?: string;
   defaultBackend?: string;
+  defaultMinPass?: number;
   backends: string[];
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
@@ -74,6 +76,18 @@ export default function ModelsFilterBar({
           </option>
         ))}
       </select>
+      <input
+        name="minPass"
+        type="number"
+        min={0}
+        max={1}
+        step={0.05}
+        defaultValue={defaultMinPass !== undefined ? String(defaultMinPass) : ""}
+        placeholder="min pass@1"
+        aria-label="Minimum pass@1 (0 to 1)"
+        title="Hide adapters whose pass@1 (or mini_pass_rate fallback) is below this threshold"
+        className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-28 focus:border-[var(--color-accent)] outline-none"
+      />
       <button className="mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 border border-[var(--color-rule-strong)] rounded-sm hover:bg-[var(--color-paper-2)]">
         apply
       </button>
