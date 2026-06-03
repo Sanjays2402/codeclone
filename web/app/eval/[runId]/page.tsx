@@ -16,11 +16,30 @@ export default async function Page({ params }: { params: Promise<{ runId: string
   if (!run) notFound();
   const ev = run.evalReport;
 
+  // Download the full run record (metrics curve, params, eval report) as JSON
+  // so a researcher reviewing an eval can save the exact run for offline
+  // comparison, attach it to a ticket, or replay it locally without scraping
+  // the rendered page. The API route at /api/runs/[runId] serves the raw
+  // payload, so this is just a plain <a download> on top of that endpoint.
+  const jsonHref = `/api/runs/${encodeURIComponent(run.id)}`;
+  const jsonName = `codeclone-run-${run.id.replace(/[^A-Za-z0-9._-]+/g, "_")}.json`;
+
   return (
     <div>
-      <H1 eyebrow={`run · ${run.status}`}>
-        <span className="mono">{run.id}</span>
-      </H1>
+      <div className="flex items-start justify-between gap-3">
+        <H1 eyebrow={`run · ${run.status}`}>
+          <span className="mono">{run.id}</span>
+        </H1>
+        <a
+          href={jsonHref}
+          download={jsonName}
+          className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] mt-2"
+          title="Download this run (metrics, params, eval report) as JSON"
+        >
+          <DownloadSimple size={12} weight="duotone" />
+          Download JSON
+        </a>
+      </div>
 
       <div className="grid grid-cols-4 gap-3 mb-6">
         <MetricChip label="pass@1" value={ev ? fmtPct(ev.pass_at_1 ?? ev.mini_pass_rate, 1) : "—"} sub={ev?.model ?? "no eval"} accent large />
