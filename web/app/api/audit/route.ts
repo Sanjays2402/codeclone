@@ -102,7 +102,14 @@ export async function GET(req: Request) {
     limit,
   });
 
-  const format = (sp.get("format") || "json").toLowerCase();
+  const formatRaw = sp.get("format");
+  const format = (formatRaw || "json").toLowerCase();
+  if (format !== "json" && format !== "csv") {
+    return NextResponse.json(
+      { error: "invalid_request", message: "format must be 'json' (default) or 'csv'" },
+      { status: 400 },
+    );
+  }
 
   if (format === "csv") {
     await tryRecordAudit(req, {
@@ -120,6 +127,33 @@ export async function GET(req: Request) {
         "cache-control": "no-store",
       },
     });
+  }
+
+  // Explicit ?format=json is treated as a JSON export download (attachment
+  // headers + audit.export row) so SOC2 / SIEM reviewers can pipe the same
+  // tamper-evident rows into Splunk, Elastic, or jq without the CSV column
+  // flattening that drops the structured `diff` and `meta` fields. The
+  // unparameterized default keeps the existing dashboard read shape so the
+  // /audit page client stays unchanged.
+  if (formatRaw) {
+    await tryRecordAudit(req, {
+      action: "audit.export",
+      actorId: user.id,
+      actorEmail: user.email,
+      target: { type: "audit_log" },
+      meta: { rows: entries.length, format: "json" },
+    });
+    return new NextResponse(
+      JSON.stringify({ items: entries, count: entries.length, limit }, null, 2),
+      {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=utf-8",
+          "content-disposition": `attachment; filename="audit-${Date.now()}.json"`,
+          "cache-control": "no-store",
+        },
+      },
+    );
   }
 
   await tryRecordAudit(req, {

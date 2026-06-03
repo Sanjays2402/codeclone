@@ -196,6 +196,7 @@ export default function AuditPage() {
   }, [load]);
 
   const csvHref = useMemo(() => `/api/audit?${buildQuery()}&format=csv`, [buildQuery]);
+  const jsonHref = useMemo(() => `/api/audit?${buildQuery()}&format=json`, [buildQuery]);
 
   return (
     <main className="container py-10">
@@ -309,6 +310,14 @@ export default function AuditPage() {
             className="inline-flex items-center gap-1.5 mono text-[12px] px-3 py-1.5 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)]"
           >
             <DownloadSimple size={14} weight="duotone" /> csv
+          </a>
+          <a
+            href={jsonHref}
+            download
+            className="inline-flex items-center gap-1.5 mono text-[12px] px-3 py-1.5 rounded border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)]"
+            title="Download the filtered audit log as JSON (preserves structured diff and meta fields)"
+          >
+            <DownloadSimple size={14} weight="duotone" /> json
           </a>
           <button
             type="button"
