@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plugs,
   Plus,
@@ -115,6 +115,48 @@ export default function WebhooksPage() {
   const [pinging, setPinging] = useState<string>("");
   const [pingResult, setPingResult] = useState<Record<string, { ok: boolean; status: number; durationMs: number; error?: string | null }>>({});
   const [pingErr, setPingErr] = useState<string>("");
+  const [q, setQ] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "paused">("all");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Global "/" shortcut focuses the webhook filter so an SRE staring at
+  // a workspace with dozens of registered endpoints can jump straight to
+  // the filter box, matching the convention used by GitHub, Linear, and
+  // Slack (and already live on /history, /snippets, /collections, /pairs,
+  // /audit, /models, /api-keys, and /notifications). Skipped while the
+  // user is already typing in another input/textarea/select or a
+  // contenteditable surface so we never hijack a literal slash. Ignores
+  // modifier combos so browser shortcuts like Cmd+/ keep working.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const filteredItems = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return items.filter((w) => {
+      if (statusFilter === "active" && w.disabled === true) return false;
+      if (statusFilter === "paused" && w.disabled !== true) return false;
+      if (!needle) return true;
+      const hay = (w.label + " " + w.url).toLowerCase();
+      return hay.includes(needle);
+    });
+  }, [items, q, statusFilter]);
 
   const myRole = useMemo(
     () => workspaces.find((w) => w.id === activeWs)?.myRole ?? null,
@@ -599,14 +641,22 @@ export default function WebhooksPage() {
         )}
       </section>
 
-      <H2 eyebrow="endpoints" right={
+      <H2 eyebrow={status === "ready" && items.length > 0 ? `endpoints · ${filteredItems.length} of ${items.length}` : "endpoints"} right={
         <div className="flex items-center gap-1.5">
           {status === "ready" && items.length > 0 && activeWs ? (
             <a
-              href={`/api/webhooks?workspaceId=${encodeURIComponent(activeWs)}&format=csv`}
+              href={(() => {
+                const base = `/api/webhooks?workspaceId=${encodeURIComponent(activeWs)}&format=csv`;
+                const extra = new URLSearchParams();
+                const needle = q.trim();
+                if (needle) extra.set("q", needle);
+                if (statusFilter !== "all") extra.set("status", statusFilter);
+                const tail = extra.toString();
+                return tail ? `${base}&${tail}` : base;
+              })()}
               download={`codeclone-${activeWs}-webhooks.csv`}
               className="mono text-[10.5px] uppercase tracking-[0.16em] px-2 py-1 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)]"
-              title="Download this workspace's webhook inventory as CSV"
+              title="Download the filtered webhook inventory as CSV"
             >
               Download CSV
             </a>
@@ -642,8 +692,59 @@ export default function WebhooksPage() {
         />
       )}
       {status === "ready" && items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <div className="relative flex-1 min-w-[14rem] max-w-md">
+            <input
+              ref={searchInputRef}
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              placeholder="Filter by label or url"
+              aria-keyshortcuts="/"
+              aria-label="Filter webhooks by label or url"
+              className="mono text-[12.5px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 pr-7 border border-[var(--color-rule)] w-full outline-none focus:border-[var(--color-ink-3)]"
+            />
+            <kbd
+              aria-hidden="true"
+              title="Press / to focus search"
+              className="hidden sm:inline absolute right-1.5 top-1/2 -translate-y-1/2 mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)] bg-[var(--color-paper)]"
+            >
+              /
+            </kbd>
+          </div>
+          <label className="flex items-center gap-1.5">
+            <span className="mono text-[10.5px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">status</span>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as "all" | "active" | "paused")}
+              className="mono text-[12px] bg-[var(--color-paper-2)] rounded px-2 py-1.5 border border-[var(--color-rule)] outline-none focus:border-[var(--color-ink-3)]"
+              title="Filter webhooks by lifecycle status"
+            >
+              <option value="all">all</option>
+              <option value="active">active</option>
+              <option value="paused">paused</option>
+            </select>
+          </label>
+          {(q.trim() !== "" || statusFilter !== "all") && (
+            <button
+              type="button"
+              onClick={() => { setQ(""); setStatusFilter("all"); }}
+              className="mono text-[10.5px] uppercase tracking-[0.14em] px-2 py-1 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-3)] hover:text-[var(--color-ink)] hover:bg-[var(--color-paper-3)]"
+              title="Clear filters"
+            >
+              clear
+            </button>
+          )}
+        </div>
+      )}
+      {status === "ready" && items.length > 0 && filteredItems.length === 0 && (
+        <Empty
+          title="No webhooks match the filter."
+          hint="Clear the filter or pick a different status."
+        />
+      )}
+      {status === "ready" && filteredItems.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
-          {items.map((w, idx) => {
+          {filteredItems.map((w, idx) => {
             const isOpen = open === w.id;
             return (
               <div

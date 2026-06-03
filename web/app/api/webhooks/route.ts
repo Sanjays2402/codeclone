@@ -113,16 +113,49 @@ export async function GET(req: Request) {
     );
   }
   const items = await listWebhooksForWorkspace(r.ws.id);
+  // Honor the same on-screen filters the dashboard webhooks page exposes
+  // (free-text q on label+url and a status dropdown of all/active/paused)
+  // so an operator who narrowed to e.g. paused endpoints for an audit gets
+  // that exact slice in the CSV instead of the unfiltered inventory.
+  const qRaw = url.searchParams.get("q");
+  const needle = (qRaw ?? "").trim().toLowerCase();
+  const statusRaw = url.searchParams.get("status");
+  const statusFilter = statusRaw === null || statusRaw === "" ? "all" : statusRaw.toLowerCase();
+  if (statusFilter !== "all" && statusFilter !== "active" && statusFilter !== "paused") {
+    return NextResponse.json(
+      {
+        error: {
+          type: "invalid_request",
+          message: "status must be 'all' (default), 'active', or 'paused'.",
+        },
+      },
+      { status: 400 },
+    );
+  }
+  const filteredItems = items.filter((w) => {
+    if (statusFilter === "active" && w.disabled === true) return false;
+    if (statusFilter === "paused" && w.disabled !== true) return false;
+    if (!needle) return true;
+    const hay = (w.label + " " + w.url).toLowerCase();
+    return hay.includes(needle);
+  });
   void tryRecordAudit(req, {
     action: "webhooks.read",
     actorId: r.user.id,
     actorEmail: r.user.email,
     target: { type: "webhook_inventory", id: r.ws.id },
     status: "ok",
-    meta: { workspaceId: r.ws.id, count: items.length, format },
+    meta: {
+      workspaceId: r.ws.id,
+      count: filteredItems.length,
+      total: items.length,
+      format,
+      q: needle || undefined,
+      statusFilter,
+    },
   });
   if (format === "csv") {
-    const csv = webhooksToCsv(items);
+    const csv = webhooksToCsv(filteredItems);
     return new NextResponse(csv, {
       status: 200,
       headers: {
@@ -132,7 +165,7 @@ export async function GET(req: Request) {
       },
     });
   }
-  return NextResponse.json({ items, workspaceId: r.ws.id });
+  return NextResponse.json({ items: filteredItems, workspaceId: r.ws.id });
 }
 
 export async function POST(req: Request) {
