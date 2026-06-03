@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import {
   UsersThree,
@@ -12,6 +12,7 @@ import {
   PencilSimple,
   Eye,
   DownloadSimple,
+  MagnifyingGlass,
 } from "@phosphor-icons/react/dist/ssr";
 import { H1 } from "../../components/Headings";
 import { Empty, ErrorBlock, LoadingRow } from "../../components/States";
@@ -41,6 +42,43 @@ export default function WorkspacesPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [saving, setSaving] = useState(false);
+  const [q, setQ] = useState("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Keyboard shortcut: "/" focuses the workspace filter from anywhere on the
+  // page, matching the convention already live on /snippets, /history,
+  // /api-keys, /webhooks, /models, /notifications, /collections, /pairs, and
+  // /audit. Skipped while the user is typing in another input/textarea/select
+  // or a contenteditable surface so we never hijack a literal slash typed
+  // inside the new-workspace name field.
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "/") return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (t.isContentEditable) return;
+      }
+      const el = searchInputRef.current;
+      if (!el) return;
+      e.preventDefault();
+      el.focus();
+      el.select();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const filtered = useMemo(() => {
+    const ql = q.trim().toLowerCase();
+    if (!ql) return items;
+    return items.filter((w) => {
+      const hay = `${w.name} ${w.slug} ${w.myRole ?? ""}`.toLowerCase();
+      return hay.includes(ql);
+    });
+  }, [items, q]);
 
   const refresh = useCallback(async () => {
     setStatus("loading");
@@ -93,9 +131,37 @@ export default function WorkspacesPage() {
 
       <div className="flex items-center justify-between mb-4">
         <div className="mono text-[11px] uppercase tracking-[0.16em] text-[var(--color-ink-3)]">
-          {status === "ready" ? `${items.length} total` : status === "unauth" ? "sign in to view" : "loading"}
+          {status === "ready"
+            ? q.trim()
+              ? `${filtered.length} of ${items.length} total`
+              : `${items.length} total`
+            : status === "unauth"
+              ? "sign in to view"
+              : "loading"}
         </div>
         <div className="flex items-center gap-2">
+          {status === "ready" && items.length > 0 && (
+            <div className="flex items-center gap-2 ruled rounded-md px-2.5 h-8 bg-[var(--color-paper)]">
+              <MagnifyingGlass size={13} weight="duotone" className="text-[var(--color-ink-4)]" />
+              <input
+                ref={searchInputRef}
+                type="search"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Filter by name, slug, role"
+                aria-keyshortcuts="/"
+                title="Press / to focus search"
+                className="bg-transparent outline-none w-[200px] text-[12px] mono"
+              />
+              <kbd
+                aria-hidden="true"
+                className="hidden sm:inline mono text-[10px] uppercase tracking-[0.14em] px-1.5 py-0.5 rounded-sm border border-[var(--color-rule)] text-[var(--color-ink-4)]"
+                title="Press / to focus search"
+              >
+                /
+              </kbd>
+            </div>
+          )}
           {status === "ready" && items.length > 0 && (
             <a
               href="/api/workspaces?format=csv"
@@ -168,9 +234,15 @@ export default function WorkspacesPage() {
           hint="Create one to invite teammates and share comparisons under a common roof."
         />
       )}
-      {status === "ready" && items.length > 0 && (
+      {status === "ready" && items.length > 0 && filtered.length === 0 && (
+        <Empty
+          title="No workspaces match the filter"
+          hint="Clear the filter or try a different name, slug, or role."
+        />
+      )}
+      {status === "ready" && filtered.length > 0 && (
         <div className="ruled rounded-md overflow-hidden">
-          {items.map((w, i) => (
+          {filtered.map((w, i) => (
             <Link key={w.id} href={`/workspaces/${w.id}`}
               className={`block px-4 py-3 hover:bg-[var(--color-paper-2)] ${i > 0 ? "border-t border-[var(--color-rule)]" : ""}`}>
               <div className="flex items-center gap-3">
