@@ -18,7 +18,12 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
     const n = Number(minSimRaw);
     if (Number.isFinite(n) && n >= 0 && n <= 1) minSim = n;
   }
-  const { items, total } = await loadPairsList({ limit: 300, lang, q, minSim });
+  const splitRaw = sp.split?.trim();
+  const split: "train" | "val" | "test" | undefined =
+    splitRaw === "train" || splitRaw === "val" || splitRaw === "test"
+      ? splitRaw
+      : undefined;
+  const { items, total } = await loadPairsList({ limit: 300, lang, q, minSim, split });
 
   // Preserve active filters in the CSV download so a researcher who
   // narrowed the view to e.g. lang=python or a repo substring gets that
@@ -27,6 +32,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
   if (q) csvParams.set("q", q);
   if (lang) csvParams.set("lang", lang);
   if (minSim !== undefined && minSim > 0) csvParams.set("minSim", String(minSim));
+  if (split) csvParams.set("split", split);
   const csvHref = `/api/pairs?${csvParams.toString()}`;
 
   return (
@@ -34,7 +40,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<Rec
       <H1 eyebrow={`pairs · ${fmtInt(total)} rows`}>Clone-pair index.</H1>
 
       <div className="flex flex-wrap items-center gap-3 mb-4">
-        <PairsFilterBar defaultQ={q} defaultLang={lang} defaultMinSim={minSim} />
+        <PairsFilterBar defaultQ={q} defaultLang={lang} defaultMinSim={minSim} defaultSplit={split} />
         {items.length > 0 ? (
           <a
             href={csvHref}

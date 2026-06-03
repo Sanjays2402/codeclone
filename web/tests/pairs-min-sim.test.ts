@@ -74,7 +74,7 @@ test("/api/pairs validates minSim and rejects out-of-range values with 400", () 
   assert.match(csvBranch, /minSim/, "csv branch must honor minSim");
   assert.match(
     routeSrc,
-    /loadPairsList\(\{\s*limit,\s*offset,\s*q,\s*lang,\s*minSim\s*\}\)/,
+    /loadPairsList\(\{\s*limit,\s*offset,\s*q,\s*lang,\s*minSim,\s*split\s*\}\)/,
     "json branch must honor minSim",
   );
 });

@@ -28,6 +28,22 @@ export async function GET(req: Request) {
   }
   const q = url.searchParams.get("q") ?? undefined;
   const lang = url.searchParams.get("lang") ?? undefined;
+  const splitRaw = url.searchParams.get("split");
+  let split: "train" | "val" | "test" | undefined = undefined;
+  if (splitRaw !== null && splitRaw !== "") {
+    if (splitRaw !== "train" && splitRaw !== "val" && splitRaw !== "test") {
+      return NextResponse.json(
+        {
+          error: {
+            type: "invalid_request",
+            message: "split must be one of 'train', 'val', or 'test'.",
+          },
+        },
+        { status: 400 },
+      );
+    }
+    split = splitRaw;
+  }
   const minSimRaw = url.searchParams.get("minSim");
   let minSim: number | undefined = undefined;
   if (minSimRaw !== null && minSimRaw !== "") {
@@ -50,7 +66,7 @@ export async function GET(req: Request) {
     // Export every row that matches the filters, not just the on-screen page,
     // so a researcher who filtered to "python" or a specific repo gets the
     // full filtered slice in their spreadsheet rather than the first 300.
-    const { items } = await loadPairsList({ limit: Number.MAX_SAFE_INTEGER, offset: 0, q, lang, minSim });
+    const { items } = await loadPairsList({ limit: Number.MAX_SAFE_INTEGER, offset: 0, q, lang, minSim, split });
     const header = [
       "id",
       "language",
@@ -95,6 +111,6 @@ export async function GET(req: Request) {
 
   const limit = Number(url.searchParams.get("limit") ?? 100);
   const offset = Number(url.searchParams.get("offset") ?? 0);
-  const data = await loadPairsList({ limit, offset, q, lang, minSim });
+  const data = await loadPairsList({ limit, offset, q, lang, minSim, split });
   return NextResponse.json(data);
 }

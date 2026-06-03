@@ -227,10 +227,11 @@ export async function loadAllPairs(): Promise<{ pairs: PairSummary[]; raw: Map<s
   return { pairs, raw };
 }
 
-export async function loadPairsList(opts: { limit?: number; offset?: number; q?: string; lang?: string; minSim?: number } = {}): Promise<{ items: PairSummary[]; total: number }> {
+export async function loadPairsList(opts: { limit?: number; offset?: number; q?: string; lang?: string; minSim?: number; split?: PairSummary["split"] } = {}): Promise<{ items: PairSummary[]; total: number }> {
   const { pairs } = await loadAllPairs();
   let filtered = pairs;
   if (opts.lang) filtered = filtered.filter(p => p.language === opts.lang);
+  if (opts.split) filtered = filtered.filter(p => p.split === opts.split);
   if (opts.q) {
     const q = opts.q.toLowerCase();
     filtered = filtered.filter(p =>

@@ -10,10 +10,12 @@ export default function PairsFilterBar({
   defaultQ,
   defaultLang,
   defaultMinSim,
+  defaultSplit,
 }: {
   defaultQ?: string;
   defaultLang?: string;
   defaultMinSim?: number;
+  defaultSplit?: "train" | "val" | "test";
 }) {
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -78,6 +80,18 @@ export default function PairsFilterBar({
         title="Only show clone pairs with similarity at least this value (0 to 1)"
         className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-24 focus:border-[var(--color-accent)] outline-none tnum"
       />
+      <select
+        name="split"
+        defaultValue={defaultSplit ?? ""}
+        aria-label="Dataset split"
+        title="Only show clone pairs from this dataset split (train, val, or test)"
+        className="mono text-[12.5px] px-2.5 py-1.5 bg-[var(--color-paper)] border border-[var(--color-rule)] rounded-sm w-24 focus:border-[var(--color-accent)] outline-none"
+      >
+        <option value="">split</option>
+        <option value="train">train</option>
+        <option value="val">val</option>
+        <option value="test">test</option>
+      </select>
       <button className="mono text-[11px] uppercase tracking-[0.14em] px-2.5 py-1.5 border border-[var(--color-rule-strong)] rounded-sm hover:bg-[var(--color-paper-2)]">
         apply
       </button>
