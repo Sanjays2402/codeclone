@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { DownloadSimple } from "@phosphor-icons/react/dist/ssr";
 import { loadPair } from "../../../lib/data";
 import { H1 } from "../../../components/Headings";
 import { DiffViewer, DiffStats } from "../../../components/DiffViewer";
@@ -66,11 +67,31 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   const aligned = alignBlocks(lBlocks, rBlocks);
   const alignedPairs = aligned.filter(a => a.left && a.right).length;
 
+  // Download the raw pair record (prefix, completion, metadata, similarity)
+  // as JSON so a researcher reviewing a clone pair in the dashboard can
+  // save the exact record for offline analysis, attach it to a ticket, or
+  // diff it against another corpus without rebuilding the query. The API
+  // route at /api/pairs/[id] already serves the JSON payload, so this is
+  // just a plain <a download> on top of the existing endpoint.
+  const jsonHref = `/api/pairs/${encodeURIComponent(pair.id)}`;
+  const jsonName = `codeclone-pair-${shortHash(pair.id, 12)}.json`;
+
   return (
     <div>
-      <H1 eyebrow={`pair · ${pair.kind} · ${split} split`}>
-        <span className="mono">{shortHash(pair.id, 14)}</span>
-      </H1>
+      <div className="flex items-start justify-between gap-3">
+        <H1 eyebrow={`pair · ${pair.kind} · ${split} split`}>
+          <span className="mono">{shortHash(pair.id, 14)}</span>
+        </H1>
+        <a
+          href={jsonHref}
+          download={jsonName}
+          className="inline-flex items-center gap-1.5 mono text-[11px] uppercase tracking-[0.14em] px-3 py-1.5 rounded-sm border border-[var(--color-rule)] hover:bg-[var(--color-paper-2)] text-[var(--color-ink-2)] mt-2"
+          title="Download this pair (prefix, completion, metadata) as JSON"
+        >
+          <DownloadSimple size={12} weight="duotone" />
+          Download JSON
+        </a>
+      </div>
 
       <div className="grid grid-cols-4 gap-3 mb-6">
         <MetricChip label="similarity" value={similarity.toFixed(2)} sub="jaccard tokens" accent large />
