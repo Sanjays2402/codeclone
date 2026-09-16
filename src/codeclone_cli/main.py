@@ -154,6 +154,9 @@ def eval_cmd(
     out: Path = typer.Option(Path("runs/eval"), help="Report directory"),
     n_samples: int = typer.Option(4, help="Number of qualitative samples"),
     max_problems: int = typer.Option(8, help="Max mini-suite problems"),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the full eval result as JSON instead of a table"
+    ),
 ) -> None:
     """Evaluate an adapter."""
     from codeclone_eval import EvalRunner
@@ -167,6 +170,9 @@ def eval_cmd(
         completer=lambda prefix: handle.generate(prefix, max_tokens=256),
     )
     result = runner.run(data, out, n_samples=n_samples, max_problems=max_problems)
+    if json_output:
+        console.print_json(json.dumps(result.to_dict()))
+        return
     table = Table(title=f"Eval: {model.name}")
     table.add_column("metric")
     table.add_column("value", justify="right")

@@ -37,3 +37,9 @@ def test_models_list_empty(tmp_path):
     result = runner.invoke(app, ["models", "list", "--adapters-dir", str(tmp_path)])
     assert result.exit_code == 0
     assert "Adapters" in result.output
+
+
+def test_eval_help_lists_json_flag():
+    result = runner.invoke(app, ["eval", "--help"])
+    assert result.exit_code == 0
+    assert "--json" in result.output

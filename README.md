@@ -2227,6 +2227,11 @@ codeclone eval --model adapters/adapter-v1 \
                --n-samples 4 --max-problems 8
 ```
 
+Pass `--json` to print the full eval result (perplexity, mini pass rate,
+per-problem scores, samples) as machine-readable JSON instead of the
+summary table — handy for CI gates, e.g.
+`codeclone eval --model ... --json | jq .mini_pass_rate`.
+
 Three components (`services/eval/codeclone_eval/`):
 
 - **Perplexity** (`perplexity.py`): real PPL when the backend exposes logprobs, otherwise a proxy. The report flags `proxy: true` so you don't mix them.

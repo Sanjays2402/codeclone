@@ -6,6 +6,9 @@ Semantic Versioning.
 
 ## [Unreleased]
 
+### Added
+- `codeclone eval --json`: print the full eval result as JSON instead of the summary table.
+
 ## [0.1.0] - initial scaffold
 
 ### Added
