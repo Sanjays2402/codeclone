@@ -36,7 +36,7 @@
   "overrides": {
     "baseline-browser-mapping@2": "2.11.0",
     "brace-expansion@1": "1.1.21",
-    "brace-expansion@5": "5.0.7",
+    "brace-expansion@5": "5.0.12",
     "browserslist@4": "4.28.7",
     "nanoid@3": "3.3.18",
     "sharp@0.34": "0.35.4",
